@@ -42,7 +42,7 @@ class Rig:
 
     def git(self, *args):
         self.commands.append(args)
-        if args[:1] == ("merge-base",) and args[2] == "gitea/main" and not self.on_gitea:
+        if args[:1] == ("merge-base",) and args[3] == "gitea/main" and not self.on_gitea:
             return 1, ""
         if args[:2] == ("rev-parse", "gitea/main"):
             return 0, SHA
@@ -72,7 +72,8 @@ def test_the_activation_deploys_package_unbake_at_the_landed_sha_then_reads_it_b
 
 
 def test_main_moved_on_deploys_the_head_and_defers_the_older_deploy():
-    rig = Rig()
+    rig = Rig(activation_log=f"suite-checkout: {CHECKOUT}\nsuite-sha: {NEWER}\nsuite-import: {CHECKOUT}/src/unbake/__init__.py\n",
+              readback=f"readback-pin: unbake {NEWER}\n")
     rig.git = lambda *args: (0, NEWER) if args[:2] == ("rev-parse", "gitea/main") else (0, "")
     lines = rig.deploy()
     assert "the older deploy deferred" in lines[0]
