@@ -70,14 +70,13 @@ def test_invalid_selection_never_writes(cfg, monkeypatch, defect):
     sync.assert_not_called()
 
 
-def test_type_conflicts_with_proof_refuse_before_any_mutation(cfg, monkeypatch):
-    path, _, stage, sync, prove = prepared(cfg, monkeypatch)
-    root = cfg.project.root
-    (root / "src/group1/part0.c").write_text("extern int shared;\n")
-    (root / "src/group1/part1.c").write_text("extern float shared;\n")
-    with pytest.raises(Refusal):
+def test_a_type_clash_the_gate_names_refuses_before_any_mutation(cfg, monkeypatch):
+    path, scan, stage, sync, prove = prepared(cfg, monkeypatch)
+    scan.return_value[0][0]["hard"] = ["extern shared: `int` in part0.c against `float` in part1.c"]
+    with pytest.raises(Refusal) as caught:
         folders.merge(cfg, {"modules": path, "prove": True})
-    assert (root / "src/group0/part0.c").is_file()
+    assert "extern shared" in caught.value.findings[0].missing[0]
+    assert (cfg.project.root / "src/group0/part0.c").is_file()
     stage.assert_not_called()
     sync.assert_not_called()
     prove.assert_not_called()

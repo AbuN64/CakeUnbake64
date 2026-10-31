@@ -16,13 +16,15 @@ reorg   the one-command form: plan from a `--map` file (old path, new path per l
 header  `--file F.CPP`: writes the exported prototypes and externs of one source file into its one header and rewrites
         the includes of the files that declared them (hoist.py).
 mergecheck  reads a module map (unit, module) and the built objects and says which merges must stay separate files;
-        it judges as merge does, and with `--prove` the type conflicts merge --prove refuses are hard reasons too.
+        it judges as merge does: a name the merged units declare with different types is a hard reason, named, so a
+        module that merge would leave uncompilable is separate.
 merge   `--modules MAP [--module M]`: each selected module's units become one source file (named M's folder form,
         or the MAP `target` column's path) with every section class in its own linked unit order (classwise.py), pad
         arrays the alignment reproduces and redundant prototypes dropped, includes hoisted and deduped. A module of
         one unit is a rename to its target. The linker fill rows (`versions/<v>/linker_fill.toml`) are regenerated
-        for the span the merged object leaves short. Refused when mergecheck says M must stay separate; remaining
-        type conflicts are listed. `--prove` builds and compares every ROM once.
+        for the span the merged object leaves short. Refused when mergecheck says M must stay separate, which includes
+        a name the units declare with different types; --module takes M from the full map. `--prove` builds and
+        compares every ROM once.
 split   `--file U --assign ASSIGN.tsv [--modules MAP]`: one unit becomes a file per target its symbols belong to
         (split.py); the MAP rows of U become one row per piece. `--prove` builds and compares every ROM once.
 collapse  the version branches of each source file that differ only by the names they define become one definition
@@ -1113,7 +1115,8 @@ def _verdicts(config: Config, params: Json) -> tuple[list[Row], list[tuple[str, 
         merged_path = merging.merged_path(module, targets.get(module), units)
         missing, refused = _refusals(config.project, units, merged_path, tracked, taken)
         verdict["hard"] = list(dict.fromkeys([*verdict["hard"], *missing, *refused]))
-        if params.get("prove") and not missing and not _in_place(config.project, units, merged_path, tracked):
+        chosen = not params.get("module") or params["module"] == module
+        if chosen and not missing and not _in_place(config.project, units, merged_path, tracked):
             conflicts = _arranged(config, params, module, units, merged_path, tracked, seqs)["conflicts"]
             verdict["hard"] += [f"{c['kind']} {c['name']}: {c['detail']}" for c in conflicts]
         verdict["verdict"] = "separate" if verdict["hard"] else "merge"
@@ -1439,7 +1442,7 @@ def merge(config: Config, params: Json) -> Row:
     """Prepare every selected module before writing, then stage and sync the whole map once.
 
     --module restricts the map to one module; otherwise the map is the exact selection. Every hard refusal is
-    reported before mutation. Text conflicts remain explicit; --prove refuses those before writing too.
+    reported before mutation. A name declared with different types is a hard refusal of its module, as in mergecheck.
     """
     with effort.stage("layout.merge"):
         verdicts, rows, seqs = _verdicts(config, {**params, "prove": None})
@@ -1495,8 +1498,6 @@ def merge(config: Config, params: Json) -> Row:
             )
             merged = _arranged(config, params, module, units, merged_path, tracked, seqs)
             report = [f"{c['kind']} {c['name']}: {c['detail']}" for c in merged["conflicts"]]
-            if params.get("prove"):
-                problems.extend(f"{module}: {reason}" for reason in report)
             prepared.append((module, units, merged_path, {**merged, "conflicts": report}))
             mapping.update({unit: merged_path for unit in units})
         if not selected:

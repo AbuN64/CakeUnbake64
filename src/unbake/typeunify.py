@@ -199,21 +199,28 @@ def _sha(path: Path) -> str | None:
 
 def rebuild(root: Path, seams: Seams, units: Iterable[Unit]) -> dict[Unit, str | None]:
     """Delete the objects of `units`, make them, and answer unit -> object hash, None for a unit whose build failed.
-    A build that did not run is a Refusal (empty log, exit naming no unit, object neither made nor named)."""
+    An object make neither built nor named in a failure (the build was cut short) is made again, the rest being done,
+    for as long as a round makes one more. A build that did not run is a Refusal (exit naming no unit, a round that
+    made no object); a quiet make with an empty log that made its objects ran."""
     wanted = {target(u): u for u in units}
     if not wanted:
         return {}
     for path in wanted:
         (root / path).unlink(missing_ok=True)
-    code, log = seams.make(sorted(wanted))
-    named = {m for m in _FAILED.findall(log) if m in wanted}
-    if not log.strip():
-        raise Refusal(Finding("unify.build", "the build log is empty: make did not run", missing=tuple(sorted(wanted))))
-    if code != 0 and not named:
-        raise Refusal(Finding("unify.build", f"make exited {code} and named no unit that failed: it did not build"))
-    absent = sorted(p for p in wanted if p not in named and not (root / p).is_file())
-    if absent:
-        raise Refusal(Finding("unify.build", "make neither built nor failed these objects", missing=tuple(absent[:20])))
+    named: set[str] = set()
+    pending = sorted(wanted)
+    while pending:
+        code, log = seams.make(pending)
+        failed = {m for m in _FAILED.findall(log) if m in pending}
+        if code != 0 and not failed:
+            raise Refusal(Finding("unify.build", f"make exited {code} and named no unit that failed: it did not build"))
+        named |= failed
+        absent = [p for p in pending if p not in named and not (root / p).is_file()]
+        if len(absent) == len(pending):
+            raise Refusal(
+                Finding("unify.build", "make neither built nor failed these objects", missing=tuple(absent[:20]))
+            )
+        pending = absent
     return {u: None if p in named else _sha(root / p) for p, u in wanted.items()}
 
 

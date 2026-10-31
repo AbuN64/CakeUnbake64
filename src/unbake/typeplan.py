@@ -85,15 +85,18 @@ def _span(src: Sources, path: str, line: int, name: str) -> tuple[int, int] | No
         elif c in ")]":
             depth -= 1
         elif c == "{" and depth == 0:
-            level, i = 1, i + 1
+            start, level, i = i, 1, i + 1
             while i < n and level:
                 level += (b[i] == "{") - (b[i] == "}")
                 i += 1
             e = i
             while e < n and b[e] in " \t":
                 e += 1
-            i = e + 1 if e < n and b[e] == ";" else i
-            return (p, i) if word.search(b[p:i]) else None
+            if e < n and b[e] == ";":
+                return (p, e + 1) if word.search(b[p : e + 1]) else None
+            if b[:start].rstrip().endswith(")"):  # a function body ends its statement
+                return (p, i) if word.search(b[p:i]) else None
+            i -= 1  # a struct or union body or an initializer: the declarators and the `;` follow
         elif c == ";" and depth == 0:
             return (p, i + 1) if word.search(b[p : i + 1]) else None
         elif c == "#" and depth == 0 and (i == 0 or b[i - 1] == "\n"):

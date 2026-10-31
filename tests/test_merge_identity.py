@@ -198,17 +198,16 @@ def test_a_unit_already_at_its_module_path_is_an_identity_row_and_a_stale_row_be
     assert judge(cfg)["sdk/libultra/audio/cspsetseq.c"]["hard"] == []
 
 
-def test_mergecheck_prove_reports_the_conflicts_merge_prove_refuses(cfg, monkeypatch) -> None:
+def test_mergecheck_reports_the_conflicts_merge_refuses(cfg, monkeypatch) -> None:
     cfg = project_of(cfg, libraries=("sdk/libultra/",))
     scan(monkeypatch, cfg, [(DATA, SEQ), (CODE, SEQ)], [DATA, CODE])
     conflict = {"kind": "extern", "name": "g_audioSeqplayerText", "detail": "`const char[18]` against `char[]`"}
     monkeypatch.setattr(folders, "_arranged", Mock(return_value={"conflicts": [conflict], "text": ""}))
     params = {"modules": cfg.project.root / "modules.tsv"}
-    assert folders._verdicts(cfg, params)[0][0]["hard"] == []
-    hard = folders._verdicts(cfg, {**params, "prove": True})[0][0]["hard"]
+    hard = folders._verdicts(cfg, params)[0][0]["hard"]
     assert hard == ["extern g_audioSeqplayerText: `const char[18]` against `char[]`"]
     with pytest.raises(Refusal) as caught:
-        folders.merge(cfg, {**params, "prove": True})
+        folders.merge(cfg, params)
     assert list(caught.value.findings[0].missing) == [f"{SEQ}: {reason}" for reason in hard]
 
 
@@ -238,3 +237,39 @@ def test_a_merge_that_moves_no_file_row_leaves_the_makefile_alone(cfg, monkeypat
     (cfg.project.root / "config.toml").write_text('[file."sdk/other.c"]\ncflags = ["-O1"]\n')
     folders.merge(cfg, {"modules": path})
     assert sync.call_args.args[1] == {}
+
+
+CLASH_ROWS = [("src/a.c", "src/M.c"), ("src/b.c", "src/M.c")]
+
+
+def clashing(cfg: Config, monkeypatch, other: str = "extern char g_flag;\nint b(void) { return g_flag; }\n") -> None:
+    """SRC-MENU-1 TIMER: two units declare g_flag with different types."""
+    scan(monkeypatch, cfg, CLASH_ROWS, ["src/a.c", "src/b.c"])
+    (cfg.project.root / "src/a.c").write_text("extern int g_flag;\nint a(void) { return g_flag; }\n")
+    (cfg.project.root / "src/b.c").write_text(other)
+
+
+def test_a_name_the_units_declare_with_different_types_refuses_in_mergecheck_and_merge_alike(cfg, monkeypatch) -> None:
+    clashing(cfg, monkeypatch)
+    hard = judge(cfg)["src/M.c"]["hard"]
+    assert any("g_flag" in reason for reason in hard)
+    with pytest.raises(Refusal) as caught:
+        folders.merge(cfg, {"modules": cfg.project.root / "modules.tsv"})
+    assert [f"src/M.c: {reason}" for reason in hard] == list(caught.value.findings[0].missing)
+
+
+def test_units_that_declare_a_name_alike_still_merge(cfg, monkeypatch) -> None:
+    clashing(cfg, monkeypatch, "extern int g_flag;\nint b(void) { return g_flag; }\n")
+    assert judge(cfg)["src/M.c"]["verdict"] == "merge"
+
+
+def test_module_takes_one_module_from_the_full_map(cfg, monkeypatch) -> None:
+    rows = [*CLASH_ROWS, ("src/gone1.c", "src/N.c"), ("src/gone2.c", "src/N.c")]
+    scan(monkeypatch, cfg, rows, ["src/a.c", "src/b.c"])  # N's units are no tracked source files
+    root = cfg.project.root
+    (root / "src/a.c").write_text("extern int g_flag;\nint a(void) { return g_flag; }\n")
+    (root / "src/b.c").write_text("extern char g_flag;\nint b(void) { return g_flag; }\n")
+    with pytest.raises(Refusal) as caught:
+        folders.merge(cfg, {"modules": root / "modules.tsv", "module": "src/M.c"})
+    assert caught.value.findings[0].missing
+    assert all(m.startswith("src/M.c: ") and "g_flag" in m for m in caught.value.findings[0].missing)

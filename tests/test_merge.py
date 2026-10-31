@@ -218,3 +218,14 @@ def test_order_versions_that_agree_emit_no_guard() -> None:
 def test_order_versions_that_move_a_unit_to_the_same_place_share_one_guard() -> None:
     text = merge_orders({"de": ["a", "b", "c"], "eu": ["c", "a", "b"], "us": ["c", "a", "b"]})
     assert "#if defined(VERSION_EU) || defined(VERSION_US)\nint c_data = 3;\n#endif" in text
+
+
+def test_a_definition_in_a_version_branch_against_a_header_extern_of_another_type_is_a_conflict() -> None:
+    """MERGE-TOOL-2 open: pirawread.c includes `extern s32 s_pirawreadText;`, the data unit defines
+    `const char s_pirawreadText[15]` under `#if defined(VERSION_US_REV1)`; the merged us-rev1 text does not compile."""
+    headers = {"a.h": "extern s32 s_pirawreadText;\n"}
+    data = '#if defined(VERSION_US_REV1)\nconst char s_pirawreadText[15] = "io/pirawread.c";\n#endif\n'
+    out = merge.merge([("code.c", '#include "a.h"\n'), ("data.c", data)], never, headers.get)
+    assert [(c["kind"], c["name"]) for c in out["conflicts"]] == [("extern", "s_pirawreadText")]
+    same = "#if defined(X)\ns32 s_pirawreadText = 1;\n#endif\n"
+    assert merge.merge([("code.c", '#include "a.h"\n'), ("data.c", same)], never, headers.get)["conflicts"] == []

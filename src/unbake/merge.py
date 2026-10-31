@@ -382,6 +382,19 @@ def reconcile(
                     }
                 )
     for decl in every:
+        if decl.kind in ("def", "var") and decl.guard:  # defined for some versions only, still a type the others meet
+            kind = "proto" if decl.kind == "def" else "extern"
+            for earlier in (d for d in (*inherited, *every) if (d.name, d.kind) == (decl.name, kind) and not d.guard):
+                if not _alike(earlier.sig, decl.sig, names):
+                    conflicts.append(
+                        {
+                            "kind": kind,
+                            "name": decl.name,
+                            "detail": f"`{decl.sig}` defined (guarded) in {decl.unit}"
+                            f" against `{earlier.sig}` in {earlier.unit}",
+                        }
+                    )
+    for decl in every:
         if decl.kind not in ("proto", "extern") or decl.guard:
             continue
         kind = decl.kind

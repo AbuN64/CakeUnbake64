@@ -196,11 +196,7 @@ def test_a_name_no_type_satisfies_is_reported_per_type_and_left_alone(tmp_path: 
 
 @pytest.mark.parametrize(
     ("code", "log", "makes", "why"),
-    [
-        (0, "", True, "log is empty"),
-        (2, "make: *** No rule\n", True, "named no unit"),
-        (0, "make\n", False, "neither built"),
-    ],
+    [(2, "make: *** No rule\n", True, "named no unit"), (0, "make\n", False, "neither built")],
 )
 def test_a_build_that_did_not_run_is_refused(tmp_path: Path, code: int, log: str, makes: bool, why: str) -> None:
     (tmp_path / "src").mkdir()
@@ -400,3 +396,49 @@ def test_one_line_per_name_says_the_pick_the_candidates_and_the_failing_unit(tmp
     assert len(said) == 2 and all(re.fullmatch(r"unify (g|h): .*; \d+\.\ds", s) for s in said)
     g = next(s for s in said if s.startswith("unify g:"))
     assert "unified as int" in g and "2 candidate(s) tried" in g and "failing long" in g and "src/" in g
+
+
+def test_objects_a_cut_short_build_left_are_made_again(tmp_path: Path) -> None:
+    """SRC-ENGINE: make stopped (Dos CPU hold) with 20 objects neither built nor failed; unify builds the rest."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/a.CPP").write_text("int f;\n")
+    units = {"us": ["src/a.CPP", "src/b.CPP", "src/c.CPP"]}
+    rounds: list[list[str]] = []
+
+    def make(targets: Sequence[str]) -> tuple[int, str]:
+        rounds.append(list(targets))
+        for t in targets[: 1 if len(rounds) == 1 else None]:  # the first round builds one object, the next the rest
+            (tmp_path / t).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / t).write_bytes(b"o")
+        return 0, "make\n"
+
+    made = typeunify.rebuild(tmp_path, Seams(lambda: units, lambda items: [], make), [("us", u) for u in units["us"]])
+    assert [len(r) for r in rounds] == [3, 2]
+    assert all(made.values())
+
+
+def test_an_extern_of_an_anonymous_struct_is_planned_as_the_one_definitions_type(tmp_path: Path) -> None:
+    """SRC-MENU-1: `extern struct { u8 value; } g;` against the definition `u8 g;` had no plan."""
+    text = "#include <x>\nextern struct { u8 value; } g_flags;\nvoid f(void) { g_flags.value = 1; }\nu8 g_other;\n"
+    (tmp_path / "a.c").write_text(text)
+    src = typeplan.Sources(lambda p: (tmp_path / p).read_text())
+    start = text.index("extern")
+    end = text.index("g_flags;", start) + len("g_flags;")
+    assert typeplan._span(src, "a.c", 2, "g_flags") == (start, end)
+    assert typeplan._span(src, "a.c", 3, "f") == (text.index("void f"), text.index("}\nu8") + 1)
+
+
+def test_a_quiet_make_that_made_its_objects_ran(tmp_path: Path) -> None:
+    """SRC-MENU-1 on the rig: the build wrote its objects and an empty log; that is a build, not a refusal."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/a.CPP").write_text("int f;\n")
+
+    def make(targets: Sequence[str]) -> tuple[int, str]:
+        for t in targets:
+            (tmp_path / t).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / t).write_bytes(b"o")
+        return 0, ""
+
+    seams = Seams(lambda: {"us": ["src/a.CPP"]}, lambda items: [], make)
+    made = typeunify.rebuild(tmp_path, seams, [("us", "src/a.CPP")])
+    assert made[("us", "src/a.CPP")] is not None
