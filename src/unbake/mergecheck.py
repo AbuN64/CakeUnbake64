@@ -219,8 +219,8 @@ def spans(seq: Sequence[Row], units: set[str]) -> list[tuple[str, int, int, int]
     spans, offset in the section where the module starts). The linked span walks the section from the module's first
     entry to its last (the module's pieces aligned as linked, ALIGN directives and `MAX(., offset)` pins between
     them); the bytes of other modules between two entries are the `gap` finding's, so they are not walked and the
-    pins after them are not read. The merged span packs the module's pieces of each class again, each at its own alignment
-    inside the object (the compiler packs them so), class after class as the link places the sections."""
+    pins after them are not read. The merged span packs the module's pieces of each class again, each at its own
+    alignment inside the object (the compiler packs them so), class after class as the link places the sections."""
     out: list[tuple[str, int, int, int]] = []
     for section in dict.fromkeys(e["o"] for e in seq if e["k"] == "entry" and e["u"] in units):
         rows = [(i, e) for i, e in enumerate(seq) if e["o"] == section]
