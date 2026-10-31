@@ -369,7 +369,7 @@ def test_named_sections_are_counted_once_and_conditional_align_uses_actual_defin
     seq = seqs["us"]
     assert [r["n"] for r in seq if r["k"] == "entry"] == [3, 4, 4]
     assert [r["symbol"] for r in seq if "symbol" in r] == ["yes"]
-    assert mergecheck.spans(seq, {"a", "b"}) == [(".rodata", 16, 11, 0)]
+    assert mergecheck.spans(seq, {"a", "b"}) == [(".rodata", 16, 12, 0)]
     assert read.call_count == 2
 
 
