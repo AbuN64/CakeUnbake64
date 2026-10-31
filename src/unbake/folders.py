@@ -873,7 +873,7 @@ def _identity(files: Mapping[str, FileFacts], toolchain: str, unit: str) -> Any:
     )
 
 
-def unit_identity(project: Project, unit: str) -> Any:
+def _unit_identity(project: Project, unit: str) -> Any:
     """What a unit and the merged file that takes its place must share: the toolchain and the flags that build it.
     Library ownership is not part of it: the original object was one library object, so a merged file belongs to the
     library of its destination (a data unit merged into a library module becomes that library's; a unit of a library
@@ -950,7 +950,7 @@ def _refusals(
         out.append(f"destination {destination} is already owned")
     taken.add(destination)
     identity = _identity(_carried(project, units, destination), project.toolchain, destination)
-    if any(unit_identity(project, u) != identity for u in units):
+    if any(_unit_identity(project, u) != identity for u in units):
         out.append("merge would change compiler, flags or omit")
     return [], out
 
@@ -964,9 +964,9 @@ def _verdicts(config: Config, params: Json) -> tuple[list[Row], list[tuple[str, 
     for unit, module in rows:
         grouped[module].append(unit)
     ordered = [(unit, module) for module, units in grouped.items() for unit in merging.code_order(units, seqs)]
-    found = merging.verdicts(ordered, seqs, statics, lambda unit: unit_identity(config.project, unit))
+    found = merging.verdicts(ordered, seqs, statics, lambda unit: _unit_identity(config.project, unit))
     by_module = {v["module"]: v for v in found}
-    targets = merging.read_targets(Path(str(params["modules"])).read_text())
+    targets = merging.read_targets(Path(str(params["modules"])).read_text()) if params.get("modules") else {}
     tracked, taken = set(_tracked(config)), set[str]()
     for module, units in grouped.items():
         verdict = by_module.get(module)

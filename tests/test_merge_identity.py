@@ -59,7 +59,7 @@ def test_a_data_unit_merged_into_a_library_module_becomes_the_librarys(cfg, monk
     cfg = project_of(cfg, libraries=("sdk/libultra/",))
     scan(monkeypatch, cfg, [(DATA, SEQ), (CODE, SEQ)], [DATA, CODE])
     assert judge(cfg)[SEQ]["hard"] == []
-    assert folders.unit_identity(cfg.project, DATA) == folders.unit_identity(cfg.project, SEQ_MERGED)
+    assert folders._unit_identity(cfg.project, DATA) == folders._unit_identity(cfg.project, SEQ_MERGED)
 
 
 def test_a_library_folder_unit_merged_to_a_target_outside_every_library_folder_merges(cfg, monkeypatch) -> None:
@@ -185,6 +185,12 @@ def test_a_unit_already_at_its_module_path_is_an_identity_row_and_a_stale_row_be
     scan(monkeypatch, cfg, [("sdk/libultra/audio/cseq.c", "sdk/libultra/audio/cseq.c")], ["sdk/libultra/audio/cseq.c"])
     assert judge(cfg)["sdk/libultra/audio/cseq.c"]["hard"] == []
     stale = "sdk/libultra/audio/cspsetseq.CPP"
-    scan(monkeypatch, cfg, [(stale, "sdk/libultra/audio/cspsetseq.c")], ["sdk/libultra/audio/cspsetseq.c"])
+    scan(
+        monkeypatch,
+        cfg,
+        [(stale, "sdk/libultra/audio/cspsetseq.c")],
+        ["sdk/libultra/audio/cspsetseq.c"],
+        "sdk/libultra/audio/cspsetseq.c",
+    )
     (cfg.project.root / stale).unlink(missing_ok=True)
     assert judge(cfg)["sdk/libultra/audio/cspsetseq.c"]["hard"] == []

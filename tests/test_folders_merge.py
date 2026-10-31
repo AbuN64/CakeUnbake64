@@ -128,13 +128,11 @@ def test_destination_must_preserve_compiler_facts(cfg, monkeypatch, facts):
     sync.assert_not_called()
 
 
-def test_flat_library_ownership_cannot_disappear(cfg, monkeypatch):
+def test_flat_library_ownership_follows_the_destination(cfg, monkeypatch):
     path, _, stage, sync, _ = prepared(cfg, monkeypatch)
     cfg.project.libraries = ("src/group0/part0.c",)
-    with pytest.raises(Refusal, match="merge refusals"):
-        folders.merge(cfg, {"modules": path})
-    stage.assert_not_called()
-    sync.assert_not_called()
+    folders.merge(cfg, {"modules": path})
+    stage.assert_called_once()
 
 
 def test_verdict_uses_same_emitted_order_as_merge_on_real_barrel_rows(cfg, monkeypatch):
@@ -145,6 +143,10 @@ def test_verdict_uses_same_emitted_order_as_merge_on_real_barrel_rows(cfg, monke
     rows = [(one, module), (two, module)]
     seq = [{"o": ".text", "k": "entry", "u": u, "cls": "text", "n": 8} for u in (two, one)]
     monkeypatch.setattr(folders, "_module_facts", Mock(return_value=(rows, {"us": seq}, {})))
+    for unit, _ in rows:
+        (cfg.project.root / unit).parent.mkdir(parents=True, exist_ok=True)
+        (cfg.project.root / unit).write_text("int f;\n")
+    monkeypatch.setattr(folders, "_tracked", Mock(return_value=[unit for unit, _ in rows]))
     verdicts, original, seqs = folders._verdicts(cfg, {})
     assert original == rows
     assert mergecheck.code_order([one, two], seqs) == [two, one]
