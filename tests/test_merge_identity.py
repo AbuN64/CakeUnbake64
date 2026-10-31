@@ -4,7 +4,8 @@ modules.tsv (sndplayer, seqplayer, MATH2, alsynset) and of SRC-MENU-3's PRINTF."
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import is_dataclass, replace
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -22,7 +23,8 @@ MATH_UNIT, MATH_TARGET = "sdk/MATH/aigetlen.CPP", "sdk/MATH2.c"
 
 
 def project_of(cfg: Config, **changes) -> Config:
-    return replace(cfg, project=replace(cfg.project, **changes))
+    project = replace(cfg.project, **changes) if is_dataclass(cfg.project) else SimpleNamespace(**{**vars(cfg.project), **changes})
+    return replace(cfg, project=project)
 
 
 def seq_of(units: list[str]) -> dict[str, list[dict]]:

@@ -44,8 +44,7 @@ import posixpath
 import re
 import tomllib
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -304,7 +303,7 @@ def _roots(texts: Mapping[str, str], tracked: set[str]) -> list[str]:
     return [r for r, n in sorted(votes.items(), key=lambda kv: (-kv[1], kv[0])) if n >= _MIN_VOTES]
 
 
-def includes(texts: Mapping[str, str], tracked: Sequence[str], mapping: Mapping[str, str]) -> dict[str, str]:
+def includes(texts: Mapping[str, str], tracked: Collection[str], mapping: Mapping[str, str]) -> dict[str, str]:
     """The `#include` lines of the text files (old path -> text) written for the layout after the move: an include
     that names a moved file, or that is relative to a file that moved, is spelled again the way it was written (next
     to the includer, or under the same include directory) for the new places. Returns the files whose text changes."""
@@ -861,21 +860,25 @@ def _module_facts(config: Config, params: Json) -> Facts:
     return rows, seqs, statics
 
 
-def unit_identity(project: Project, unit: str) -> Any:
-    """What a unit and the merged file that takes its place must share: the toolchain and the flags that build it. Library
-    ownership is not part of it: the original object was one library object, so a merged file belongs to the library of
-    its destination (a data unit merged into a library module becomes that library's; a unit of a library folder merged
-    into a target outside every library folder leaves it). An assembler source matches only an assembler source."""
+def _identity(files: Mapping[str, FileFacts], toolchain: str, unit: str) -> Any:
     if unit.lower().endswith(".s"):
         return ("assembler",)
-    facts = file_facts(project, unit)
+    facts = file_facts(SimpleNamespace(files=files), unit)  # type: ignore[arg-type]
     return (
-        facts.toolchain or project.toolchain,
+        facts.toolchain or toolchain,
         tuple(sorted(facts.cflags)),
         tuple(sorted(facts.omit)),
         facts.hilo_nops,
         facts.unrelocated,
     )
+
+
+def unit_identity(project: Project, unit: str) -> Any:
+    """What a unit and the merged file that takes its place must share: the toolchain and the flags that build it. Library
+    ownership is not part of it: the original object was one library object, so a merged file belongs to the library of
+    its destination (a data unit merged into a library module becomes that library's; a unit of a library folder merged
+    into a target outside every library folder leaves it). An assembler source matches only an assembler source."""
+    return _identity(project.files, project.toolchain, unit)
 
 
 def _in_place(project: Project, units: Sequence[str], destination: str, tracked: set[str]) -> bool:
@@ -944,7 +947,7 @@ def _refusals(
     if destination in taken or ((destination in tracked or (root / destination).exists()) and destination not in units):
         out.append(f"destination {destination} is already owned")
     taken.add(destination)
-    identity = unit_identity(replace(project, files=_carried(project, units, destination)), destination)
+    identity = _identity(_carried(project, units, destination), project.toolchain, destination)
     if any(unit_identity(project, u) != identity for u in units):
         out.append("merge would change compiler, flags or omit")
     return [], out
@@ -962,7 +965,7 @@ def _verdicts(config: Config, params: Json) -> tuple[list[Row], list[tuple[str, 
     found = merging.verdicts(ordered, seqs, statics, lambda unit: unit_identity(config.project, unit))
     by_module = {v["module"]: v for v in found}
     targets = merging.read_targets(Path(str(params["modules"])).read_text())
-    tracked, taken = set(_tracked(config)), set()
+    tracked, taken = set(_tracked(config)), set[str]()
     for module, units in grouped.items():
         verdict = by_module.get(module)
         if verdict is None:
