@@ -198,7 +198,7 @@ def test_false_rows_name_the_float_rows_over_text_and_keep_the_real_ones():
             ]
         )
     )
-    found = pt.false_rows(bytes(rom), table, 0x14D000, 0x15F770)
+    found = pt._false_rows(bytes(rom), table, 0x14D000, 0x15F770)
     assert [(r["name"], r["text"]) for r in found] == [
         ("g_earlierContpadFloats_454080", "M_INSTANCE_DYNAMIC"),
         ("g_earlierContpadFloats_454088", "CE_DYNAMIC"),

@@ -439,7 +439,7 @@ def words_of(
     return out
 
 
-def false_rows(data: bytes, table: dict[str, symbol_file.Symbol], low: int, high: int) -> list[Row]:
+def _false_rows(data: bytes, table: dict[str, symbol_file.Symbol], low: int, high: int) -> list[Row]:
     """The float, integer and word rows of the older build's symbols inside [low, high) with a word that starts text
     (see `_string`): their bytes are a string, or the head or tail of one, and typing them as words splits it."""
     found: list[Row] = []
@@ -475,7 +475,7 @@ def command(cfg: Config, params: Json) -> Json:
         if params.get("check"):
             held_file = cfg.project.root / windows.symbols_path(v)
             held_rows = symbol_file.parse(held_file.read_text(), windows.symbols_path(v)) if held_file.exists() else {}
-            for row in false_rows(data, held_rows, low, high):
+            for row in _false_rows(data, held_rows, low, high):
                 false.append(
                     Finding(
                         "type-pool.text",
