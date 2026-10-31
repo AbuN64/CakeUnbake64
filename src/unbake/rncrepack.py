@@ -13,7 +13,13 @@ two lock bits) and ends where the control byte it last used is spent, or at the 
 when the data its choice looked at (a match is at most MAX_LENGTH long and one step of lazy matching looks one match
 further) is decoded as well, unless the stream decodes whole to the header's unpacked size. Every byte outside a run
 stays with whatever else accounts for it. The receipt names the decoded bytes (size, sha256), the packer's settings and
-the runs."""
+the runs.
+
+The first run of a stream also credits what stands before its packed bits when it begins at the first bit: the header
+(`rnc.HEADER` bytes, proven by the decode: the stream's own bits decode to no more bytes than the header's unpacked size
+holds, the failing packed CRC aside) and the zero pad the builder left before it (at most PAD bytes). A run may end on
+a control byte whose last bits belong to tokens past the damage: it is credited when the packer's bytes for the tokens
+it did reproduce, with the unused bits zero, equal the ROM's."""
 
 from __future__ import annotations
 
@@ -25,6 +31,7 @@ from unbake.contracts import sha256
 
 MARGIN = 2 * rnc2enc.MAX_LENGTH + 16  # decoded bytes a token's choice may have looked at past its end
 MIN_RUN = 16  # the fewest packed bytes a run credits
+PAD = 8  # zero bytes before a header the first run takes along: the builder aligned the stream start
 SLACK = 16  # packed bytes read past the header's size: damage moves a stream's end marker a few bytes past it
 CAP_FACTOR = 2  # the output may grow to this many times the header's unpacked size before the read gives up
 SETTINGS = {
@@ -60,7 +67,7 @@ def _read(rom: bytes | memoryview, at: int) -> tuple[Any, bytes, Any, list[tuple
     complete = walked.ended  # the end marker is where the data ends: the packer saw the same end
     reach = len(walked.data) - MARGIN
     same = [mine.get((t[1], t[0] == "E")) == t and (complete or rnc2enc.end(t) <= reach) for t in walked.tokens]
-    found, k, count = [], 0, len(same)
+    found, k, count, decoded = [], 0, len(same), []
     while k < count:
         if not same[k]:
             k += 1
@@ -71,15 +78,27 @@ def _read(rom: bytes | memoryview, at: int) -> tuple[Any, bytes, Any, list[tuple
         first, last = k, stop - 1
         while first <= last and walked.marks[first][1]:
             first += 1
-        if not (walked.ended and last == count - 1):  # the end marker's control byte is spent by definition
+        ends = [last]  # the run may end on an open control byte; else it ends where the last one is spent
+        if not (walked.ended and last == count - 1):
             while last >= first and walked.marks[last + 1][1]:
                 last -= 1
-        if first <= last:
+            ends.append(last)
+        for last in ends:
+            if first > last:
+                continue
             low, high = walked.marks[first][0], walked.marks[last + 1][0]
             rebuilt = rnc2enc.emit(walked.data, walked.tokens[first : last + 1], first == 0)[0]
             if high - low >= MIN_RUN and rebuilt == read[low:high]:
                 found.append((low, high, rebuilt))
+                decoded.append(rnc2enc.end(walked.tokens[last]))
+                break
         k = stop
+    if found and found[0][0] == 0 and decoded[0] <= head.unpacked:
+        pad = 0
+        while pad < PAD and at > pad and rom[at - pad - 1] == 0:
+            pad += 1
+        low, high, rebuilt = found[0]
+        found[0] = (-rnc.HEADER - pad, high, bytes(rom[at - pad : at + rnc.HEADER]) + rebuilt)
     return head, packed, walked, found
 
 
@@ -120,7 +139,7 @@ def find(rom: bytes | memoryview, low: int, high: int) -> list[Found]:
     overlaps [low, high); a run is (first, end) in packed-byte offsets."""
     found = []
     for at, head in rnc.find(rom, max(0, low - 0x10000), min(len(rom), high + 0x10000)):
-        if head.method != 2 or at + head.stored <= low or at >= high:
+        if head.method != 2 or at + head.stored <= low or at - PAD >= high:
             continue
         try:
             runs = tuple((a, b) for a, b, _ in _read(rom, at)[3])

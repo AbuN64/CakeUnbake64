@@ -34,7 +34,7 @@ def test_a_literal_byte_replaced_later_still_packs_back_to_the_same_bytes():
     raw[spot] ^= 0x55
     rom, at = placed(bytes(raw))
     got = rncrepack.measure(rom, at)
-    assert got["credit"] == got["packed"] and got["runs"] == [[0, got["packed"]]]
+    assert got["credit"] == got["packed"] + 18 and got["runs"] == [[-18, got["packed"]]]
     assert got["packed_crc_read"] != got["packed_crc"] and got["decoded"] == 6000
     assert got["settings"]["window"] == 4096 and len(got["decoded_sha256"]) == 64
 
@@ -46,7 +46,7 @@ def test_the_end_marker_a_few_bytes_past_the_headers_size_closes_the_tail():
     raw[8:12] = (whole - 3).to_bytes(4, "big")  # damage moved the end marker past the size the header names
     rom, at = placed(bytes(raw))
     got = rncrepack.measure(rom, at)
-    assert got["packed"] == whole - 3 and got["runs"] == [[0, whole]] and got["credit"] == whole
+    assert got["packed"] == whole - 3 and got["runs"] == [[-18, whole]] and got["credit"] == whole + 18
     assert got["decode_stopped"] == "end marker"
 
 
@@ -58,20 +58,20 @@ def test_a_damaged_control_byte_ends_the_run_and_the_proof_stays_off_the_damage(
     rom, at = placed(bytes(raw))
     got = rncrepack.measure(rom, at)
     first = got["runs"][0]
-    assert first[0] == 0 and 200 < first[1] <= cut - 18 and got["credit"] == sum(b - a for a, b in got["runs"])
+    assert first[0] == -18 and 200 < first[1] <= cut - 18 and got["credit"] == sum(b - a for a, b in got["runs"])
     assert all(b <= cut - 18 or a >= cut - 18 + 3 for a, b in got["runs"])
-    rows = rncrepack.spans(rncrepack.find(rom, at, at + len(raw)), [(at + 18, at + 18 + 400), (at + cut, at + cut + 3)])
-    assert [r["region"] for r in rows] == [[at + 18, at + 18 + 400]]
-    ok = rncrepack.prove(rom, at + 18, at + 18 + 400, rows[0]["stream"])
-    assert ok["region"] == [at + 18, at + 18 + 400] and ok["rebuilt_sha256"] == ok["region_sha256"]
+    rows = rncrepack.spans(rncrepack.find(rom, at, at + len(raw)), [(at, at + 18 + 400), (at + cut, at + cut + 3)])
+    assert [r["region"] for r in rows] == [[at, at + 18 + 400]]  # the header goes with the first run
+    ok = rncrepack.prove(rom, at, at + 18 + 400, rows[0]["stream"])
+    assert ok["region"] == [at, at + 18 + 400] and ok["rebuilt_sha256"] == ok["region_sha256"]
     with pytest.raises(rncrepack.StreamError, match="not inside"):
         rncrepack.prove(rom, at + 18, at + cut + 100, rows[0]["stream"])
     with pytest.raises(rncrepack.StreamError, match="not inside"):
-        rncrepack.prove(rom, at + 4, at + 40, rows[0]["stream"])  # the header is not proven here
+        rncrepack.prove(rom, at - 4, at + 40, rows[0]["stream"])  # the bytes before the header are not zero pad
 
 
 REAL = Path(__file__).parent / "data" / "de_stale_1d3917.bin"  # the first 4900 bytes of the German stream at 0x1d3917
-REAL_RUNS = [[0, 4251], [4271, 4602], [4654, 4674]]  # packed-byte offsets of its runs before the cut
+REAL_RUNS = [[-18, 4251], [4271, 4602], [4654, 4674]]  # packed-byte offsets of its runs before the cut
 
 
 def test_the_real_german_stream_is_read_past_its_damage_window_by_window():
@@ -119,3 +119,22 @@ def test_scan_rows_and_the_reader_name_the_reproduced_bytes(tmp_path):
     rows = blob_stale.rnc_streams(rom, [(at + 18, at + 18 + 200)])
     assert [r["reader"] for r in rows] == ["rnc-repack"] and rows[0]["region"] == [at + 18, at + 18 + 200]
     assert "rnc-repack" in blob_formats.READERS and "rnc-stale" not in blob_formats.READERS
+
+
+# German ROM 0x1FF650..0x200400: a stream the table overwrote
+DE_RNC = Path(__file__).parent / "data" / "de_rnc_1ff658.bin"
+
+
+def test_the_german_stream_at_1ff658_credits_its_pad_header_and_the_tail_before_the_table():
+    rom = bytes(0x1FF650) + DE_RNC.read_bytes() + bytes(0x1000)  # the header names a stream that ends past the slice
+    found = rncrepack.find(rom, 0x1FF653, 0x200000)
+    assert [(at, runs) for at, _, runs in found] == [(0x1FF658, ((-24, 2458),))]  # 6 B pad, header, 2458 packed
+    targets = [(0x1FF653, 0x1FF6E1), (0x1FFFC2, 0x200000)]
+    rows = rncrepack.spans(found, targets)
+    assert [r["region"] for r in rows] == [[0x1FF653, 0x1FF6E1], [0x1FFFC2, 0x200000]]
+    assert bytes(rom[0x1FFFFE:0x200000]) == bytes([0x60, 0xE6])  # the control byte and the literal the table left
+    for row in rows:
+        ok = rncrepack.prove(rom, *row["region"], row["stream"])
+        assert ok["rebuilt_sha256"] == ok["region_sha256"] and ok["unpacked"] == 11192 and ok["decoded"] < 11192
+    with pytest.raises(rncrepack.StreamError, match="not inside"):
+        rncrepack.prove(rom, 0x1FF652 - 8, 0x1FF6E1, rows[0]["stream"])
