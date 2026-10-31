@@ -15,7 +15,8 @@ reorg   the one-command form: plan from a `--map` file (old path, new path per l
         `make check` once so every ROM is compared after the single move.
 header  `--file F.CPP`: writes the exported prototypes and externs of one source file into its one header and rewrites
         the includes of the files that declared them (hoist.py).
-mergecheck  reads a module map (unit, module) and the built objects and says which merges must stay separate files.
+mergecheck  reads a module map (unit, module) and the built objects and says which merges must stay separate files;
+        it judges as merge does, and with `--prove` the type conflicts merge --prove refuses are hard reasons too.
 merge   `--modules MAP [--module M]`: each selected module's units become one source file (named M's folder form,
         or the MAP `target` column's path) with every section class in its own linked unit order (classwise.py), pad
         arrays the alignment reproduces and redundant prototypes dropped, includes hoisted and deduped. A module of
@@ -955,6 +956,53 @@ def _refusals(
     return [], out
 
 
+def _arranged(
+    config: Config,
+    params: Json,
+    module: str,
+    units: Sequence[str],
+    merged_path: str,
+    tracked: Collection[str],
+    seqs: Mapping[str, Sequence[Row]],
+) -> Row:
+    """The module's units arranged into the one text of `merged_path`, with the conflicts the text arrangement finds.
+    merge writes it; mergecheck --prove judges the same conflicts."""
+    root = config.project.root
+    obj = params.get("obj") or "build/{version}/{unit}.o"
+
+    def built(unit: str) -> list[Path]:
+        return [
+            root / obj.format(version=v, unit=unit)
+            for v in config.project.versions
+            if (root / obj.format(version=v, unit=unit)).is_file()
+        ]
+
+    def droppable(unit: str, symbol: str, size: int, const: bool) -> bool:
+        seen = [merging.fills(path, symbol) for path in built(unit)]
+        return any(s is not None for s in seen) and all(s is not False for s in seen)
+
+    def header(
+        name: str,
+        bases: tuple[Path, ...] = (root / "include", (root / merged_path).parent, (root / module).parent),
+    ) -> str | None:
+        for base in bases:
+            if (base / name).is_file():
+                return (base / name).read_text(errors="replace")
+        return None
+
+    texts = {u: (root / u).read_text() for u in units}
+    texts.update(includes(texts, tracked, {u: merged_path for u in units}))
+    classes = {u: {n: c for path in built(u) for n, c in merging.object_classes(path).items()} for u in units}
+    return unitmerge.merge(
+        [(u, texts[u]) for u in units],
+        droppable,
+        header,
+        merging.class_orders(list(units), seqs),
+        classes,
+        {v: macro(v) for v in config.project.versions},
+    )
+
+
 def _verdicts(config: Config, params: Json) -> tuple[list[Row], list[tuple[str, str]], dict[str, list[Row]]]:
     rows, seqs, statics = _module_facts(config, params)
 
@@ -979,10 +1027,12 @@ def _verdicts(config: Config, params: Json) -> tuple[list[Row], list[tuple[str, 
                 "soft": [],
             }
             found.append(verdict)
-        reasons = _refusals(
-            config.project, units, merging.merged_path(module, targets.get(module), units), tracked, taken
-        )
-        verdict["hard"] = list(dict.fromkeys([*verdict["hard"], *reasons[0], *reasons[1]]))
+        merged_path = merging.merged_path(module, targets.get(module), units)
+        missing, refused = _refusals(config.project, units, merged_path, tracked, taken)
+        verdict["hard"] = list(dict.fromkeys([*verdict["hard"], *missing, *refused]))
+        if params.get("prove") and not missing and not _in_place(config.project, units, merged_path, tracked):
+            conflicts = _arranged(config, params, module, units, merged_path, tracked, seqs)["conflicts"]
+            verdict["hard"] += [f"{c['kind']} {c['name']}: {c['detail']}" for c in conflicts]
         verdict["verdict"] = "separate" if verdict["hard"] else "merge"
     return found, rows, seqs
 
@@ -1257,7 +1307,7 @@ def merge(config: Config, params: Json) -> Row:
     reported before mutation. Text conflicts remain explicit; --prove refuses those before writing too.
     """
     with effort.stage("layout.merge"):
-        verdicts, rows, seqs = _verdicts(config, params)
+        verdicts, rows, seqs = _verdicts(config, {**params, "prove": None})
         grouped: dict[str, list[str]] = {}
         seen: set[str] = set()
         problems: list[str] = []
@@ -1286,16 +1336,7 @@ def merge(config: Config, params: Json) -> Row:
         mapping: dict[str, str] = {}
         destinations: set[str] = set()
         unchanged: list[str] = []
-        obj = params.get("obj") or "build/{version}/{unit}.o"
         targets = merging.read_targets(Path(params["modules"]).read_text())
-
-        def droppable(unit: str, symbol: str, size: int, const: bool) -> bool:
-            seen = [
-                merging.fills(root / obj.format(version=v, unit=unit), symbol)
-                for v in config.project.versions
-                if (root / obj.format(version=v, unit=unit)).is_file()
-            ]
-            return any(s is not None for s in seen) and all(s is not False for s in seen)
 
         for module in selected:
             if module not in grouped:
@@ -1317,35 +1358,7 @@ def merge(config: Config, params: Json) -> Row:
             problems.extend(
                 f"{module}: {reason}" for reason in dict.fromkeys([*(verdict or {"hard": []})["hard"], *refused])
             )
-            texts = {u: (root / u).read_text() for u in units}
-            texts.update(includes(texts, tracked, {u: merged_path for u in units}))
-
-            def header(
-                name: str,
-                bases: tuple[Path, ...] = (root / "include", (root / merged_path).parent, (root / module).parent),
-            ) -> str | None:
-                for base in bases:
-                    if (base / name).is_file():
-                        return (base / name).read_text(errors="replace")
-                return None
-
-            classes = {
-                u: {
-                    name: cls
-                    for v in config.project.versions
-                    if (root / obj.format(version=v, unit=u)).is_file()
-                    for name, cls in merging.object_classes(root / obj.format(version=v, unit=u)).items()
-                }
-                for u in units
-            }
-            merged = unitmerge.merge(
-                [(u, texts[u]) for u in units],
-                droppable,
-                header,
-                merging.class_orders(units, seqs),
-                classes,
-                {v: macro(v) for v in config.project.versions},
-            )
+            merged = _arranged(config, params, module, units, merged_path, tracked, seqs)
             report = [f"{c['kind']} {c['name']}: {c['detail']}" for c in merged["conflicts"]]
             if params.get("prove"):
                 problems.extend(f"{module}: {reason}" for reason in report)

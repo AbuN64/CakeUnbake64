@@ -314,7 +314,7 @@ params = [
   { name = "module", kind = "option", type = "str", required = false, multiple = false, help = "merge: restrict to this module; omit to merge the complete explicit --modules map with one facts scan and sync" },
   { name = "ld", kind = "option", type = "str", required = false, multiple = false, help = "mergecheck, merge: the link script of a version, a path with {version}, default build/{version}/link.ld" },
   { name = "obj", kind = "option", type = "str", required = false, multiple = false, help = "mergecheck, merge: the object of a unit, a path with {version} and {unit}, default build/{version}/{unit}.o" },
-  { name = "prove", kind = "flag", type = "str", required = false, multiple = false, help = "reorg, merge, split: after the move run make check once, so every ROM is compared against the single move" },
+  { name = "prove", kind = "flag", type = "str", required = false, multiple = false, help = "reorg, merge, split: after the move run make check once, so every ROM is compared against the single move; mergecheck: the text conflicts merge --prove refuses are hard refusals too" },
   { name = "jobs", kind = "option", type = "int", required = false, multiple = false, help = "reorg, merge --prove: make -j, default 4" },
   { name = "plan", kind = "option", type = "path", required = false, multiple = false, help = "apply, carry, verify: the plan file, default .unbake/layout/plan.json; mergecheck, fill: the FILES.tsv of a source plan (OBJECTS.tsv and ASSIGN.tsv beside it); mergecheck judges each target by the object the linker built" },
   { name = "patch", kind = "option", type = "path", required = false, multiple = false, help = "carry: where to write the patch, default .unbake/layout/carry.patch" },

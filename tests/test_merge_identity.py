@@ -194,3 +194,17 @@ def test_a_unit_already_at_its_module_path_is_an_identity_row_and_a_stale_row_be
     )
     (cfg.project.root / stale).unlink(missing_ok=True)
     assert judge(cfg)["sdk/libultra/audio/cspsetseq.c"]["hard"] == []
+
+
+def test_mergecheck_prove_reports_the_conflicts_merge_prove_refuses(cfg, monkeypatch) -> None:
+    cfg = project_of(cfg, libraries=("sdk/libultra/",))
+    scan(monkeypatch, cfg, [(DATA, SEQ), (CODE, SEQ)], [DATA, CODE])
+    conflict = {"kind": "extern", "name": "g_audioSeqplayerText", "detail": "`const char[18]` against `char[]`"}
+    monkeypatch.setattr(folders, "_arranged", Mock(return_value={"conflicts": [conflict], "text": ""}))
+    params = {"modules": cfg.project.root / "modules.tsv"}
+    assert folders._verdicts(cfg, params)[0][0]["hard"] == []
+    hard = folders._verdicts(cfg, {**params, "prove": True})[0][0]["hard"]
+    assert hard == ["extern g_audioSeqplayerText: `const char[18]` against `char[]`"]
+    with pytest.raises(Refusal) as caught:
+        folders.merge(cfg, {**params, "prove": True})
+    assert list(caught.value.findings[0].missing) == [f"{SEQ}: {reason}" for reason in hard]
