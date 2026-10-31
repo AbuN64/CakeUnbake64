@@ -1601,7 +1601,8 @@ def _partition_findings(root: Path) -> list[Finding]:
             out.append(
                 Finding(
                     "audit.partition",
-                    f"progress.json {cart['version']}: the classes sum to {counted} bytes, the ROM is {cart['rom_size']}",
+                    f"progress.json {cart['version']}: the classes sum to {counted} bytes, "
+                    f"the ROM is {cart['rom_size']}",
                     path="progress.json",
                     versions=(cart["version"],),
                     action="run unbake sync; the classes must hold every ROM byte exactly once",

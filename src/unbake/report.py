@@ -596,7 +596,8 @@ def partitions(config: Any, tree: Any) -> dict[str, Json]:
             lost = {k: credited[k] - parts[k] for k in credited}
             if parts["overlap"] or parts["outside"] or parts["unknown"] < 0 or total != size or any(lost.values()):
                 why = (
-                    f"{parts['overlap']} bytes counted twice, {parts['outside']} beyond the ROM, sum {total} of {size}, "
+                    f"{parts['overlap']} bytes counted twice, {parts['outside']} beyond the ROM, "
+                    f"sum {total} of {size}, "
                     f"credited code {lost['code']:+d} and data {lost['data']:+d} bytes against the ROM's classes"
                 )
                 raise Refusal(Finding("report.partition", f"{v}: {why}", versions=(v,)))
