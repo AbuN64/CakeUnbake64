@@ -505,6 +505,10 @@ sentence = "a blob's bytes lie under a credited symbol and stay counted as code 
 owner = "pooltype"
 sentence = "type-pool was given no --spec VERSION:LOW:HIGH:DELTA"
 
+[key."type-pool.text"]
+owner = "pooltype"
+sentence = "a float, integer or word row of the older build holds the bytes of a string"
+
 [key."type-pointers.spec"]
 owner = "pointertype"
 sentence = "type-pointers was given no --spec VERSION:LOW:HIGH:DELTA"

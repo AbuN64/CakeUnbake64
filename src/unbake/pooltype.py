@@ -6,7 +6,11 @@ say what it is: a printable NUL-terminated run (3+ characters) padded with NULs 
 letter, 0xA0..0xFF, belongs to the run when an ASCII letter comes before it and printable text, another accent or the
 NUL after it, and is written as a three-digit octal escape; any other high byte is no text), a word whose exponent
 is a plausible float exponent is a float, a pair on an 8-byte boundary whose low word is no float and no small
-integer is a double, a word within -0x8000..0xFFFF is an integer, and zero follows its previous run. Anything else
+integer is a double, a word within -0x8000..0xFFFF is an integer, and zero follows its previous run. Text is never
+typed as words: a run of 4+ printable characters ending in a NUL, or one that continues a neighbouring string (4+
+printable bytes just before it), is one string from its first byte, and the printable bytes that follow its NUL in
+the last word belong to the string (the head of the next one); text of 4+ characters the range cuts off is refused.
+Anything else
 (pointer-looking words, packed bytes, high-bit text, a string whose padding is not NUL) is refused with its span and
 reason, never guessed. A file path string (`C:/.../name.cpp`, the assertion macro's __FILE__) names a source file:
 the items after the last string before that path belong to it, because the older compiler wrote each function's
@@ -30,6 +34,7 @@ from importlib import import_module
 from typing import Any
 
 from unbake import config, windows
+from unbake import symbols as symbol_file
 from unbake.contracts import Config, Finding, Json, Refusal
 
 FLOAT_LOW, FLOAT_HIGH = 0x60, 0xA0  # biased exponents (2^-31..2^33) a float constant of game code has
@@ -39,8 +44,10 @@ OFFSET_LOW = 0x100000  # the least ROM offset a word is typed as (below it a wor
 IMAGE = range(0x80000400, 0x80800000)  # the older image's addresses a pointer word may hold
 JOIN = 8  # most words of an odd run that join the integer run beside it
 PRINTABLE = frozenset(range(0x20, 0x7F)) | {9, 10, 13}
+TEXT = 4  # printable characters a run needs to be text on its own
 LETTERS = frozenset(range(0x41, 0x5B)) | frozenset(range(0x61, 0x7B))
 ACCENTED = range(0xA0, 0x100)  # Latin-1 letters and signs: a string's byte in it needs an ASCII letter before it
+FLOATY = re.compile(r"^g_earlier\w*?(?:Floats|Ints|Words)_[0-9A-F]+$")  # the rows type-pool names for numeric words
 PATH = re.compile(r"[A-Za-z]:[/\\](?:[^/\\]+[/\\])*([^/\\]+)\.(?:cpp|c|h)$", re.IGNORECASE)
 ESCAPES = {9: "\\t", 10: "\\n", 13: "\\r", 34: '\\"', 92: "\\\\"}
 KINDS = {"str": "Str", "float": "Floats", "double": "Doubles", "int": "Ints", "uint": "Words", "ptr": "Pointers"}
@@ -85,20 +92,37 @@ def _accent(data: bytes, at: int, end: int, high: int) -> bool:
     )
 
 
-def _string(data: bytes, at: int, high: int) -> tuple[str, int] | None:
-    """(text, padded size) of the string at `at`: 3+ printable characters (Latin-1 accented letters between ASCII
-    letters count), a NUL, NULs up to the next word. The text holds the Latin-1 characters."""
+def _end(data: bytes, at: int, high: int) -> int:
+    """The end of the run of text characters (printable, or an accented letter) that starts at `at`."""
     end = at
     while end < high and (data[end] in PRINTABLE or _accent(data, at, end, high)):
         end += 1
-    if end - at < 3 or end >= high or data[end] != 0:
+    return end
+
+
+def _cut(data: bytes, at: int, high: int) -> bool:
+    """Whether the range ends inside, or just before the NUL of, text of 4+ characters that starts at `at`."""
+    end = _end(data, at, len(data))
+    return end >= high and end - at >= TEXT and end < len(data) and data[end] == 0
+
+
+def _string(data: bytes, at: int, high: int) -> tuple[str, int] | None:
+    """(text, padded size) of the string at `at`: 3+ printable characters (Latin-1 accented letters between ASCII
+    letters count), a NUL, NULs up to the next word. The text holds the Latin-1 characters. A run of 4+ characters, or
+    one that continues a neighbouring string (4+ printable bytes just before it), may be followed in its last word by
+    printable bytes too (the head of the next string): the text then holds the NUL and those bytes."""
+    end = _end(data, at, high)
+    follows = at >= TEXT and all(b in PRINTABLE for b in data[at - TEXT : at])
+    if end - at < (1 if follows else 3) or end >= high or data[end] != 0:
         return None
     stop = end + 1
+    head = False
     while stop % 4:
-        if stop >= high or data[stop]:
+        if stop >= high or (data[stop] and (data[stop] not in PRINTABLE or (end - at < TEXT and not follows))):
             return None
+        head = head or data[stop] != 0
         stop += 1
-    return data[at:end].decode("latin-1"), stop - at
+    return data[at : stop if head else end].decode("latin-1"), stop - at
 
 
 def _double(hi: int, lo: int) -> bool:
@@ -128,6 +152,9 @@ def itemize(data: bytes, low: int, high: int, shift: int = 0) -> tuple[list[Item
         if text:
             items.append(Item("str", at, text[1], text[0]))
             at += text[1]
+        elif _cut(data, at, high):
+            refuse(at, at + 4, "text the range cuts off (a neighbouring string, never words)")
+            at += 4
         elif (at + shift) % 8 == 0 and at + 8 <= high and _double(word, struct.unpack_from(">I", data, at + 4)[0]):
             items.append(Item("double", at, 8, (word, struct.unpack_from(">I", data, at + 4)[0])))
             at += 8
@@ -260,9 +287,10 @@ def sources(items: Sequence[Item]) -> list[tuple[str, int]]:
     for i, item in enumerate(items):
         if item.kind != "str":
             continue
-        if PATH.search(str(item.value)):
+        text = str(item.value).split("\0")[0]
+        if PATH.search(text):
             first = 0 if not starts else last_string + 1
-            starts.append((str(item.value), first))
+            starts.append((text, first))
         last_string = i
     return starts
 
@@ -285,7 +313,8 @@ def _int(w: int, signed: bool) -> str:
 
 
 def _literal(text: str) -> str:
-    return '"' + "".join(ESCAPES.get(ord(c)) or (f"\\{ord(c):03o}" if ord(c) > 0x7E else c) for c in text) + '"'
+    plain = range(0x20, 0x7F)
+    return '"' + "".join(ESCAPES.get(ord(c)) or (c if ord(c) in plain else f"\\{ord(c):03o}") for c in text) + '"'
 
 
 def objects(items: Sequence[Item]) -> list[Item]:
@@ -402,9 +431,25 @@ def words_of(
     return out
 
 
+def false_rows(data: bytes, table: dict[str, symbol_file.Symbol], low: int, high: int) -> list[Row]:
+    """The float, integer and word rows of the older build's symbols inside [low, high) with a word that starts text
+    (see `_string`): their bytes are a string, or the head or tail of one, and typing them as words splits it."""
+    found: list[Row] = []
+    for name, (_, rom, size, _kind) in table.items():
+        if rom is None or size is None or not low <= rom < high or not FLOATY.match(name):
+            continue
+        for at in range(rom, rom + size, 4):
+            text = _string(data, at, len(data))
+            if text:
+                found.append({"name": name, "rom": rom, "end": rom + size, "text": text[0].split("\0")[0]})
+                break
+    return found
+
+
 def command(cfg: Config, params: Json) -> Json:
     """`type-pool --spec V:LOW:HIGH:DELTA ... [--unknown]`: write a source per unit and its symbol rows (not with
-    --check) and report the windows (`rom`, `end`, `delta` per version) and every refused span."""
+    --check) and report the windows (`rom`, `end`, `delta` per version) and every refused span. With --check it
+    refuses a float, integer or word row of the older build's symbols in a range whose bytes are text, naming each."""
     specs = []
     for text in params.get("spec") or ():
         v, low, high, delta = text.split(":")
@@ -416,8 +461,23 @@ def command(cfg: Config, params: Json) -> Json:
     refused: list[Row] = []
     symbols: dict[str, list[Row]] = {}
     held = unknown_ranges(cfg) if params.get("unknown") else None
+    false: list[Finding] = []
     for v, low, high, delta in specs:
         data = config.rom(cfg.project, v).read_bytes()
+        if params.get("check"):
+            held_file = cfg.project.root / windows.symbols_path(v)
+            held_rows = symbol_file.parse(held_file.read_text(), windows.symbols_path(v)) if held_file.exists() else {}
+            for row in false_rows(data, held_rows, low, high):
+                false.append(
+                    Finding(
+                        "type-pool.text",
+                        f"{row['name']} (rom 0x{row['rom']:X}..0x{row['end']:X}) is typed as words over the text "
+                        f"{row['text']!r}",
+                        path=windows.symbols_path(v),
+                        versions=(v,),
+                        action="delete the row and its source, then run type-pool --unknown to type the string",
+                    )
+                )
         items: list[Item] = []
         for a, b in [(low, high)] if held is None else words_of(*held[v], low, high):
             found_items, gaps = itemize(data, a, b, delta)
@@ -437,6 +497,8 @@ def command(cfg: Config, params: Json) -> Json:
                 }
             )
             symbols.setdefault(v, []).extend(syms)
+    if false:
+        raise Refusal(*false)
     written = []
     for (path, vram), bodies in sorted(found.items()):
         for text, vs in bodies.items():

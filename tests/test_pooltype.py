@@ -1,8 +1,14 @@
 """The rodata pool typer: synthetic pool bytes (strings, floats, a double, small words, refused words)."""
 
 import struct
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from unbake import pooltype as pt
+from unbake import symbols, windows
+from unbake.contracts import Refusal
 
 
 def words(*w: int) -> bytes:
@@ -130,3 +136,89 @@ def test_a_high_byte_without_a_letter_before_it_is_no_text():
     for raw in (b"\xe9bc\0", b"ab \xe9c\0", b"abc\xe9\xe9\x01\0"):
         padded = raw.ljust(8, b"\0")
         assert [i.kind for i in pt.itemize(padded, 0, 8)[0]][:1] != ["str"]
+
+
+# eu 0x14D044..0x14D094: two strings; the second ends in `J`, the first byte of the string after it
+EU_STRINGS = bytes.fromhex(
+    "70546869732d3e612e61682e69682e6d5f54797065203d3d20495f414e494d4154454400"
+    "70546869732d3e612e6d5f6477466c616773202620414e494d5f494e5354414e43455f44594e414d4943004a"
+)
+# eu 0x15F760..0x15F770 and 0x15F6B0..0x15F6C0: bitmap rows whose words are real floats beside printable bytes
+EU_FLOATS = bytes.fromhex("001c2241495555555555554a40211e00") + bytes.fromhex("007e4040405864420202024242241800")
+DYNAMIC = "M_INSTANCE_DYNAMIC\0J"
+
+
+def test_eu_14d044_the_freed_words_of_a_string_are_one_string_never_floats():
+    assert len(EU_STRINGS) == 0x50
+    items, refused = pt.itemize(EU_STRINGS, 0, 0x50, 0)
+    assert [(i.kind, i.at, i.size) for i in items] == [("str", 0, 36), ("str", 0x24, 44)] and not refused
+    freed, refused = pt.itemize(EU_STRINGS, 0x3C, 0x50, 0)  # the false rows over 0x14D080..0x14D094 are deleted
+    assert [(i.kind, i.at, i.size, i.value) for i in freed] == [("str", 0x3C, 20, DYNAMIC)] and not refused
+    lines, syms = pt.body(pt.Unit("", 0x3C, freed), 0x14D044)
+    assert lines == ['char g_earlierPoolStr_14D080[20] = "M_INSTANCE_DYNAMIC\\000J";']
+    assert syms == [{"name": "g_earlierPoolStr_14D080", "vram": 0x14D080, "rom": 0x3C, "size": 20}]
+
+
+def test_text_that_continues_a_neighbouring_string_is_a_string_from_its_first_byte():
+    assert pt.itemize(b"abcdefgh\0\0\0\0", 4, 12)[0][0].value == "efgh"  # 4+ printable bytes before it
+    items, _ = pt.itemize(b"abcd" + b"ef\0G" + b"hij\0", 4, 12)  # `ef` is the tail of abcdef, `G` heads `Ghij`
+    assert [(i.kind, i.value) for i in items] == [("str", "ef\0G"), ("str", "hij")]
+    assert pt.itemize(b"\0\0\0\0ef\0\0", 4, 8)[0] == []  # nothing before it and under 4 characters: no text
+
+
+def test_a_run_the_range_cuts_off_is_refused_never_typed_as_words():
+    items, refused = pt.itemize(b"\0\0\0\0Index < pPAU\0\0\0\0", 4, 12)
+    assert not items and refused == [
+        {"rom": 4, "end": 12, "why": "text the range cuts off (a neighbouring string, never words)"}
+    ]
+    assert [i.kind for i in pt.itemize(b"\0\0\0\0Index < pPAU\x1e", 4, 8)[0]] == ["float"]  # no NUL ends it
+
+
+def test_bitmap_words_beside_printable_bytes_stay_numbers():
+    items, refused = pt.itemize(EU_FLOATS[:16], 4, 16)  # IUUU is 876373.3; UUUJ is no float, no text
+    assert [(i.kind, i.at, i.words[0]) for i in items] == [("float", 4, 0x49555555), ("float", 12, 0x40211E00)]
+    assert [r["rom"] for r in refused] == [8]
+    items, _ = pt.itemize(EU_FLOATS[16:], 4, 8)  # @XdB
+    assert [(i.kind, i.words[0]) for i in items] == [("float", 0x40586442)]
+
+
+def test_false_rows_name_the_float_rows_over_text_and_keep_the_real_ones():
+    rom = bytearray(0x15F770)
+    rom[0x14D044:0x14D094] = EU_STRINGS
+    rom[0x15F760:0x15F770] = EU_FLOATS[:16]
+    table = symbols.parse(
+        "\n".join(
+            [
+                "g_earlierContpadFloats_454080 = 0x454080; // rom:0x14D080 size:0x4",
+                "g_earlierContpadFloats_454088 = 0x454088; // rom:0x14D088 size:0x4",
+                "g_earlierContpadFloats_454090 = 0x454090; // rom:0x14D090 size:0x4",
+                "g_earlierPoolFloats_8015CB64 = 0x8015CB64; // rom:0x15F764 size:0x4",
+                "g_earlierAnimpoolStr_454068 = 0x454068; // rom:0x14D068 size:0x2C",
+            ]
+        )
+    )
+    found = pt.false_rows(bytes(rom), table, 0x14D000, 0x15F770)
+    assert [(r["name"], r["text"]) for r in found] == [
+        ("g_earlierContpadFloats_454080", "M_INSTANCE_DYNAMIC"),
+        ("g_earlierContpadFloats_454088", "CE_DYNAMIC"),
+        ("g_earlierContpadFloats_454090", "IC"),
+    ]
+
+
+def test_check_refuses_a_float_row_over_text_naming_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rom = bytearray(0x15F770)
+    rom[0x14D044:0x14D094] = EU_STRINGS
+    (tmp_path / "eu.z64").write_bytes(rom)
+    table = tmp_path / windows.symbols_path("eu")
+    table.parent.mkdir(parents=True)
+    table.write_text("g_earlierContpadFloats_454088 = 0x454088; // rom:0x14D088 size:0x4\n")
+    cfg = SimpleNamespace(project=SimpleNamespace(root=tmp_path))
+    monkeypatch.setattr(pt.config, "rom", lambda _project, _v: tmp_path / "eu.z64")
+    spec = ["eu:0x14D044:0x14D094:0x0"]
+    with pytest.raises(Refusal) as refusal:
+        pt.command(cfg, {"spec": spec, "check": True})  # type: ignore[arg-type]
+    (finding,) = refusal.value.findings
+    assert finding.key == "type-pool.text" and "g_earlierContpadFloats_454088" in finding.reason
+    assert "'CE_DYNAMIC'" in finding.reason and finding.versions == ("eu",)
+    table.write_text("")
+    assert pt.command(cfg, {"spec": spec, "check": True})["unfit"] == []  # type: ignore[arg-type]
