@@ -57,7 +57,8 @@ Read = Callable[[str], str]
 NAME = r"""set -u
 sha=$1 toolkit=$2
 (cd "$HOME" && "$toolkit/bin/decomp" tools name --package unbake --sha "$sha" --carry-from "$toolkit") \
-  || { echo "name-error: decomp tools name exit $? (the live decomp must have it: deploy AbuDecomp64 first)" >&2; exit 1; }
+  || { echo "name-error: decomp tools name exit $? (the live decomp needs it: deploy AbuDecomp64 first)" >&2
+       exit 1; }
 """
 
 # BUILD runs inside the activation job with BUILD (<toolkit>.<name>) set by Job Invoke. The stage link starts at the
