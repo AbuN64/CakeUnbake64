@@ -129,7 +129,7 @@ def test_destination_must_preserve_compiler_facts(cfg, monkeypatch, facts):
 
 
 def test_flat_library_ownership_follows_the_destination(cfg, monkeypatch):
-    path, _, stage, sync, _ = prepared(cfg, monkeypatch)
+    path, _, stage, _sync, _ = prepared(cfg, monkeypatch)
     cfg.project.libraries = ("src/group0/part0.c",)
     folders.merge(cfg, {"modules": path})
     stage.assert_called_once()
