@@ -208,3 +208,10 @@ def test_mergecheck_prove_reports_the_conflicts_merge_prove_refuses(cfg, monkeyp
     with pytest.raises(Refusal) as caught:
         folders.merge(cfg, {**params, "prove": True})
     assert list(caught.value.findings[0].missing) == [f"{SEQ}: {reason}" for reason in hard]
+
+
+def test_an_include_after_a_define_keeps_its_place_so_the_macro_still_steers_it() -> None:
+    # sdk/libgcc/_cmpdi2.CPP: `#define L_cmpdi2` before `#include "libgcc2.inc.c"` selects the one function the unit has
+    unit = '#include "include_asm.h"\n\n#define L_cmpdi2\n#include "libgcc2.inc.c"\n'
+    text = unitmerge.merge([("sdk/libgcc/_cmpdi2.CPP", unit)], lambda *_: False)["text"]
+    assert text.index('#include "include_asm.h"') < text.index("#define L_cmpdi2") < text.index('#include "libgcc2.inc.c"')

@@ -2,7 +2,8 @@
 
 `merge` takes the units of one module in link (ROM) order and returns the text of the one file that replaces them, plus
 what it could not decide. It
-  hoists and dedupes the `#include` lines that sit outside any `#if`,
+  hoists and dedupes the `#include` lines that sit outside any `#if` and before the unit's first `#define` or `#undef`
+  (a macro set before an include steers it, so that include keeps its place),
   drops the all-zero pad arrays (a few bytes) that the linker's section alignment reproduces,
   drops the prototypes and `extern` declarations that the merged file itself now defines or already declares,
   drops a prototype that disagrees with a definition standing earlier in the merged text (the definition wins),
@@ -38,6 +39,7 @@ _ELSE = re.compile(r"^[ \t]*#[ \t]*(else|elif)\b")
 _ENDIF = re.compile(r"^[ \t]*#[ \t]*endif\b")
 _INCLUDE = re.compile(r"^[ \t]*#[ \t]*include\b.*$")
 _IFNDEF = re.compile(r"^[ \t]*#[ \t]*ifndef[ \t]+(\w+)[ \t]*$")
+_DEFINE = re.compile(r"^[ \t]*#[ \t]*(?:define|undef)\b")
 _QUOTED = re.compile(r'^[ \t]*#[ \t]*include[ \t]*"([^"\n]+)"')
 Droppable = Callable[[str, str, int, bool], bool]
 Header = Callable[[str], str | None]
@@ -458,13 +460,15 @@ def merge(
     bodies: list[tuple[str, str]] = []
     pads: list[str] = []
     for name, text in units:
-        depth, kept = 0, []
+        depth, kept, defined = 0, [], False
         for line in text.split("\n"):
             if _IF.match(line):
                 depth += 1
             elif _ENDIF.match(line):
                 depth = max(0, depth - 1)
-            if depth == 0 and _INCLUDE.match(line):
+            if depth == 0 and _DEFINE.match(line):
+                defined = True
+            if depth == 0 and not defined and _INCLUDE.match(line):
                 if (line := _norm(line)) not in seen:
                     seen.append(line)
                 continue
