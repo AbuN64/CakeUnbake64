@@ -114,7 +114,9 @@ PRINTF_C = (
 
 def arranged(units: dict[str, str], classes: dict, orders: dict):
     return classwise.arrange(
-        [(u, t, unitmerge.mask(t), unitmerge.decls(t, u)) for u, t in units.items()], orders, classes
+        [(u, t, unitmerge.mask(t), unitmerge.decls(t, u)) for u, t in units.items()],
+        {cls: {"v": order} for cls, order in orders.items()},
+        classes,
     )
 
 
