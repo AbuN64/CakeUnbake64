@@ -89,7 +89,7 @@ def test_a_sha_off_gitea_main_refuses_before_any_job():
 
 def test_a_failing_suite_refuses_and_names_the_last_line():
     rig = Rig(activation_exit=1, activation_log="FAILED tests/test_x.py::test_y\n")
-    with pytest.raises(deploy_rig.Refused, match="activation exit 1, links unchanged: FAILED tests/test_x.py::test_y"):
+    with pytest.raises(deploy_rig.Refused, match=r"activation exit 1, links unchanged: FAILED tests/test_x.py::test_y"):
         rig.deploy()
     assert len(rig.requests) == 1
 
