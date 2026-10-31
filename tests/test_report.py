@@ -338,7 +338,7 @@ def test_readme_with_blob_accounting_measures_against_the_rom_and_drops_the_part
     out = report.readme("<!-- progress -->\n<!-- /progress -->", config, current)
     for row in ("code      [", "data      [", "functions ["):  # values of the old rows are the same
         assert row.strip() in plain and row.strip() in out
-    assert "blobs     [████████░░░░░░░░░░░░]  40.00% (~100.00%)  400 of 1,000</code>" in out
+    assert "blobs     [████████▒▒▒▒▒▒▒▒▒▒▒▒]  40.00% (~100.00%)  400 of 1,000</code>" in out
     assert "unknown   7,294,964 bytes</code>" in out  # the bytes no class holds: their own line, in no percentage
     for gone in ("platform  [", "unknown   [", "rom       ", "data = C globals"):
         assert gone not in out
