@@ -91,15 +91,15 @@ def test_mergecheck_reports_what_merge_refuses_beyond_the_link_findings(cfg, mon
 def test_a_file_moved_one_folder_deeper_keeps_its_relative_includes(cfg, monkeypatch) -> None:
     path, scan_, *_ = prepared(cfg, monkeypatch, 1)
     root = cfg.project.root
-    (root / "include").mkdir(exist_ok=True)
-    (root / "include/libgultra.h").write_text("extern int g;\n")
+    (root / "src/include").mkdir(parents=True, exist_ok=True)
+    (root / "src/include/libgultra.h").write_text("extern int g;\n")
     unit = "src/sdk/audio/alsynset_text.c"
     (root / unit).parent.mkdir(parents=True)
     (root / unit).write_text('#include "../../include/libgultra.h"\n#include <ultra64.h>\nint f(void) { return g; }\n')
     rows = [(unit, "src/sdk/audio/alsynset.c")]
     scan_.return_value = ([{"module": rows[0][1], "hard": [], "soft": [], "verdict": "merge"}], rows, {})
     path.write_text("unit\tmodule\n" + f"{unit}\t{rows[0][1]}\n")
-    monkeypatch.setattr(folders, "_tracked", Mock(return_value=[unit, "include/libgultra.h"]))
+    monkeypatch.setattr(folders, "_tracked", Mock(return_value=[unit, "src/include/libgultra.h"]))
     result = folders.merge(cfg, {"modules": path})
     merged = (root / "src/sdk/audio/alsynset/alsynset.c").read_text()
     assert '#include "../../../include/libgultra.h"' in merged and "<ultra64.h>" in merged
