@@ -34,6 +34,7 @@ class Rig:
         }
         self.exits = [activation_exit, readback_exit]
         self.on_gitea = on_gitea
+        self.fetched = None  # what FETCH_HEAD holds: the URL of the last fetch
 
     def job(self, body):
         self.requests.append(body)
@@ -42,9 +43,13 @@ class Rig:
 
     def git(self, *args):
         self.commands.append(args)
-        if args[:1] == ("merge-base",) and args[3] == "gitea/main" and not self.on_gitea:
+        if args[:1] == ("fetch",):
+            if "gitea" in args:  # the checkout the deploy runs in has no remote of that name
+                return 128, "fatal: 'gitea' does not appear to be a git repository and the repository exists."
+            self.fetched = args[-2]
+        if args[:1] == ("merge-base",) and self.fetched == deploy_rig.GITEA and not self.on_gitea:
             return 1, ""
-        if args[:2] == ("rev-parse", "gitea/main"):
+        if args[:2] == ("rev-parse", "FETCH_HEAD"):
             return 0, SHA
         return 0, ""
 
@@ -74,10 +79,28 @@ def test_the_activation_deploys_package_unbake_at_the_landed_sha_then_reads_it_b
 def test_main_moved_on_deploys_the_head_and_defers_the_older_deploy():
     log = f"suite-checkout: {CHECKOUT}\nsuite-sha: {NEWER}\nsuite-import: {CHECKOUT}/src/unbake/__init__.py\n"
     rig = Rig(activation_log=log, readback=f"readback-pin: unbake {NEWER}\n")
-    rig.git = lambda *args: (0, NEWER) if args[:2] == ("rev-parse", "gitea/main") else (0, "")
+    rig.git = lambda *args: (0, NEWER) if args[:2] == ("rev-parse", "FETCH_HEAD") else (0, "")
     lines = rig.deploy()
     assert "the older deploy deferred" in lines[0]
     assert rig.requests[0]["Worktree"].endswith(f"@{NEWER}")
+
+
+def test_both_mains_are_fetched_by_url_never_by_a_remote_name_the_checkout_lacks():
+    """8b74bbd: `git fetch gitea main` refused in the checkout the deploy runs in, which has no remote of that name."""
+    rig = Rig()
+    rig.deploy()
+    fetches = [args for args in rig.commands if args[:1] == ("fetch",)]
+    assert [args[-2] for args in fetches] == [deploy_rig.GITEA, deploy_rig.GITHUB]
+    assert all(args[-1] == "main" for args in fetches)
+    assert not any("gitea/main" in args for args in rig.commands)
+
+
+def test_an_unreachable_gitea_refuses_naming_the_url_before_any_job():
+    rig = Rig()
+    rig.git = lambda *args: (128, "fatal: unable to access") if args[:1] == ("fetch",) else (0, "")
+    with pytest.raises(deploy_rig.Refused, match=r"cannot fetch gitea main \(http"):
+        rig.deploy()
+    assert rig.requests == []
 
 
 def test_a_sha_off_gitea_main_refuses_before_any_job():

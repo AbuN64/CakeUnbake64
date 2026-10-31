@@ -35,6 +35,7 @@ REPOSITORY = "Projects/AbuN64/CakeUnbake64"
 HOST = "rig"
 TOOLKIT = "/home/abu/venv-decomp"
 PACKAGE = "unbake"
+GITEA = "http://10.10.10.130:18556/Projects/CakeUnbake64.git"
 GITHUB = "https://github.com/AbuN64/cake-unbake-64.git"
 SHA = re.compile(r"[0-9a-f]{40}")
 ALREADY_ACTIVE = re.compile(r"^\S+ is \S+: already active$", re.MULTILINE)
@@ -160,17 +161,18 @@ def landed_sha(environ: dict[str, str]) -> str:
 
 def newest_main(sha: str, git: Seam) -> str:
     """The SHA to deploy: gitea main's head when it descends from sha (sha itself when it is the head), else Refused.
-    The head must also be on github main. Gitea main is this repository's `gitea` remote."""
-    code, out = git("fetch", "-q", "--no-tags", "gitea", "main")
+    The head must also be on github main. The checkout the deploy runs in has no `gitea` remote, so both mains are
+    fetched by URL (as AbuDecomp64's and CakeTaste64's deploys do); FETCH_HEAD is each main in turn."""
+    code, out = git("fetch", "-q", "--no-tags", GITEA, "main")
     if code:
-        raise Refused(f"cannot fetch gitea main: {last_line(out, code)}")
-    if git("merge-base", "--is-ancestor", sha, "gitea/main")[0]:
+        raise Refused(f"cannot fetch gitea main ({GITEA}): {last_line(out, code)}")
+    if git("merge-base", "--is-ancestor", sha, "FETCH_HEAD")[0]:
         raise Refused(f"{sha[:12]} is not on gitea main")
-    code, out = git("rev-parse", "gitea/main")
+    code, out = git("rev-parse", "FETCH_HEAD")
     head = out if code == 0 and SHA.fullmatch(out) else sha
     code, out = git("fetch", "-q", "--no-tags", GITHUB, "main")
     if code:
-        raise Refused(f"cannot fetch github main: {last_line(out, code)}")
+        raise Refused(f"cannot fetch github main ({GITHUB}): {last_line(out, code)}")
     if git("merge-base", "--is-ancestor", head, "FETCH_HEAD")[0]:
         raise Refused(f"{head[:12]} is not on github main")
     return head
