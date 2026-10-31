@@ -526,3 +526,54 @@ def test_merged_span_follows_the_built_objects_own_padding() -> None:
     ]
     assert mergecheck.spans(seq, {"a", "b"}) == [(".rodata", 12, 12, 0)]
     assert mergecheck.spans(seq, {"a", "b"}, {".rodata": [(16, 8)]}) == [(".rodata", 12, 16, 0)]
+
+
+def _slice(rows: list[tuple[str, str, int, int, int]], section: str, subalign: int = 1) -> list[dict[str, Any]]:
+    """Link rows of a SUBALIGN section: (unit, class, size, section alignment, pinned offset or 0) in link order."""
+    seq: list[dict[str, Any]] = []
+    for unit, cls, size, align_, pin in rows:
+        if pin:
+            seq.append({"o": section, "k": "minimum", "offset": pin})
+        parts = {cls: piece(size, align_)}
+        seq.append({**with_parts(entry(unit, cls, size, section), **parts), "subalign": subalign})
+    return seq
+
+
+def test_regression_slices_of_merged_sections_that_kept_the_linked_size() -> None:
+    """Pieces whose object alignment is 16 but that the link packed at 4 or 8 under SUBALIGN(1): one object packs them
+    the same way, so the merged span is the linked one (timerintr 776 vs 772, vi us-rev1 120 vs 112, sinf 88 vs 80,
+    PRINTF .ovl_frontendMenu 6176 vs 6172; MERGE-LMA-PAD)."""
+    cases = {
+        "timerintr": ([("a", "text", 508, 16, 0), ("b", "text", 264, 16, 767660)], 767152, 772),
+        "vi": ([("a", "data", 96, 16, 0), ("b", "data", 8, 16, 72080), ("c", "data", 8, 16, 72088)], 71984, 112),
+        "sinf": ([("a", "data", 8, 16, 0), ("s", "rodata", 68, 4, 24344), ("b", "data", 4, 16, 24412)], 24336, 80),
+        "printf": ([("a", "text", 2252, 16, 0), ("b", "text", 3920, 16, 0x80414CCC - 0x80414400)], 0x80414400, 6172),
+    }
+    for name, (rows, start, linked) in cases.items():
+        seq = _slice(rows, ".sec")
+        seq.insert(0, {"o": ".sec", "k": "minimum", "offset": start})
+        units = {r[0] for r in rows}
+        [(section, span, merged, _)] = mergecheck.spans(seq, units)
+        assert (section, span, merged) == (".sec", linked, linked), name
+        assert run([(u, "M") for u in units], seq)["M"]["hard"] == [], name
+
+
+def test_a_piece_the_link_aligned_keeps_its_alignment_in_the_merged_span() -> None:
+    seq = [
+        with_parts(entry("a", "text", 12, ".text"), text=piece(12, 16)),
+        with_parts(entry("b", "text", 16, ".text"), text=piece(16, 16)),
+    ]
+    assert mergecheck.spans(seq, {"a", "b"}) == [(".text", 32, 32, 0)]
+
+
+def test_a_gap_in_a_version_leaves_no_lma_finding_for_it() -> None:
+    """MATH.c, NOTE.cpp: another module's bytes sit between the units, so the span the units fill is not one run and
+    the gap is the finding."""
+    rows = [("a", "M"), ("b", "M")]
+    seq = [
+        with_parts(entry("a", "rodata", 1, ".rodata"), rodata=piece(1, 1)),
+        with_parts(entry("x", "rodata", 4, ".rodata"), rodata=piece(4, 4)),
+        with_parts(entry("b", "rodata", 4, ".rodata"), rodata=piece(4, 4)),
+    ]
+    out = run(rows, seq)["M"]
+    assert out["hard"] == ["gap: us rodata a .. b has x between"]

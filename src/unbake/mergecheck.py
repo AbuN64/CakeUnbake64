@@ -214,6 +214,13 @@ def _up(position: int, align: int) -> int:
     return -(-position // align) * align
 
 
+def _linked_align(at: int, align: int) -> int:
+    """The alignment a piece kept where the link placed it: the object's section alignment, or less when the link
+    (SUBALIGN, a pinned offset) put it at an offset that is not a multiple of that. The compiler packs the piece the
+    same way inside one object, so the merged span does not pad it up to the section alignment the link ignored."""
+    return min(align, at & -at) if at else align
+
+
 def spans(
     seq: Sequence[Row], units: set[str], built: Mapping[str, Sequence[tuple[int, int]]] | None = None
 ) -> list[tuple[str, int, int, int]]:
@@ -221,8 +228,8 @@ def spans(
     spans, offset in the section where the module starts). The linked span walks the section from the module's first
     entry to its last (the module's pieces aligned as linked, ALIGN directives and `MAX(., offset)` pins between
     them); the bytes of other modules between two entries are the `gap` finding's, so they are not walked and the
-    pins after them are not read. The merged span packs the module's pieces of each class again, each at its own
-    alignment inside the object (the compiler packs them so), class after class as the link places the sections.
+    pins after them are not read. The merged span packs the module's pieces of each class again, each at the alignment
+    the link kept for it (`_linked_align`), class after class as the link places the sections.
     `built` holds the merged object's own sections (name -> (size, alignment) pieces, `object_facts`): a class it
     holds is measured on those pieces, so the in-object padding the model cannot see is part of the span."""
     out: list[tuple[str, int, int, int]] = []
@@ -250,9 +257,10 @@ def spans(
                 continue
             for cls in row.get("parts", {}):
                 for size, align in row["parts"][cls]:
-                    position = _up(position, row.get("subalign") or align) + size
+                    at = _up(position, row.get("subalign") or align)
+                    position = at + size
                     if i >= mine[0]:
-                        classes[cls].append((size, align, row.get("subalign") or 0))
+                        classes[cls].append((size, _linked_align(at, align), row.get("subalign") or 0))
         merged = 0
         for cls, pieces in classes.items():
             if built is not None:
@@ -411,6 +419,7 @@ def verdicts(
     layout: dict[tuple[str, str], dict[str, list[str]]] = defaultdict(dict)
     placed_in: dict[tuple[str, str], dict[str, dict[str, str]]] = defaultdict(lambda: defaultdict(dict))
     split: set[tuple[str, str]] = set()
+    gapped: set[tuple[str, str]] = set()
     for version, seq in seqs.items():
         for row in seq:
             if row.get("missing") and (missing_owner := owner.get(row["u"])):
@@ -434,12 +443,14 @@ def verdicts(
                 if following.get(i) != j:
                     between = [seq[k]["u"] for k in live if i < k < j and owner.get(seq[k]["u"]) != module]
                     if between:
+                        gapped.add((module, version))
                         hard[module].append(f"gap: {version} {cls} {one} .. {two} has {', '.join(between[:3])} between")
                 for k in range(i + 1, j):
                     if seq[k]["k"] == "align":
                         soft[module].append(f"align: {version} {cls} ALIGN({seq[k]['a']}) before {two}")
         for module, units in multi.items():
-            for section, linked, merged, _ in spans(seq, set(units)):
+            # another module's bytes inside the span make the gap the finding: the span is not one run to compare
+            for section, linked, merged, _ in [] if (module, version) in gapped else spans(seq, set(units)):
                 shape = f"{version} {section} merged {merged} B against linked {linked} B"
                 if merged > linked:
                     hard[module].append(f"lma: {shape}: overlaps the next section")
