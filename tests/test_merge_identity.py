@@ -219,3 +219,22 @@ def test_an_include_after_a_define_keeps_its_place_so_the_macro_still_steers_it(
     assert (
         text.index('#include "include_asm.h"') < text.index("#define L_cmpdi2") < text.index('#include "libgcc2.inc.c"')
     )
+
+
+def test_a_moved_file_row_regenerates_the_makefile_that_holds_it(cfg, monkeypatch) -> None:
+    rows = {f"src/group0/part{j}.c": FileFacts(cflags=("-mfp32",)) for j in range(2)}
+    cfg = project_of(cfg, files=rows)
+    path, _, _, sync, _ = prepared(cfg, monkeypatch, 1)
+    monkeypatch.setattr(folders.configuration, "load_project", Mock(return_value=cfg.project))
+    root = cfg.project.root
+    (root / "config.toml").write_text("".join(f'[file."{u}"]\ncflags = ["-mfp32"]\n\n' for u in rows))
+    folders.merge(cfg, {"modules": path})
+    assert sync.call_args.args[1] == {"makefile": True}
+    assert '[file."src/group0/group0.c"]' in (root / "config.toml").read_text()
+
+
+def test_a_merge_that_moves_no_file_row_leaves_the_makefile_alone(cfg, monkeypatch) -> None:
+    path, _, _, sync, _ = prepared(cfg, monkeypatch, 1)
+    (cfg.project.root / "config.toml").write_text('[file."sdk/other.c"]\ncflags = ["-O1"]\n')
+    folders.merge(cfg, {"modules": path})
+    assert sync.call_args.args[1] == {}

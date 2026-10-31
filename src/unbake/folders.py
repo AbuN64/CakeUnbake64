@@ -1394,15 +1394,18 @@ def merge(config: Config, params: Json) -> Row:
             store.write(root / path, body.encode())
         tracked = (tracked - set(mapping)) | destinations
         settings = root / "config.toml"
+        rows_moved = False
         if settings.is_file():
             held = settings.read_text()
             carried = _carry_rows(held, config.project, [(us, to) for _, us, to, _ in prepared])
             if carried != held:
                 store.write(settings, carried.encode())
+                rows_moved = True
         project = configuration.load_project(root, lambda path: (root / path).read_bytes(), lambda: sorted(tracked))
         effort.forget("pin", "includes", "closure", "listing")
         loaded = Config(project, config.host, digest((project.digest, config.host.digest)))
-        out["written"] = [*map_writes, *repo.sync(loaded, {})["written"]]
+        # an existing Makefile keeps the [file] rows it was generated with, so rows that moved regenerate it
+        out["written"] = [*map_writes, *repo.sync(loaded, {"makefile": True} if rows_moved else {})["written"]]
         if params.get("prove"):
             out.update(prove(loaded, params))
         return out
