@@ -700,7 +700,7 @@ def test_partition_preserves_scored_extents_without_measuring_bodies(tmp_path, m
     monkeypatch.setattr(report, "_extents", lambda config, tree: {"v": {"data": 0x20}})
     monkeypatch.setattr(report, "_broken", lambda config, tree: frozenset())
     scored = report._rows(config, tree, frozenset({"v"}), {"draft": {"v": score}})
-    table = {r.name: (0, r.member.rom, r.code + r.data, "func" if r.code else "data") for r in scored}
+    table = report.extents(scored, ["v"])["v"]
     expected = report.partition(config, "v", table, ROM)
     monkeypatch.setattr(report.rescore, "rows", lambda *a: pytest.fail("partition requested fuzzy compilation"))
     monkeypatch.setattr(report, "credits", lambda *a: pytest.fail("partition requested scored credits"))

@@ -1594,6 +1594,8 @@ def _partition_findings(root: Path) -> list[Finding]:
         return []
     out = []
     for cart in json.loads(path.read_bytes()).get("carts", ()):
+        if "rom_size" not in cart:
+            continue
         counted = sum(part["bytes"] for part in cart.get("partition", {}).values())
         if counted != cart["rom_size"]:
             out.append(

@@ -365,6 +365,10 @@ sentence = "the last build failed, which says nothing about matching, so sync an
 owner = "policy"
 sentence = "progress.json lost matched functions that no removed C explains"
 
+[key."audit.partition"]
+owner = "policy"
+sentence = "progress.json holds a cart whose ROM classes do not sum to its rom_size"
+
 [key."sync.stand-in"]
 owner = "repo"
 sentence = "sync would write a stand-in line into a source for a name no file defines; write its typed definition"

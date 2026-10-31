@@ -344,7 +344,7 @@ def test_readme_with_blob_accounting_measures_against_the_rom_and_drops_the_part
         assert gone not in out
     # the top bars are measured against the exact ROM size: matched code+data+blobs plus platform, reaching fuzzy
     assert " of 8,388,608 bytes, linker fill 0 bytes, unknown " in out and "us   [" in out
-    assert " of 16,777,216 bytes, linker fill 0 bytes</code>" in out
+    assert " of 16,777,216 bytes, linker fill 0 bytes, unknown " in out
     sure = sum(current["versions"]["us"][k] for k in ("code_matched", "data_matched")) + 400 + 4096
     assert f"{sure:,} of 8,388,608 bytes" in out
     assert report.readme(out, config, current) == out
