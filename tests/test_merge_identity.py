@@ -142,3 +142,45 @@ def test_definitions_under_mutually_exclusive_conditions_are_one_definition() ->
     text, conflicts = arranged({"a": use, "c": PRINTF_C}, classes, {"text": ["a"], "rodata": ["c"]})
     assert [c for c in conflicts if c["kind"] == "forward"] == []
     assert text.count("k_PrintfEncodedWords[4] =") == 2
+
+
+# SRC-SDK-3 rows: LIBC_SIGNEDLONGLONGTODOUBLE_USREV1 and ospfschecker -> pfschecker carry cflags, entry.s -> BOOT.c is
+# assembler, cspsetseq is stale beside its in-place target
+FP = "sdk/libultra/libc/LIBC_SIGNEDLONGLONGTODOUBLE_USREV1.CPP"
+FP_MODULE = "sdk/libultra/libc/LIBC_SIGNEDLONGLONGTODOUBLE_USREV1.CPP.c"
+FP_MERGED = "sdk/libultra/libc/LIBC_SIGNEDLONGLONGTODOUBLE_USREV1.CPP/LIBC_SIGNEDLONGLONGTODOUBLE_USREV1.CPP.c"
+
+
+def test_a_units_file_row_goes_with_it_to_the_target_in_the_verdict_and_in_config(cfg, monkeypatch) -> None:
+    cfg = project_of(cfg, libraries=("sdk/libultra/",), files={FP: FileFacts(cflags=("-mfp32",))})
+    scan(monkeypatch, cfg, [(FP, FP_MODULE)], [FP])
+    assert judge(cfg)[FP_MODULE]["hard"] == []
+    text = f'[file."{FP}"]\ncflags = ["-mfp32"]\n\n[file."sdk/other.c"]\ncflags = ["-O1"]\n'
+    carried = folders._carry_rows(text, cfg.project, [([FP], FP_MERGED)])
+    assert f'[file."{FP_MERGED}"]' in carried and f'[file."{FP}"]' not in carried and "sdk/other.c" in carried
+
+
+def test_units_whose_carried_flags_still_differ_stay_separate(cfg, monkeypatch) -> None:
+    files = {"sdk/a.c": FileFacts(cflags=("-mfp32",)), "sdk/b.c": FileFacts(cflags=("-O1",))}
+    cfg = project_of(cfg, files=files)
+    scan(monkeypatch, cfg, [("sdk/a.c", "sdk/M.c"), ("sdk/b.c", "sdk/M.c")], ["sdk/a.c", "sdk/b.c"])
+    assert any("compiler, flags or omit" in r for r in judge(cfg)["sdk/M.c"]["hard"])
+
+
+def test_an_assembler_unit_gives_an_assembler_target() -> None:
+    from unbake import mergecheck
+
+    assert mergecheck.merged_path("sdk/BOOT.c", "sdk/BOOT.c", ["sdk/boot/entry.s"]) == "sdk/BOOT.s"
+    assert mergecheck.merged_path("sdk/LIBSN.c", None, ["sdk/LIBSN/pfs_setwatchpoint.s"]) == "sdk/LIBSN/LIBSN.s"
+    assert mergecheck.merged_path("sdk/BOOT.c", "sdk/BOOT.c", ["a.s", "b.c"]) == "sdk/BOOT.c"
+
+
+def test_a_unit_already_at_its_module_path_is_an_identity_row_and_a_stale_row_beside_its_target_is_in_place(
+    cfg, monkeypatch
+) -> None:
+    scan(monkeypatch, cfg, [("sdk/libultra/audio/cseq.c", "sdk/libultra/audio/cseq.c")], ["sdk/libultra/audio/cseq.c"])
+    assert judge(cfg)["sdk/libultra/audio/cseq.c"]["hard"] == []
+    stale = "sdk/libultra/audio/cspsetseq.CPP"
+    scan(monkeypatch, cfg, [(stale, "sdk/libultra/audio/cspsetseq.c")], ["sdk/libultra/audio/cspsetseq.c"])
+    (cfg.project.root / stale).unlink(missing_ok=True)
+    assert judge(cfg)["sdk/libultra/audio/cspsetseq.c"]["hard"] == []

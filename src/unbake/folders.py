@@ -45,6 +45,7 @@ import re
 import tomllib
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -877,6 +878,56 @@ def unit_identity(project: Project, unit: str) -> Any:
     )
 
 
+def _in_place(project: Project, units: Sequence[str], destination: str, tracked: set[str]) -> bool:
+    """Whether a module already is its file: its one unit sits at the destination, or none of its units is tracked any
+    more (a stale row) and the destination is a tracked file."""
+    if list(units) == [destination]:
+        return True
+    return (
+        destination in tracked
+        and (project.root / destination).is_file()
+        and not any(u in tracked or (project.root / u).exists() for u in units)
+    )
+
+
+def _carried(project: Project, units: Sequence[str], destination: str) -> dict[str, FileFacts]:
+    """The [file] rows after a merge: the destination takes the row of the first unit that has one of its own (flags
+    such as -mfp32 stay with the code) unless it has a row itself or the row above it gives the same; the units' rows go."""
+    files = dict(project.files)
+    donor = next((files[u] for u in units if u in files and u != destination), None)
+    for unit in units:
+        if unit != destination:
+            files.pop(unit, None)
+    if donor is not None and destination not in files:
+        files[destination] = donor
+        if destination in configuration.dead_paths(files, project.toolchain, project.libraries):
+            del files[destination]
+    return files
+
+
+def _carry_rows(text: str, project: Project, merges: Sequence[tuple[Sequence[str], str]]) -> str:
+    """config.toml after the merges: `_carried` written as [file] rows."""
+    document: Any = tomlkit.parse(text)
+    table = document.get("file")
+    if table is None:
+        return text
+    for units, destination in merges:
+        if len(units) == 1 and units[0] == destination:
+            continue
+        donor = next((u for u in units if u in table and u != destination), None)
+        if donor is not None and destination not in table and destination in _carried(project, units, destination):
+            body = tomlkit.table()
+            for key, value in table[donor].items():
+                body.add(key, getattr(value, "unwrap", lambda value=value: value)())
+            table.add(destination, body)
+        for unit in units:
+            if unit != destination and unit in table:
+                table.remove(unit)
+    if not len(table):
+        document.pop("file")
+    return tomlkit.dumps(document)
+
+
 def _refusals(
     project: Project, units: Sequence[str], destination: str, tracked: set[str], taken: set[str]
 ) -> tuple[list[str], list[str]]:
@@ -884,14 +935,16 @@ def _refusals(
     verdict: (units that are no tracked source file, the other reasons). `taken` holds the destinations of the modules
     judged before; the destination of this one joins it. mergecheck and merge both judge through this."""
     root = project.root
+    if _in_place(project, units, destination, tracked):
+        return [], []
     missing = [f"{u} is not a tracked source file" for u in units if u not in tracked or not (root / u).is_file()]
-    if missing or list(units) == [destination]:
+    if missing:
         return missing, []
     out: list[str] = []
     if destination in taken or ((destination in tracked or (root / destination).exists()) and destination not in units):
         out.append(f"destination {destination} is already owned")
     taken.add(destination)
-    identity = unit_identity(project, destination)
+    identity = unit_identity(replace(project, files=_carried(project, units, destination)), destination)
     if any(unit_identity(project, u) != identity for u in units):
         out.append("merge would change compiler, flags or omit")
     return [], out
@@ -915,7 +968,7 @@ def _verdicts(config: Config, params: Json) -> tuple[list[Row], list[tuple[str, 
         if verdict is None:
             verdict = by_module[module] = {"module": module, "units": len(units), "verdict": "merge", "hard": [], "soft": []}
             found.append(verdict)
-        reasons = _refusals(config.project, units, merging.merged_path(module, targets.get(module)), tracked, taken)
+        reasons = _refusals(config.project, units, merging.merged_path(module, targets.get(module), units), tracked, taken)
         verdict["hard"] = sorted({*verdict["hard"], *reasons[0], *reasons[1]})
         verdict["verdict"] = "separate" if verdict["hard"] else "merge"
     return found, rows, seqs
@@ -1236,12 +1289,12 @@ def merge(config: Config, params: Json) -> Row:
                 problems.append(f"{module} is not in the module map")
                 continue
             units = merging.code_order(grouped[module], seqs)
-            merged_path = merging.merged_path(module, targets.get(module))
+            merged_path = merging.merged_path(module, targets.get(module), units)
             missing, refused = _refusals(config.project, units, merged_path, tracked, destinations)
             if missing:
                 problems.extend(f"{module}: {reason}" for reason in missing)
                 continue
-            if units == [merged_path]:
+            if _in_place(config.project, units, merged_path, tracked):
                 unchanged.append(module)
                 continue
             verdict = by_module.get(module)
@@ -1313,6 +1366,12 @@ def merge(config: Config, params: Json) -> Row:
         for path, body in map_writes.items():
             store.write(root / path, body.encode())
         tracked = (tracked - set(mapping)) | destinations
+        settings = root / "config.toml"
+        if settings.is_file():
+            held = settings.read_text()
+            carried = _carry_rows(held, config.project, [(us, to) for _, us, to, _ in prepared])
+            if carried != held:
+                store.write(settings, carried.encode())
         project = configuration.load_project(root, lambda path: (root / path).read_bytes(), lambda: sorted(tracked))
         effort.forget("pin", "includes", "closure", "listing")
         loaded = Config(project, config.host, digest((project.digest, config.host.digest)))

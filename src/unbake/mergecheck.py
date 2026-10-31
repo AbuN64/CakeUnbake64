@@ -72,13 +72,18 @@ def read_targets(text: str) -> dict[str, str]:
     return found
 
 
-def merged_path(module: str, target: str | None = None) -> str:
+def merged_path(module: str, target: str | None = None, units: Sequence[str] = ()) -> str:
     """Where a module's merged file sits: the `target` the module map names, else in the folder named by the module,
-    under the module file name, the way every unit sits in the folder of its module."""
-    if target:
-        return target
-    path = PurePosixPath(module)
-    return (path.with_suffix("") / path.name).as_posix()
+    under the module file name, the way every unit sits in the folder of its module; a single unit already at its
+    module path stays there. The form follows the units' kind: a module of assembler units only gives an `.s` file."""
+    path = PurePosixPath(target or module)
+    if not target:
+        if list(units) == [module]:
+            return module
+        path = path.with_suffix("") / path.name
+    if units and path.suffix.lower() == ".c" and all(u.lower().endswith(".s") for u in units):
+        path = path.with_suffix(".s")
+    return path.as_posix()
 
 
 def merged_modules(text: str, mapping: Mapping[str, str]) -> str:
