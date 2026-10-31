@@ -38,7 +38,8 @@ PACKAGE = "unbake"
 GITEA = "http://10.10.10.130:18556/Projects/CakeUnbake64.git"
 GITHUB = "https://github.com/AbuN64/cake-unbake-64.git"
 SHA = re.compile(r"[0-9a-f]{40}")
-ALREADY_ACTIVE = re.compile(r"^\S+ is \S+: already active$", re.MULTILINE)
+# The job log may carry the line behind a `mo-butlermaster: ` prefix.
+ALREADY_ACTIVE = re.compile(r"\S+ is \S+: already active$", re.MULTILINE)
 
 # git(args) runs git here and returns (exit code, output); job(request) is `mo-butlermaster Job Invoke` and returns its
 # answer; read(path) reads a job's Log, which lives on this machine.

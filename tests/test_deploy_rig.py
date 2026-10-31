@@ -139,6 +139,19 @@ def test_an_already_active_build_skips_the_suite_and_the_readback_still_decides(
         rig.deploy()
 
 
+def test_the_butlermaster_prefixed_already_active_line_is_the_no_op():
+    """rig-20261031T193711Z: the whole log was this one line and the 1e6d9bc deploy refused it as a gate failure."""
+    rig = Rig(activation_log=f"mo-butlermaster: {TOOLKIT} is {BUILD}: already active\n")
+    assert any("no-op" in line for line in rig.deploy())
+    rig = Rig(
+        activation_log=f"mo-butlermaster: {TOOLKIT} is {BUILD}: already active\n",
+        readback_exit=1,
+        readback="readback: unbake is x\n",
+    )
+    with pytest.raises(deploy_rig.Refused, match="readback exit 1: readback: unbake is x"):
+        rig.deploy()
+
+
 def test_job_invoke_refusals_and_bad_answers_are_one_line():
     refusal = json.dumps({"Response": {"Error": {"Code": "Busy", "Message": "no", "NextStep": "wait"}}})
     with pytest.raises(deploy_rig.Refused, match=r"Job Invoke refused Busy .*: no; next: wait"):
