@@ -214,4 +214,6 @@ def test_an_include_after_a_define_keeps_its_place_so_the_macro_still_steers_it(
     # sdk/libgcc/_cmpdi2.CPP: `#define L_cmpdi2` before `#include "libgcc2.inc.c"` selects the one function the unit has
     unit = '#include "include_asm.h"\n\n#define L_cmpdi2\n#include "libgcc2.inc.c"\n'
     text = unitmerge.merge([("sdk/libgcc/_cmpdi2.CPP", unit)], lambda *_: False)["text"]
-    assert text.index('#include "include_asm.h"') < text.index("#define L_cmpdi2") < text.index('#include "libgcc2.inc.c"')
+    assert (
+        text.index('#include "include_asm.h"') < text.index("#define L_cmpdi2") < text.index('#include "libgcc2.inc.c"')
+    )
