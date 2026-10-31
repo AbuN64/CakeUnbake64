@@ -92,14 +92,17 @@ def test_main_moved_on_deploys_the_head_and_defers_the_older_deploy():
     assert rig.requests[0]["Worktree"].endswith(f"@{NEWER}")
 
 
-def test_both_mains_are_fetched_by_url_never_by_a_remote_name_the_checkout_lacks():
-    """8b74bbd: `git fetch gitea main` refused in the checkout the deploy runs in, which has no remote of that name."""
+def test_gitea_main_is_fetched_by_url_never_by_a_remote_name_the_checkout_lacks():
+    """8b74bbd: `git fetch gitea main` refused in the checkout the deploy runs in, which has no remote of that name.
+    Gitea main is the only main consulted: no github fetch, no github check (DEPLOY-GITEA-ONLY)."""
     rig = Rig()
     rig.deploy()
     fetches = [args for args in rig.commands if args[:1] == ("fetch",)]
-    assert [args[-2] for args in fetches] == [deploy_rig.GITEA, deploy_rig.GITHUB]
+    assert [args[-2] for args in fetches] == [deploy_rig.GITEA]
     assert all(args[-1] == "main" for args in fetches)
     assert not any("gitea/main" in args for args in rig.commands)
+    assert not any("github" in str(args) for args in rig.commands)
+    assert not hasattr(deploy_rig, "GITHUB")
 
 
 def test_an_unreachable_gitea_refuses_naming_the_url_before_any_job():

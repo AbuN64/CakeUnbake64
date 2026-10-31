@@ -9,7 +9,7 @@ other repository: the toolkit's installed `decomp tools deploy` installs the pac
 other installed package over as it is. Any refusal or failed step prints one line on stderr and exits 1. Every rig step
 is one `mo-butlermaster Job Invoke` at the exact SHA in a Worktree (JOBS is Dos's width):
 
-  1. the SHA must be on gitea main and on github main; when gitea main has moved past it to a descendant, main's head
+  1. the SHA must be on gitea main; when gitea main has moved past it to a descendant, main's head
      is deployed instead and the log says the older deploy deferred;
   2. the name job: the toolkit's own `decomp tools name` (AbuDecomp64's engine owns the rule; this repository holds no
      copy) answers the build's NAME, a digest of every package commit the new toolkit holds (the live toolkit's, with
@@ -40,7 +40,6 @@ HOST = "rig"
 TOOLKIT = "/home/abu/venv-decomp"
 PACKAGE = "unbake"
 GITEA = "http://10.10.10.130:18556/Projects/CakeUnbake64.git"
-GITHUB = "https://github.com/AbuN64/cake-unbake-64.git"
 SHA = re.compile(r"[0-9a-f]{40}")
 NAME_RE = re.compile(r"[0-9a-f]{12}")
 # The job log may carry the line behind a `mo-butlermaster: ` prefix.
@@ -176,21 +175,15 @@ def landed_sha(environ: dict[str, str]) -> str:
 
 def newest_main(sha: str, git: Seam) -> str:
     """The SHA to deploy: gitea main's head when it descends from sha (sha itself when it is the head), else Refused.
-    The head must also be on github main. The checkout the deploy runs in has no `gitea` remote, so both mains are
-    fetched by URL (as AbuDecomp64's and CakeTaste64's deploys do); FETCH_HEAD is each main in turn."""
+    The checkout the deploy runs in has no `gitea` remote, so gitea main is fetched by URL (as AbuDecomp64's and
+    CakeTaste64's deploys do); FETCH_HEAD is that main."""
     code, out = git("fetch", "-q", "--no-tags", GITEA, "main")
     if code:
         raise Refused(f"cannot fetch gitea main ({GITEA}): {last_line(out, code)}")
     if git("merge-base", "--is-ancestor", sha, "FETCH_HEAD")[0]:
         raise Refused(f"{sha[:12]} is not on gitea main")
     code, out = git("rev-parse", "FETCH_HEAD")
-    head = out if code == 0 and SHA.fullmatch(out) else sha
-    code, out = git("fetch", "-q", "--no-tags", GITHUB, "main")
-    if code:
-        raise Refused(f"cannot fetch github main ({GITHUB}): {last_line(out, code)}")
-    if git("merge-base", "--is-ancestor", head, "FETCH_HEAD")[0]:
-        raise Refused(f"{head[:12]} is not on github main")
-    return head
+    return out if code == 0 and SHA.fullmatch(out) else sha
 
 
 def have_commit(sha: str, git: Seam) -> None:
