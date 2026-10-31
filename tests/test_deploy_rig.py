@@ -16,7 +16,8 @@ spec.loader.exec_module(deploy_rig)
 SHA = "a" * 12 + "b" * 28
 NEWER = "d" * 12 + "e" * 28
 TOOLKIT = deploy_rig.TOOLKIT
-BUILD = f"{TOOLKIT}.{SHA[:12]}"
+NAME = "0123456789ab"  # the engine's digest of the whole content; never the SHA
+BUILD = f"{TOOLKIT}.{NAME}"
 CHECKOUT = "/srv/runs/board1.card1/Projects/AbuN64/CakeUnbake64"
 
 
@@ -34,9 +35,15 @@ class Rig:
         }
         self.exits = [activation_exit, readback_exit]
         self.on_gitea = on_gitea
+        self.names = []  # the name jobs, answered before the numbered ones
+        self.name_log = json.dumps({"ok": True, "result": {"name": NAME}}) + "\n"
+        self.name_exit = 0
         self.fetched = None  # what FETCH_HEAD holds: the URL of the last fetch
 
     def job(self, body):
+        if body["Argv"][2] == deploy_rig.NAME:
+            self.names.append(body)
+            return deploy_rig.Answer(Exit=self.name_exit, Log="/log/name")
         self.requests.append(body)
         index = len(self.requests)
         return deploy_rig.Answer(Exit=self.exits[index - 1], Log=f"/log/{index}")
@@ -54,7 +61,7 @@ class Rig:
         return 0, ""
 
     def read(self, path):
-        return self.logs[path]
+        return self.name_log if path == "/log/name" else self.logs[path]
 
     def deploy(self, sha=SHA):
         return deploy_rig.deploy(sha, "board1", "card1", TOOLKIT, self.job, self.git, self.read)
@@ -66,8 +73,8 @@ def test_the_activation_deploys_package_unbake_at_the_landed_sha_then_reads_it_b
     activation, readback = rig.requests
     assert activation["Worktree"] == f"Projects/AbuN64/CakeUnbake64@{SHA}"
     assert activation["Host"] == "rig"
-    assert activation["Activation"] == {"Toolkit": TOOLKIT, "Revision": SHA[:12]}
-    assert activation["Argv"][-2:] == [SHA, TOOLKIT]
+    assert activation["Activation"] == {"Toolkit": TOOLKIT, "Revision": NAME}
+    assert activation["Argv"][-3:] == [SHA, TOOLKIT, NAME]
     assert "tools deploy --package unbake --sha" in activation["Argv"][2]
     assert "pytest" in activation["Argv"][2]
     assert readback["Argv"][-3:] == [SHA, TOOLKIT, BUILD]
@@ -199,16 +206,16 @@ def test_the_build_script_links_build_to_the_stage_venv_and_never_touches_the_li
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
         live, toolkit, stage = root / "live-target", root / "venv-decomp", root / "venv-decomp-stage"
-        build = root / f"venv-decomp.{SHA[:12]}"
+        build = root / f"venv-decomp.{NAME}"
         wrapper(
             live / "bin/decomp",
             'test "$1 $2 $3 $4 $5 $6" = "tools deploy --package unbake --sha ' + SHA + '" || exit 7\n'
-            f'dir="$8.{SHA[:12]}"; mkdir -p "$dir/bin" && ln -sfn "$dir" "$8"',
+            f'dir="$8.{NAME}"; mkdir -p "$dir/bin" && ln -sfn "$dir" "$8"',
         )
         toolkit.symlink_to(live)
-        done = bash(deploy_rig.BUILD, SHA, str(toolkit), env={"BUILD": str(build), "HOME": str(root)})
+        done = bash(deploy_rig.BUILD, SHA, str(toolkit), NAME, env={"BUILD": str(build), "HOME": str(root)})
         assert done.returncode == 0, done.stdout + done.stderr
-        built = root / f"venv-decomp-stage.{SHA[:12]}"
+        built = root / f"venv-decomp-stage.{NAME}"
         assert build.resolve() == built.resolve() == stage.resolve()
         assert toolkit.resolve() == live.resolve()  # only Job Invoke's switch makes a build live
 
@@ -219,8 +226,8 @@ def test_a_failing_engine_exits_one_and_links_nothing():
         live, toolkit = root / "live-target", root / "venv-decomp"
         wrapper(live / "bin/decomp", "echo engine said no >&2; exit 3")
         toolkit.symlink_to(live)
-        build = root / f"venv-decomp.{SHA[:12]}"
-        done = bash(deploy_rig.BUILD, SHA, str(toolkit), env={"BUILD": str(build), "HOME": str(root)})
+        build = root / f"venv-decomp.{NAME}"
+        done = bash(deploy_rig.BUILD, SHA, str(toolkit), NAME, env={"BUILD": str(build), "HOME": str(root)})
         assert done.returncode == 1
         assert "deploy-error: decomp tools deploy exit 3" in done.stderr
         assert not build.is_symlink()
@@ -236,3 +243,37 @@ def test_the_readback_script_checks_the_link_then_the_installed_commit():
         live.mkdir()
         done = bash(deploy_rig.READBACK, SHA, str(toolkit), str(other))
         assert done.returncode == 1 and "not" in done.stderr
+
+
+def test_the_name_script_runs_the_toolkits_engine_over_the_live_link_and_a_failure_exits_one():
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        live, toolkit = root / "live-target", root / "venv-decomp"
+        wrapper(
+            live / "bin/decomp",
+            f'test "$*" = "tools name --package unbake --sha {SHA} --carry-from {toolkit}" || exit 7\n'
+            f"echo '{json.dumps({'result': {'name': NAME}})}'",
+        )
+        toolkit.symlink_to(live)
+        done = bash(deploy_rig.NAME, SHA, str(toolkit), env={"HOME": str(root)})
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert deploy_rig.build_name(done.stdout) == NAME
+        wrapper(live / "bin/decomp", "exit 2")
+        failed = bash(deploy_rig.NAME, SHA, str(toolkit), env={"HOME": str(root)})
+        assert failed.returncode == 1
+        assert "deploy AbuDecomp64 first" in failed.stderr
+
+
+def test_the_build_name_is_the_envelopes_12_hex_name_and_anything_else_is_refused():
+    assert deploy_rig.build_name('noise\n{"result": {"name": "abcdef012345"}}\n') == "abcdef012345"
+    for bad in ("", "no json", '{"result": {}}', '{"result": {"name": "../x"}}'):
+        with pytest.raises(deploy_rig.Refused, match="no build name"):
+            deploy_rig.build_name(bad)
+
+
+def test_a_failed_name_job_refuses_before_the_activation():
+    rig = Rig()
+    rig.name_exit = 1
+    with pytest.raises(deploy_rig.Refused, match="name exit 1"):
+        rig.deploy()
+    assert rig.requests == []

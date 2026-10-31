@@ -11,13 +11,17 @@ is one `mo-butlermaster Job Invoke` at the exact SHA in a Worktree (JOBS is Dos'
 
   1. the SHA must be on gitea main and on github main; when gitea main has moved past it to a descendant, main's head
      is deployed instead and the log says the older deploy deferred;
-  2. the activation job (Toolkit = the live link, Revision = the SHA's first 12 digits, so BUILD is <toolkit>.<sha12>):
+  2. the name job: the toolkit's own `decomp tools name` (AbuDecomp64's engine owns the rule; this repository holds no
+     copy) answers the build's NAME, a digest of every package commit the new toolkit holds (the live toolkit's, with
+     unbake at SHA), never the SHA alone: a toolkit build holds several packages, and another repository's deploy must
+     not collide with this one's name. A live toolkit whose decomp lacks `tools name` refuses: deploy AbuDecomp64 first;
+  3. the activation job (Toolkit = the live link, Revision = NAME, so BUILD is <toolkit>.<NAME>):
      `decomp tools deploy --package unbake --sha SHA` builds a fresh venv through a private `<toolkit>-stage` link,
      BUILD is linked to it, and the full test suite runs in the Worktree with BUILD's python and the Worktree's src
      first on the import path. A failing suite exits non-zero: Job Invoke leaves the live link alone. On exit 0 Job
      Invoke switches the live link to BUILD. When the live link already names BUILD, Job Invoke answers Exit 0 with
      `<link> is <target>: already active` and runs nothing: the readback still decides;
-  3. the readback job: the live link resolves to BUILD and the installed commit of unbake equals SHA. A mismatch
+  4. the readback job: the live link resolves to BUILD and the installed commit of unbake equals SHA. A mismatch
      refuses (fix forward, no rollback).
 The deploy's answer is the deployed SHA with each job's Exit and Log."""
 
@@ -38,6 +42,7 @@ PACKAGE = "unbake"
 GITEA = "http://10.10.10.130:18556/Projects/CakeUnbake64.git"
 GITHUB = "https://github.com/AbuN64/cake-unbake-64.git"
 SHA = re.compile(r"[0-9a-f]{40}")
+NAME_RE = re.compile(r"[0-9a-f]{12}")
 # The job log may carry the line behind a `mo-butlermaster: ` prefix.
 ALREADY_ACTIVE = re.compile(r"\S+ is \S+: already active$", re.MULTILINE)
 
@@ -47,12 +52,20 @@ Seam = Callable[..., "tuple[int, str]"]
 Job = Callable[[dict], "Answer"]
 Read = Callable[[str], str]
 
-# BUILD runs inside the activation job with BUILD (<toolkit>.<sha12>) set by Job Invoke. The stage link starts at the
-# live toolkit, so the packages `decomp tools deploy` carries over are the live ones; it builds
-# `<toolkit>-stage.<sha12>` (or -N when that name is taken) and swaps only the stage link. BUILD becomes a link to that
-# venv: Job Invoke's switch is the only way a venv goes live. Arguments: SHA TOOLKIT.
-BUILD = r"""set -u
+# NAME runs in the Worktree before the activation and answers the build's name: the engine's JSON envelope on stdout,
+# whose result.name is the digest of the whole content. Arguments: SHA TOOLKIT.
+NAME = r"""set -u
 sha=$1 toolkit=$2
+(cd "$HOME" && "$toolkit/bin/decomp" tools name --package unbake --sha "$sha" --carry-from "$toolkit") \
+  || { echo "name-error: decomp tools name exit $? (the live toolkit's decomp must have it: deploy AbuDecomp64 first)" >&2; exit 1; }
+"""
+
+# BUILD runs inside the activation job with BUILD (<toolkit>.<name>) set by Job Invoke. The stage link starts at the
+# live toolkit, so the packages `decomp tools deploy` carries over are the live ones; it builds
+# `<toolkit>-stage.<name>` (or -N when that name is taken) and swaps only the stage link. BUILD becomes a link to that
+# venv: Job Invoke's switch is the only way a venv goes live. Arguments: SHA TOOLKIT NAME.
+BUILD = r"""set -u
+sha=$1 toolkit=$2 name=$3
 : "${BUILD:?Job Invoke sets BUILD for an activation}"
 stage=$toolkit-stage
 ln -sfn "$(readlink -f "$toolkit")" "$stage" || exit 1
@@ -60,8 +73,8 @@ ln -sfn "$(readlink -f "$toolkit")" "$stage" || exit 1
   || { echo "deploy-error: decomp tools deploy exit $?" >&2; exit 1; }
 built=$(readlink -f "$stage")
 case $built in
-  "$stage.${sha:0:12}" | "$stage.${sha:0:12}"-[0-9]*) ;;
-  *) echo "deploy-error: $stage reads $built, not a build of $sha" >&2; exit 1 ;;
+  "$stage.$name" | "$stage.$name"-[0-9]*) ;;
+  *) echo "deploy-error: $stage reads $built, not the build $name of $sha" >&2; exit 1 ;;
 esac
 ln -sfn "$built" "$BUILD" || exit 1
 echo "deploy-build: $built"
@@ -190,6 +203,18 @@ def request(board: str, card: str, sha: str, argv: list[str], activation: dict[s
     return {**body, "Activation": activation} if activation else body
 
 
+def build_name(text: str) -> str:
+    """The name the engine answered: result.name of the JSON envelope on the name job's log."""
+    for line in reversed(text.splitlines()):
+        try:
+            name = json.loads(line)["result"]["name"]
+        except (ValueError, KeyError, TypeError):
+            continue
+        if isinstance(name, str) and NAME_RE.fullmatch(name):
+            return name
+    raise Refused(f"the name job answered no build name: {last_line(text, 'no output')}")
+
+
 def suite_facts(text: str) -> dict[str, str]:
     facts = {}
     for line in text.splitlines():
@@ -220,9 +245,14 @@ def deploy(sha: str, board: str, card: str, toolkit: str, job: Job, git: Seam, r
         lines.append(f"{sha[:12]}: main has moved to {head[:12]}, deploying main's head; the older deploy deferred")
         sha = head
     have_commit(sha, git)
-    revision = sha[:12]
+    named = job(request(board, card, sha, ["bash", "-c", NAME, "name", sha, toolkit]))
+    text = read(named["Log"])
+    lines.append(f"{sha[:12]}: name job Exit {named['Exit']}, Log {named['Log']}")
+    if named["Exit"]:
+        raise Refused(f"name exit {named['Exit']}: {last_line(text, 'no output')} ({named['Log']})")
+    revision = build_name(text)
     build = f"{toolkit}.{revision}"
-    argv = ["bash", "-c", BUILD + SUITE, "deploy", sha, toolkit]
+    argv = ["bash", "-c", BUILD + SUITE, "deploy", sha, toolkit, revision]
     activation = job(request(board, card, sha, argv, {"Toolkit": toolkit, "Revision": revision}))
     log = activation["Log"]
     lines.append(f"{revision}: activation job Exit {activation['Exit']}, Log {log}")
