@@ -874,10 +874,11 @@ def _identity(files: Mapping[str, FileFacts], toolchain: str, unit: str) -> Any:
 
 
 def unit_identity(project: Project, unit: str) -> Any:
-    """What a unit and the merged file that takes its place must share: the toolchain and the flags that build it. Library
-    ownership is not part of it: the original object was one library object, so a merged file belongs to the library of
-    its destination (a data unit merged into a library module becomes that library's; a unit of a library folder merged
-    into a target outside every library folder leaves it). An assembler source matches only an assembler source."""
+    """What a unit and the merged file that takes its place must share: the toolchain and the flags that build it.
+    Library ownership is not part of it: the original object was one library object, so a merged file belongs to the
+    library of its destination (a data unit merged into a library module becomes that library's; a unit of a library
+    folder merged into a target outside every library folder leaves it). An assembler source matches only an assembler
+    source."""
     return _identity(project.files, project.toolchain, unit)
 
 
@@ -895,7 +896,8 @@ def _in_place(project: Project, units: Sequence[str], destination: str, tracked:
 
 def _carried(project: Project, units: Sequence[str], destination: str) -> dict[str, FileFacts]:
     """The [file] rows after a merge: the destination takes the row of the first unit that has one of its own (flags
-    such as -mfp32 stay with the code) unless it has a row itself or the row above it gives the same; the units' rows go."""
+    such as -mfp32 stay with the code) unless it has a row itself or the row above it gives the same; the units' rows
+    go."""
     files = dict(project.files)
     donor = next((files[u] for u in units if u in files and u != destination), None)
     for unit in units:
@@ -969,9 +971,17 @@ def _verdicts(config: Config, params: Json) -> tuple[list[Row], list[tuple[str, 
     for module, units in grouped.items():
         verdict = by_module.get(module)
         if verdict is None:
-            verdict = by_module[module] = {"module": module, "units": len(units), "verdict": "merge", "hard": [], "soft": []}
+            verdict = by_module[module] = {
+                "module": module,
+                "units": len(units),
+                "verdict": "merge",
+                "hard": [],
+                "soft": [],
+            }
             found.append(verdict)
-        reasons = _refusals(config.project, units, merging.merged_path(module, targets.get(module), units), tracked, taken)
+        reasons = _refusals(
+            config.project, units, merging.merged_path(module, targets.get(module), units), tracked, taken
+        )
         verdict["hard"] = sorted({*verdict["hard"], *reasons[0], *reasons[1]})
         verdict["verdict"] = "separate" if verdict["hard"] else "merge"
     return found, rows, seqs
@@ -1304,7 +1314,9 @@ def merge(config: Config, params: Json) -> Row:
             if verdict is None and len(units) > 1:
                 problems.append(f"{module} has no merge verdict")
                 continue
-            problems.extend(f"{module}: {reason}" for reason in dict.fromkeys([*refused, *(verdict or {"hard": []})["hard"]]))
+            problems.extend(
+                f"{module}: {reason}" for reason in dict.fromkeys([*refused, *(verdict or {"hard": []})["hard"]])
+            )
             texts = {u: (root / u).read_text() for u in units}
             texts.update(includes(texts, tracked, {u: merged_path for u in units}))
 

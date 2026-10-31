@@ -23,7 +23,11 @@ MATH_UNIT, MATH_TARGET = "sdk/MATH/aigetlen.CPP", "sdk/MATH2.c"
 
 
 def project_of(cfg: Config, **changes) -> Config:
-    project = replace(cfg.project, **changes) if is_dataclass(cfg.project) else SimpleNamespace(**{**vars(cfg.project), **changes})
+    project = (
+        replace(cfg.project, **changes)
+        if is_dataclass(cfg.project)
+        else SimpleNamespace(**{**vars(cfg.project), **changes})
+    )
     return replace(cfg, project=project)
 
 
@@ -43,9 +47,7 @@ def scan(monkeypatch, cfg: Config, rows: list[tuple[str, str]], tracked: list[st
         (root / path).parent.mkdir(parents=True, exist_ok=True)
         (root / path).write_text("int f(void) { return 1; }\n")
     monkeypatch.setattr(folders, "_tracked", Mock(return_value=tracked))
-    monkeypatch.setattr(
-        folders, "_module_facts", Mock(return_value=(rows, seq_of([u for u, _ in rows]), {}))
-    )
+    monkeypatch.setattr(folders, "_module_facts", Mock(return_value=(rows, seq_of([u for u, _ in rows]), {})))
     (root / "modules.tsv").write_text("unit\tmodule\ttarget\n" + "".join(f"{u}\t{m}\t{targets}\n" for u, m in rows))
 
 
