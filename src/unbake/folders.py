@@ -1314,9 +1314,7 @@ def merge(config: Config, params: Json) -> Row:
             if verdict is None and len(units) > 1:
                 problems.append(f"{module} has no merge verdict")
                 continue
-            problems.extend(
-                f"{module}: {reason}" for reason in dict.fromkeys([*refused, *(verdict or {"hard": []})["hard"]])
-            )
+            problems.extend(f"{module}: {reason}" for reason in (verdict["hard"] if verdict else refused))
             texts = {u: (root / u).read_text() for u in units}
             texts.update(includes(texts, tracked, {u: merged_path for u in units}))
 

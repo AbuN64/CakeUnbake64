@@ -91,7 +91,7 @@ def test_mergecheck_reports_what_merge_refuses_beyond_the_link_findings(cfg, mon
 def test_a_file_moved_one_folder_deeper_keeps_its_relative_includes(cfg, monkeypatch) -> None:
     path, scan_, *_ = prepared(cfg, monkeypatch, 1)
     root = cfg.project.root
-    (root / "include").mkdir()
+    (root / "include").mkdir(exist_ok=True)
     (root / "include/libgultra.h").write_text("extern int g;\n")
     unit = "src/sdk/audio/alsynset.c"
     (root / unit).parent.mkdir(parents=True)
