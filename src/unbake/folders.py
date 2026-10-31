@@ -61,7 +61,7 @@ from unbake import pads as padding
 from unbake import split as splitting
 from unbake import tree as parsing
 from unbake import versions as rommap
-from unbake.contracts import Config, FileFacts, Finding, Json, Refusal, digest, file_facts, macro
+from unbake.contracts import Config, FileFacts, Finding, Json, Project, Refusal, digest, file_facts, macro
 
 Row = dict[str, Any]
 STATE = Path(".unbake") / "layout"
@@ -860,14 +860,45 @@ def _module_facts(config: Config, params: Json) -> Facts:
     return rows, seqs, statics
 
 
+def unit_identity(project: Project, unit: str) -> Any:
+    """What a unit and the merged file that takes its place must share: the toolchain and the flags that build it. Library
+    ownership is not part of it: the original object was one library object, so a merged file belongs to the library of
+    its destination (a data unit merged into a library module becomes that library's; a unit of a library folder merged
+    into a target outside every library folder leaves it). An assembler source matches only an assembler source."""
+    if unit.lower().endswith(".s"):
+        return ("assembler",)
+    facts = file_facts(project, unit)
+    return (
+        facts.toolchain or project.toolchain,
+        tuple(sorted(facts.cflags)),
+        tuple(sorted(facts.omit)),
+        facts.hilo_nops,
+        facts.unrelocated,
+    )
+
+
+def _refusals(
+    project: Project, units: Sequence[str], destination: str, tracked: set[str], taken: set[str]
+) -> tuple[list[str], list[str]]:
+    """The hard reasons one module of a map cannot become the file `destination`, besides the link findings of its
+    verdict: (units that are no tracked source file, the other reasons). `taken` holds the destinations of the modules
+    judged before; the destination of this one joins it. mergecheck and merge both judge through this."""
+    root = project.root
+    missing = [f"{u} is not a tracked source file" for u in units if u not in tracked or not (root / u).is_file()]
+    if missing or list(units) == [destination]:
+        return missing, []
+    out: list[str] = []
+    if destination in taken or ((destination in tracked or (root / destination).exists()) and destination not in units):
+        out.append(f"destination {destination} is already owned")
+    taken.add(destination)
+    identity = unit_identity(project, destination)
+    if any(unit_identity(project, u) != identity for u in units):
+        out.append("merge would change compiler, flags or omit")
+    return [], out
+
+
 def _verdicts(config: Config, params: Json) -> tuple[list[Row], list[tuple[str, str]], dict[str, list[Row]]]:
     rows, seqs, statics = _module_facts(config, params)
-
-    def identity(unit: str) -> Any:
-        if unit.lower().endswith(".s"):
-            return "assembler"
-        row = file_facts(config.project, unit)
-        return (row.toolchain or config.project.toolchain, tuple(sorted(row.cflags)), tuple(sorted(row.omit)))
 
     # The map selects membership; the merge emits units in code link order. Audit that same order,
     # including every version's data/rodata order, rather than treating TSV row order as source order.
@@ -875,7 +906,19 @@ def _verdicts(config: Config, params: Json) -> tuple[list[Row], list[tuple[str, 
     for unit, module in rows:
         grouped[module].append(unit)
     ordered = [(unit, module) for module, units in grouped.items() for unit in merging.code_order(units, seqs)]
-    return merging.verdicts(ordered, seqs, statics, identity), rows, seqs
+    found = merging.verdicts(ordered, seqs, statics, lambda unit: unit_identity(config.project, unit))
+    by_module = {v["module"]: v for v in found}
+    targets = merging.read_targets(Path(str(params["modules"])).read_text())
+    tracked, taken = set(_tracked(config)), set()
+    for module, units in grouped.items():
+        verdict = by_module.get(module)
+        if verdict is None:
+            verdict = by_module[module] = {"module": module, "units": len(units), "verdict": "merge", "hard": [], "soft": []}
+            found.append(verdict)
+        reasons = _refusals(config.project, units, merging.merged_path(module, targets.get(module)), tracked, taken)
+        verdict["hard"] = sorted({*verdict["hard"], *reasons[0], *reasons[1]})
+        verdict["verdict"] = "separate" if verdict["hard"] else "merge"
+    return found, rows, seqs
 
 
 def header(config: Config, params: Json) -> Row:
@@ -1188,44 +1231,26 @@ def merge(config: Config, params: Json) -> Row:
             ]
             return any(s is not None for s in seen) and all(s is not False for s in seen)
 
-        def identity(unit: str) -> Any:
-            facts = file_facts(config.project, unit)
-            libraries = tuple(p for p in config.project.libraries if unit == p or unit.startswith(p.rstrip("/") + "/"))
-            return (
-                facts.toolchain or config.project.toolchain,
-                facts.cflags,
-                facts.omit,
-                facts.hilo_nops,
-                facts.unrelocated,
-                libraries,
-            )
-
         for module in selected:
             if module not in grouped:
                 problems.append(f"{module} is not in the module map")
                 continue
             units = merging.code_order(grouped[module], seqs)
             merged_path = merging.merged_path(module, targets.get(module))
-            missing = [u for u in units if u not in tracked or not (root / u).is_file()]
+            missing, refused = _refusals(config.project, units, merged_path, tracked, destinations)
             if missing:
-                problems.extend(f"{module}: {u} is not a tracked source file" for u in missing)
+                problems.extend(f"{module}: {reason}" for reason in missing)
                 continue
             if units == [merged_path]:
                 unchanged.append(module)
                 continue
-            if merged_path in destinations or (
-                (merged_path in tracked or (root / merged_path).exists()) and merged_path not in units
-            ):
-                problems.append(f"{module}: destination {merged_path} is already owned")
-            destinations.add(merged_path)
-            destination_identity = identity(merged_path)
-            if any(identity(u) != destination_identity for u in units):
-                problems.append(f"{module}: merge would change compiler, flags, omit or library ownership")
             verdict = by_module.get(module)
             if verdict is None and len(units) > 1:
                 problems.append(f"{module} has no merge verdict")
                 continue
-            problems.extend(f"{module}: {reason}" for reason in (verdict or {"hard": []})["hard"])
+            problems.extend(f"{module}: {reason}" for reason in dict.fromkeys([*refused, *(verdict or {"hard": []})["hard"]]))
+            texts = {u: (root / u).read_text() for u in units}
+            texts.update(includes(texts, tracked, {u: merged_path for u in units}))
 
             def header(
                 name: str,
@@ -1246,7 +1271,7 @@ def merge(config: Config, params: Json) -> Row:
                 for u in units
             }
             merged = unitmerge.merge(
-                [(u, (root / u).read_text()) for u in units],
+                [(u, texts[u]) for u in units],
                 droppable,
                 header,
                 merging.class_orders(units, seqs),
@@ -1361,7 +1386,9 @@ def split(config: Config, params: Json) -> Row:
             raise _refuse(f"split: {unit} belongs to {len(done['pieces'])} target; use layout reorg for a file move")
         paths = _piece_paths(unit, list(done["pieces"]), tracked)
         for target, path in paths.items():
-            store.write(root / path, done["pieces"][target].encode())
+            piece = done["pieces"][target]
+            piece = includes({unit: piece}, tracked, {unit: path}).get(unit, piece)
+            store.write(root / path, piece.encode())
         if unit not in paths.values():
             (root / unit).unlink()
         _git(config, "add", "-A", "--", unit, *paths.values())

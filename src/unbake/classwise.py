@@ -7,9 +7,10 @@ of B and the data of B before the data of A. `arrange` cuts every unit body into
 whole outermost `#if` block it sits in), tells each chunk's class from the symbols the built object of its unit
 defines, and emits the chunks without storage (typedefs, prototypes, externs) first, then the storage chunks in an
 order that keeps every class in its own unit order and defines a data name before a chunk uses it. A function used
-before its definition gets a prototype. A class is linked in one base order (the versions' orders merged); a unit that
-a version links elsewhere is emitted a second time, under the guard of the versions that move it, at the place those
-versions link it, and the original sits under the negated guard. What cannot be ordered is reported, never guessed."""
+before its definition gets a prototype and a data name an extern declaration. A class is linked in one
+base order (the versions' orders merged); a unit that a version links elsewhere is emitted a second time,
+under the guard of the versions that move it, at the place those versions link it, and the original sits
+under the negated guard. What cannot be ordered is reported, never guessed."""
 
 from __future__ import annotations
 
@@ -37,6 +38,7 @@ class Chunk:
     heads: dict[str, str] = field(default_factory=dict)  # function name -> its prototype text
     when: str = ""  # a copy for the versions that move its unit: the condition it is emitted under
     unless: str = ""  # the original of a moved unit: the condition it is left out under
+    externs: dict[str, str] = field(default_factory=dict)  # data name -> its extern declaration
 
     @property
     def cls(self) -> str:
@@ -88,7 +90,7 @@ def chunks(unit: str, body: str, masked: str, decls: Sequence[Any], classes: Map
         index += len(members)
         chunk = Chunk(unit, len(out), body[position:end], masked[position:end])
         for d in members:
-            _classify(chunk, d, masked, classes)
+            _classify(chunk, d, body, masked, classes)
         out.append(chunk)
         position = end
     if body[position:].strip() and out:
@@ -97,7 +99,7 @@ def chunks(unit: str, body: str, masked: str, decls: Sequence[Any], classes: Map
     return out
 
 
-def _classify(chunk: Chunk, decl: Any, masked: str, classes: Mapping[str, str]) -> None:
+def _classify(chunk: Chunk, decl: Any, body: str, masked: str, classes: Mapping[str, str]) -> None:
     statement = masked[decl.start : decl.end]
     if decl.kind == "def":
         chunk.classes.append("text")
@@ -106,6 +108,8 @@ def _classify(chunk: Chunk, decl: Any, masked: str, classes: Mapping[str, str]) 
     elif decl.kind == "var":
         chunk.classes.append(classes.get(decl.name) or _fallback(decl, masked))
         chunk.defines.append(decl.name)
+        if not (decl.static or decl.joint or decl.guard):
+            chunk.externs[decl.name] = _extern(body[decl.start : decl.end], statement)
     elif decl.kind == "proto" and (call := _WORD.match(statement.lstrip())) and call.group(0) == decl.name:
         # a macro call that places a symbol (an included data or code block): the symbols named in its arguments
         for word in _WORD.findall(statement[statement.find("(") :]):
@@ -170,6 +174,12 @@ def _condition(versions: Iterable[str], guards: Mapping[str, str]) -> str:
     return " || ".join(f"defined({guards[v]})" for v in sorted(versions))
 
 
+def _extern(text: str, masked: str) -> str:
+    """The `extern` declaration of the data defined by a statement: its text up to the initialiser."""
+    cut = masked.find("=")
+    return "extern " + (text[:cut] if cut >= 0 else text).strip().rstrip(";").rstrip() + ";"
+
+
 def arrange(
     parts: Sequence[tuple[str, str, str, Sequence[Any]]],
     orders: Mapping[str, Mapping[str, Sequence[str]]],
@@ -213,11 +223,14 @@ def arrange(
         chain[chunk.cls].append(chunk)
     ordered, forward = _sequence(chain, storage)
     functions = {n: c.heads[n] for c in storage for n in c.heads}
+    externs = {n: c.externs[n] for c in storage for n in c.externs}
     protos: list[str] = []
     for chunk, names in forward:
         for name in names:
             if name in functions:
                 protos.append(functions[name])
+            elif name in externs:
+                protos.append(externs[name])
             else:
                 conflicts.append(
                     {"kind": "forward", "name": name, "detail": f"{chunk.unit}: uses {name} before its definition"}
@@ -247,20 +260,28 @@ def _sequence(
     the default order (the order of the text chain, then the rest) and whose data names are all defined; when none
     is ready, the first head goes anyway and its early uses are returned."""
     home = {c: i for i, c in enumerate(c for cls in ("text", *CLASSES) for c in chain.get(cls, ()))}
-    owner = {n: c for c in storage if not c.when for n in c.defines if n not in c.heads}
+    owner: dict[str, list[Chunk]] = defaultdict(list)
+    for c in storage:
+        if c.when:
+            continue
+        for n in c.defines:
+            if n not in c.heads and c not in owner[n]:
+                owner[n].append(c)
     heads = {cls: list(chunks) for cls, chunks in chain.items()}
     done: set[int] = set()
     out: list[Chunk] = []
     forward: list[tuple[Chunk, list[str]]] = []
+    # definitions of one name under mutually exclusive `#if` blocks are one definition: a chunk that defines the name
+    # itself uses none of them, any other chunk uses all of them
     uses = {
-        c: {w for w in _WORD.findall(c.masked) if w in owner and owner[w] is not c and w not in c.defines}
+        c: {w for w in _WORD.findall(c.masked) if w in owner and c not in owner[w] and w not in c.defines}
         for c in storage
     }
     while any(heads.values()):
-        ready = [h[0] for h in heads.values() if h and all(id(owner[w]) in done for w in uses[h[0]])]
+        ready = [h[0] for h in heads.values() if h and all(id(o) in done for w in uses[h[0]] for o in owner[w])]
         pick = min(ready or [h[0] for h in heads.values() if h], key=lambda c: home[c])
         if pick not in ready:
-            forward.append((pick, sorted(w for w in uses[pick] if id(owner[w]) not in done)))
+            forward.append((pick, sorted(w for w in uses[pick] if any(id(o) not in done for o in owner[w]))))
         heads[pick.cls].pop(0)
         done.add(id(pick))
         out.append(pick)
