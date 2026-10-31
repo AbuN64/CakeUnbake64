@@ -982,7 +982,7 @@ def _verdicts(config: Config, params: Json) -> tuple[list[Row], list[tuple[str, 
         reasons = _refusals(
             config.project, units, merging.merged_path(module, targets.get(module), units), tracked, taken
         )
-        verdict["hard"] = sorted({*verdict["hard"], *reasons[0], *reasons[1]})
+        verdict["hard"] = list(dict.fromkeys([*verdict["hard"], *reasons[0], *reasons[1]]))
         verdict["verdict"] = "separate" if verdict["hard"] else "merge"
     return found, rows, seqs
 
@@ -1314,7 +1314,9 @@ def merge(config: Config, params: Json) -> Row:
             if verdict is None and len(units) > 1:
                 problems.append(f"{module} has no merge verdict")
                 continue
-            problems.extend(f"{module}: {reason}" for reason in (verdict["hard"] if verdict else refused))
+            problems.extend(
+                f"{module}: {reason}" for reason in dict.fromkeys([*(verdict or {"hard": []})["hard"], *refused])
+            )
             texts = {u: (root / u).read_text() for u in units}
             texts.update(includes(texts, tracked, {u: merged_path for u in units}))
 

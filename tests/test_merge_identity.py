@@ -93,7 +93,7 @@ def test_a_file_moved_one_folder_deeper_keeps_its_relative_includes(cfg, monkeyp
     root = cfg.project.root
     (root / "include").mkdir(exist_ok=True)
     (root / "include/libgultra.h").write_text("extern int g;\n")
-    unit = "src/sdk/audio/alsynset.c"
+    unit = "src/sdk/audio/alsynset_text.c"
     (root / unit).parent.mkdir(parents=True)
     (root / unit).write_text('#include "../../include/libgultra.h"\n#include <ultra64.h>\nint f(void) { return g; }\n')
     rows = [(unit, "src/sdk/audio/alsynset.c")]
