@@ -43,14 +43,39 @@ def _spans(symbols: Sequence[versions.Row], fills: Sequence[Fill]) -> list[tuple
 
 
 def findings(
-    version: str, fills: Sequence[Fill], symbols: Sequence[versions.Row], plan: Collection[Pad]
+    version: str,
+    fills: Sequence[Fill],
+    symbols: Sequence[versions.Row],
+    plan: Collection[Pad],
+    bins: Sequence[tuple[str, int, int]] = (),
 ) -> list[Finding]:
     """The refusals of one version's records, in ROM order, each one line: a record that overlaps a symbol
-    (`fill.overlap`) and a record whose gap the plan does not have (`fill.gap`)."""
-    spans = _spans(symbols, fills)
+    (`fill.overlap`) and a record whose gap the plan does not have (`fill.gap`). A record inside a bin segment of
+    `bins` (name, rom start, rom end) has no plan to be in: it is the segment's own, in `.bin`, shorter than the
+    alignment and ending on it, else `fill.bin`."""
+    inside = [f for f in fills if linkfill.in_bin(bins, f.rom, f.size)]
+    spans = _spans(symbols, [f for f in fills if f not in inside])
     found = []
     for f in sorted(fills, key=lambda f: f.rom):
         at = f"{version}: fill at 0x{f.rom:X} ({f.size} bytes, object {f.object})"
+        if f in inside:
+            name = linkfill.in_bin(bins, f.rom, f.size)
+            if (
+                (f.object, f.section) != (name, linkfill.BIN_SECTION)
+                or f.size >= linkfill.ALIGN
+                or ((f.rom + f.size) % linkfill.ALIGN)
+            ):
+                found.append(
+                    Finding(
+                        "fill.bin",
+                        f"{at} is in bin segment {name} but is not its `.bin` fill shorter than {linkfill.ALIGN}"
+                        f" bytes that ends on {linkfill.ALIGN}",
+                        path=linkfill.path(version),
+                        versions=(version,),
+                        action="regenerate with `unbake layout fill --plan FILES.tsv`",
+                    )
+                )
+            continue
         if hit := next((n for a, b, n in spans if a < f.address + f.size and f.address < b), None):
             found.append(
                 Finding(
@@ -98,5 +123,9 @@ def audit(root: Path, plan_files: str | None) -> list[Finding]:
         rows: Iterable[versions.Row] = (
             versions.parse_symbol_addrs(file.read_bytes(), str(file)) if file.is_file() else ()
         )
-        out += findings(v, fills, tuple(rows), pads(plan, v))
+        segments = config["version"][v].get("segments", ())
+        edges = sorted((int(s["rom"]), s["name"], s.get("kind", "code")) for s in segments)
+        ends = [e[0] for e in edges[1:]] + [int(config["version"][v].get("size", 1 << 32))]
+        bins = [(name, start, end) for (start, name, kind), end in zip(edges, ends, strict=False) if kind == "bin"]
+        out += findings(v, fills, tuple(rows), pads(plan, v), bins)
     return out

@@ -195,3 +195,19 @@ def test_the_pads_of_a_plan_are_its_pad_atoms_of_one_version_only():
     ]
     plan.atoms[("eu", ".data")] = [Atom(0x80000040, 4, "pad", "drop", 9, "t", "p")]
     assert fillaudit.pads(plan, "us") == {("7", ".data", 0x80000020, 4)}
+
+
+def test_a_bin_segments_fill_needs_no_plan_gap_but_must_be_its_aligned_bin_fill():
+    bins = [("assets", 0x100, 0x400)]
+    good = Fill("assets", ".bin", 0x108, 0, b"\xab" * 8)
+    assert fillaudit.findings("us", [good], [], set(), bins) == []
+    for bad in (
+        Fill("assets", ".bin", 0x108, 0, b"\xab" * 4),  # does not end on 16
+        Fill("assets", ".bin", 0x100, 0, b"\xab" * 16),  # not shorter than the alignment
+        Fill("other", ".bin", 0x108, 0, b"\xab" * 8),  # not the segment's own
+        Fill("assets", ".data", 0x108, 0, b"\xab" * 8),  # not in `.bin`
+    ):
+        (found,) = fillaudit.findings("us", [bad], [], set(), bins)
+        assert found.key == "fill.bin"
+    outside = Fill("assets", ".bin", 0x40, 0, b"\xab" * 8)
+    assert [f.key for f in fillaudit.findings("us", [outside], [], set(), bins)] == ["fill.gap"]

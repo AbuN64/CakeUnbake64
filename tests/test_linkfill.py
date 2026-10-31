@@ -143,7 +143,7 @@ def test_generate_writes_a_file_for_the_versions_with_nonzero_pad_atoms(plan_dir
     root = tmp_path / "project"
     for v in ("us", "eu"):
         (root / "versions" / v).mkdir(parents=True)
-    (root / linkfill.path("eu")).write_text(TEXT)  # a file from an earlier run
+    (root / linkfill.path("eu")).write_text(TEXT.replace("us", "eu"))  # a file from an earlier run
     rom = bytearray(0x2000)
     rom[0x1008:0x100C] = b"\x11\x22\x33\x44"
     rom[0x1020:0x1024] = b"\x11\x22\x33\x44"  # the same bytes once in the earlier link's window
@@ -160,6 +160,7 @@ def test_generate_writes_a_file_for_the_versions_with_nonzero_pad_atoms(plan_dir
     monkeypatch.setattr(
         linkfill.configuration, "rom", lambda project, v: SimpleNamespace(read_bytes=lambda: bytes(rom))
     )
+    monkeypatch.setattr(linkfill, "unknown_spans", lambda c, v: [])
     out = linkfill.generate(config, {"plan": str(plan_dir / "FILES.tsv")})
     assert out["versions"] == {"us": {"fills": 1, "bytes": 4}, "eu": {"fills": 0, "bytes": 0}}
     assert out["written"] == [linkfill.path("us")]
@@ -177,6 +178,7 @@ def test_generate_refuses_a_pad_atom_no_piece_holds(plan_dir: Path, tmp_path: Pa
     monkeypatch.setattr(
         linkfill.configuration, "rom", lambda project, v: SimpleNamespace(read_bytes=lambda: bytes(0x2000))
     )
+    monkeypatch.setattr(linkfill, "unknown_spans", lambda c, v: [])
     with pytest.raises(Refusal) as refused:
         linkfill.generate(_config(tmp_path / "project"), {"plan": str(plan_dir / "FILES.tsv")})
     assert refused.value.findings[0].key == "fill.plan"
@@ -220,3 +222,43 @@ def test_splat_cuts_a_fill_into_a_data_piece_of_its_own(tmp_path: Path):
     (tmp_path / linkfill.path("us")).write_text(TEXT)
     assert "main/fill_1018]" in build.splat_yaml(config, "us", _tree()).decode()
     assert "fill_1018" not in build.splat_yaml(config, "eu-1", _tree()).decode()
+
+
+# the de ROM's bin segment debug_symbols_and_assets: slices of 0x1BCDE0 (an epilogue, 8 stale bytes, a prologue) and
+# 0x1C6EF0 (a data tail, 4 stale bytes, then zeros, an earlier-build window edge)
+SLICE_FN = bytes.fromhex("03e0000827bd00207a42a71eed08050b27bdffe8afbf0010")
+SLICE_DATA = bytes.fromhex("000700000000000000000000470a0147")
+
+
+def test_stale_gaps_reads_the_unknown_span_between_functions_of_a_bin_segment():
+    rom = bytes(0x20) + SLICE_FN  # the slice begins at ROM 0x20: the stale 8 bytes lie at 0x28..0x30
+    windows = [("assets", 0x20, 0x100)]
+    (fill,) = linkfill.stale_gaps([(0x28, 0x30)], windows, rom, [])
+    assert (fill.object, fill.section, fill.rom, fill.address, fill.data) == (
+        "assets", ".bin", 0x28, 0, bytes.fromhex("7a42a71eed08050b")[:8]
+    )  # fmt: skip
+    assert fill.provenance == linkfill.UNATTRIBUTED
+
+
+def test_stale_gaps_refuses_spans_that_are_not_alignment_fill():
+    rom = bytes(0x20) + SLICE_FN
+    windows = [("assets", 0x20, 0x100)]
+    # not on the boundary; outside the segment; straddling its start; zero bytes; in a code segment
+    assert linkfill.stale_gaps([(0x28, 0x2C)], windows, rom, []) == []
+    assert linkfill.stale_gaps([(0x10, 0x20)], windows, rom, []) == []
+    assert linkfill.stale_gaps([(0x1C, 0x30)], windows, rom, []) == []
+    assert linkfill.stale_gaps([(0x20, 0x30)], windows, rom, []) == []
+    assert linkfill.stale_gaps([(0x28, 0x30)], [("code", 0, 0x20)], rom, []) == []
+
+
+def test_stale_gaps_of_the_data_tail_slice_hold_the_four_stale_bytes():
+    rom = bytes(0x10) + SLICE_DATA
+    (fill,) = linkfill.stale_gaps([(0x1C, 0x20)], [("assets", 0, 0x40)], rom, [])
+    assert fill.data == SLICE_DATA[0xC:]
+    assert linkfill.stale_gaps([(0x14, 0x20)], [("assets", 0, 0x40)], bytes(0x20), []) == []  # all zero: no row
+
+
+def test_bin_windows_end_where_the_next_segment_begins():
+    segments = [Segment("a", 0, 0x80000000, "code"), Segment("b", 0x100, None, "bin"), Segment("c", 0x200, None, "bin")]
+    config = SimpleNamespace(project=SimpleNamespace(version={"us": SimpleNamespace(segments=segments)}))
+    assert linkfill.bin_windows(config, "us", 0x400) == [("b", 0x100, 0x200), ("c", 0x200, 0x400)]

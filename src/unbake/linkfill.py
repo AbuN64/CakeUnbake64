@@ -20,6 +20,7 @@ import itertools
 import tomllib
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,8 @@ from unbake import effort, objectplan, versions, windows
 from unbake.contracts import Config, Finding, Json, Refusal
 
 PAD_KIND = "pad"  # the plan's kind of an alignment pad
+BIN_SECTION = ".bin"  # the section of a row inside a `kind = "bin"` segment: a bin segment has no plan and no address
+ALIGN = 16  # the linker's alignment: a gap shorter than it that ends on it is the fill before the next object
 UNATTRIBUTED = "unattributed"
 EARLIER = "earlier-link"
 _KEYS = frozenset({"object", "section", "rom", "address", "size", "bytes", "provenance"})
@@ -178,10 +181,48 @@ def refill(
     return sorted(rows, key=lambda f: f.rom), dropped, written
 
 
+def in_bin(windows: Sequence[tuple[str, int, int]], rom: int, size: int) -> str | None:
+    """The bin segment (name) of `windows` (name, rom start, rom end) that holds the whole of [rom, rom + size)."""
+    return next((name for name, start, end in windows if start <= rom and rom + size <= end), None)
+
+
+def stale_gaps(
+    spans: Iterable[tuple[int, int]],
+    windows: Sequence[tuple[str, int, int]],
+    rom: bytes,
+    earlier: Sequence[tuple[int, bytes]],
+) -> list[Fill]:
+    """The alignment fill inside bin segments, read from the ROM: each span no class holds (`spans`) that lies in one
+    bin segment of `windows` (name, rom start, rom end), is shorter than ALIGN, ends on an ALIGN boundary and holds a
+    nonzero byte is the older link's fill before the next object. The row is the segment's, in `.bin` at address 0."""
+    rows = []
+    for low, high in spans:
+        name = in_bin(windows, low, high - low)
+        data = rom[low:high]
+        if name and 0 < high - low < ALIGN and high % ALIGN == 0 and any(data):
+            rows.append(Fill(name, BIN_SECTION, low, 0, data, earlier_link(data, earlier)))
+    return rows
+
+
+def bin_windows(config: Config, v: str, rom_size: int) -> list[tuple[str, int, int]]:
+    """The ROM windows (name, start, end) of the bin segments of one version: a segment ends where the next begins."""
+    rows = sorted(config.project.version[v].segments, key=lambda s: s.rom)
+    ends = [s.rom for s in rows[1:]] + [rom_size]
+    return [(s.name, s.rom, end) for s, end in zip(rows, ends, strict=True) if s.kind == "bin"]
+
+
+def unknown_spans(config: Config, v: str) -> list[tuple[int, int]]:
+    """The ROM spans of one version that no class holds, from `unbake report --unknown`."""
+    found = import_module("unbake.report").run(config, {"unknown": True})["unknown"][v]["spans"]
+    return [(low, high) for low, high, _, _ in found]
+
+
 def generate(config: Config, params: Json) -> dict[str, Any]:
     """`unbake layout fill --plan FILES.tsv`: write `versions/<v>/linker_fill.toml` of every version from its ROM and
     the plan's pad atoms (OBJECTS.tsv and ASSIGN.tsv beside FILES.tsv). A version with no nonzero pad atom has no
-    file: one left from an earlier run is removed. A pad atom no piece of the version holds is refused."""
+    file: one left from an earlier run is removed. A pad atom no piece of the version holds is refused. A bin segment
+    has no plan: its rows are the version's spans no class holds that `stale_gaps` reads as alignment fill, and the
+    bin rows already held stay."""
     with effort.stage("layout.fill"):
         files = Path(str(params["plan"]))
         missing = [
@@ -220,6 +261,11 @@ def generate(config: Config, params: Json) -> dict[str, Any]:
                 if segment.address_space == windows.SPACE
             ]
             fills = build(atoms, rom, earlier)
+            bins = bin_windows(config, v, len(rom))
+            held = [f for f in read(project.root, v) if in_bin(bins, f.rom, f.size)]
+            fills = sorted(
+                [*fills, *held, *stale_gaps(unknown_spans(config, v), bins, rom, earlier)], key=lambda f: f.rom
+            )
             target = project.root / path(v)
             if fills:
                 target.write_text(

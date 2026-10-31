@@ -854,6 +854,10 @@ sentence = "a linker fill record overlaps a symbol"
 owner = "fillaudit"
 sentence = "a linker fill record names a gap the object plan does not have"
 
+[key."fill.bin"]
+owner = "fillaudit"
+sentence = "a linker fill record inside a bin segment is not that segment's alignment fill"
+
 [key."fill.plan"]
 owner = "linkfill"
 sentence = "the object plan names a gap the ROM cannot place, or an audit of fill records has no plan"
