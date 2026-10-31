@@ -219,8 +219,8 @@ def spans(seq: Sequence[Row], units: set[str]) -> list[tuple[str, int, int, int]
     spans, offset in the section where the module starts). The linked span walks the section from the module's first
     entry to its last (the module's pieces aligned as linked, ALIGN directives and `MAX(., offset)` pins between
     them); the bytes of other modules between two entries are the `gap` finding's, so they are not walked and the
-    pins after them are not read. The merged span packs the module's pieces of each class again, class after class,
-    each as aligned in the link."""
+    pins after them are not read. The merged span packs the module's pieces of each class again, each at its own alignment
+    inside the object (the compiler packs them so), class after class as the link places the object's sections."""
     out: list[tuple[str, int, int, int]] = []
     for section in dict.fromkeys(e["o"] for e in seq if e["k"] == "entry" and e["u"] in units):
         rows = [(i, e) for i, e in enumerate(seq) if e["o"] == section]
@@ -248,12 +248,14 @@ def spans(seq: Sequence[Row], units: set[str]) -> list[tuple[str, int, int, int]
                 for size, align in row["parts"][cls]:
                     position = _up(position, row.get("subalign") or align) + size
                     if i >= mine[0]:
-                        classes[cls].append((size, row.get("subalign") or align))
+                        classes[cls].append((size, align, row.get("subalign") or 0))
         merged = 0
         for pieces in classes.values():
-            merged = _up(merged, max(a for _, a in pieces))
-            for size, align in pieces:
-                merged = _up(merged, align) + size
+            merged = _up(merged, pieces[0][2] or max(a for _, a, _ in pieces))
+            packed = 0
+            for size, align, _ in pieces:
+                packed = _up(packed, align) + size
+            merged += packed
         out.append((section, position - start, merged, start))
     return out
 

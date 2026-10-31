@@ -320,6 +320,19 @@ def test_original_linker_minimum_offsets_keep_internal_holes_in_real_data_slice(
     )
 
 
+def test_merged_span_pads_pieces_to_their_own_alignment_under_subalign() -> None:
+    """sndplayer: a 62 B (align 8) and an 8 B (align 4) rodata piece link 2 B apart under SUBALIGN(1); in one object the
+    compiler pads the second to 4, so the object is 72 B + 8 B of data, the 80 B the link spans."""
+    seq = [
+        {**with_parts(entry("a", "rodata", 62, ".data"), rodata=piece(62, 8)), "subalign": 1},
+        {"o": ".data", "k": "minimum", "offset": 64},
+        {**with_parts(entry("b", "rodata", 8, ".data"), rodata=piece(8, 4)), "subalign": 1},
+        {"o": ".data", "k": "minimum", "offset": 72},
+        {**with_parts(entry("b", "data", 8, ".data"), data=piece(8, 16)), "subalign": 1},
+    ]
+    assert mergecheck.spans(seq, {"a", "b"}) == [(".data", 80, 80, 0)]
+
+
 def test_minimum_does_not_move_back_or_count_prefix_space_as_module_bytes():
     seq = [
         {"o": ".data", "k": "minimum", "offset": 100},
