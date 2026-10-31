@@ -161,9 +161,10 @@ def test_eu_14d044_the_freed_words_of_a_string_are_one_string_never_floats():
 
 def test_text_that_continues_a_neighbouring_string_is_a_string_from_its_first_byte():
     assert pt.itemize(b"abcdefgh\0\0\0\0", 4, 12)[0][0].value == "efgh"  # 4+ printable bytes before it
-    items, _ = pt.itemize(b"abcd" + b"ef\0G" + b"hij\0", 4, 12)  # `ef` is the tail of abcdef, `G` heads `Ghij`
-    assert [(i.kind, i.value) for i in items] == [("str", "ef\0G"), ("str", "hij")]
+    items, _ = pt.itemize(b"pThis->a" + b"bc\0G" + b"hij\0", 8, 16)  # `bc` ends the string, `G` heads `Ghij`
+    assert [(i.kind, i.value) for i in items] == [("str", "bc\0G"), ("str", "hij")]
     assert pt.itemize(b"\0\0\0\0ef\0\0", 4, 8)[0] == []  # nothing before it and under 4 characters: no text
+    assert [i.kind for i in pt.itemize(b"BBBBBB~B" + b"BB\0\0", 8, 12)[0]] == ["float"]  # bitmap bytes repeat
 
 
 def test_a_run_the_range_cuts_off_is_refused_never_typed_as_words():

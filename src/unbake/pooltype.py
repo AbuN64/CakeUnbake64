@@ -8,8 +8,9 @@ NUL after it, and is written as a three-digit octal escape; any other high byte 
 is a plausible float exponent is a float, a pair on an 8-byte boundary whose low word is no float and no small
 integer is a double, a word within -0x8000..0xFFFF is an integer, and zero follows its previous run. Text is never
 typed as words: a run of 4+ printable characters ending in a NUL, or one that continues a neighbouring string (4+
-printable bytes just before it), is one string from its first byte, and the printable bytes that follow its NUL in
-the last word belong to the string (the head of the next one); text of 4+ characters the range cuts off is refused.
+printable bytes just before it, 8+ distinct characters together), is one string from its first byte, and the
+printable bytes that follow its NUL in the last word belong to the string (the head of the next one); text of 4+
+characters the range cuts off is refused.
 Anything else
 (pointer-looking words, packed bytes, high-bit text, a string whose padding is not NUL) is refused with its span and
 reason, never guessed. A file path string (`C:/.../name.cpp`, the assertion macro's __FILE__) names a source file:
@@ -45,6 +46,7 @@ IMAGE = range(0x80000400, 0x80800000)  # the older image's addresses a pointer w
 JOIN = 8  # most words of an odd run that join the integer run beside it
 PRINTABLE = frozenset(range(0x20, 0x7F)) | {9, 10, 13}
 TEXT = 4  # printable characters a run needs to be text on its own
+VARIETY = 8  # distinct characters a neighbouring string and its continuation have (bitmap bytes repeat a few)
 LETTERS = frozenset(range(0x41, 0x5B)) | frozenset(range(0x61, 0x7B))
 ACCENTED = range(0xA0, 0x100)  # Latin-1 letters and signs: a string's byte in it needs an ASCII letter before it
 FLOATY = re.compile(r"^g_earlier\w*?(?:Floats|Ints|Words)_[0-9A-F]+$")  # the rows type-pool names for numeric words
@@ -112,8 +114,13 @@ def _string(data: bytes, at: int, high: int) -> tuple[str, int] | None:
     one that continues a neighbouring string (4+ printable bytes just before it), may be followed in its last word by
     printable bytes too (the head of the next string): the text then holds the NUL and those bytes."""
     end = _end(data, at, high)
-    follows = at >= TEXT and all(b in PRINTABLE for b in data[at - TEXT : at])
-    if end - at < (1 if follows else 3) or end >= high or data[end] != 0:
+    if end >= high or data[end] != 0:
+        return None
+    start = at
+    while start and at - start < 64 and data[start - 1] in PRINTABLE:
+        start -= 1
+    follows = at - start >= TEXT and len(set(data[start:end])) >= VARIETY
+    if end - at < (1 if follows else 3):
         return None
     stop = end + 1
     head = False
