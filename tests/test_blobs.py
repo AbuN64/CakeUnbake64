@@ -351,6 +351,11 @@ def test_report_carries_the_blob_fields_per_version(tmp_path, monkeypatch):
         "blobs_no_row": ROM - 0x1100,
         "unknown_total": ROM - 0x1100,
         "blobs": {},
+        "blob_states": {
+            "exact": {"rows": 0, "bytes": 0},
+            "fuzzy": {"rows": 0, "bytes": 0},
+            "untyped": {"rows": 0, "bytes": 0},
+        },
     }
     assert report.layers(config, _tree("acc"), "v")["code"] == [(0x1000, 0x1100)]
 

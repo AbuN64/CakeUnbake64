@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import (
+    blobs,
     config,
     debtrules,
     delta,
@@ -1611,6 +1612,78 @@ def _partition_findings(root: Path) -> list[Finding]:
     return out
 
 
+def _blob_rows(text: str | None) -> dict[str, Json]:
+    """The physical rows of a blobs.toml text by name (a row inside its parent's stream has no ROM bytes of its own)."""
+    rows = tomllib.loads(text).get("blob", {}) if text else {}
+    return {name: row for name, row in rows.items() if "parent" not in row}
+
+
+def _bare(rows: Mapping[str, Json]) -> set[str]:
+    """The names of the rows no draft types: the bare leftovers."""
+    return {name for name, row in rows.items() if blobs.typing(row) == "untyped"}
+
+
+def _untyped_findings(
+    root: Path, against: str, git: str, tmp: Path, settings: Json
+) -> tuple[list[Finding], list[Finding]]:
+    """(refused, warned) for the blob rows of the change. Refused: a bare leftover row the change adds over `against`.
+    Warned: a bare leftover row inside a window the change touched, the ROM range of a row it adds, edits or removes
+    widened by `reach` bytes (clean up as we go); the rows it adds are refused already."""
+    path = config.paths_at(root)["blobs"]
+    shown = process.run("git show", [git, "show", f"{against}:{path}"], root, tmp=tmp)
+    before = _blob_rows(shown.stdout.decode(errors="replace") if shown.exit == 0 else None)
+    after = _blob_rows((root / path).read_text() if (root / path).is_file() else None)
+    added = sorted(_bare(after) - _bare(before))
+    reach = settings["untyped"]["reach"]
+    touched: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    for name in {*before, *after}:
+        if before.get(name) != after.get(name):
+            for row in (before.get(name), after.get(name)):
+                for version, spans in (row or {}).get("rom", {}).items():
+                    touched[version] += [(max(0, a - reach), b + reach) for a, b in spans]
+    windows = {version: blobs.merge(spans) for version, spans in touched.items()}
+
+    def named(code: str, names: Sequence[str], reason: str, action: str, blocking: bool) -> Finding:
+        size = sum(b - a for n in names for spans in after[n].get("rom", {}).values() for a, b in spans)
+        return Finding(
+            code, f"{reason}, {size} bytes", path=path, missing=tuple(names[:8]), action=action, blocking=blocking
+        )
+
+    refused = []
+    if added:
+        refused.append(
+            named(
+                "audit.untyped_row",
+                added,
+                f"the change adds {len(added)} untyped blob rows (a leftover with no draft)",
+                "type each row by use: set draft and draft_evidence for a typed draft, or give it its content type",
+                True,
+            )
+        )
+    inside = [
+        n
+        for n in sorted(_bare(after) - set(added))
+        if any(
+            (a < we and b > ws)
+            for v, spans in after[n].get("rom", {}).items()
+            for a, b in spans
+            for ws, we in windows.get(v, ())
+        )
+    ]
+    warned = []
+    if inside:
+        warned.append(
+            named(
+                "audit.untyped_window",
+                inside,
+                f"{len(inside)} untyped blob rows sit within {reach} bytes of a row the change touched",
+                "type them now, or state in the commit message why they stay",
+                False,
+            )
+        )
+    return refused, warned
+
+
 def _blobs(git: str, root: Path, tmp: Path, rev: str, paths: Sequence[str]) -> dict[str, str]:
     """path -> text of each path as `rev` holds it (those it lacks are absent), in one git process."""
     request = "".join(f"{rev}:{p}\n" for p in paths).encode()
@@ -1825,6 +1898,9 @@ def _audit(params: Json) -> Json:
     refusals.extend(drift)
     refusals.extend(fillaudit.audit(root, params.get("plan")))
     refusals.extend(_partition_findings(root))
+    untyped, untyped_windows = _untyped_findings(root, against, git, tmp, config.audit_settings(settings))
+    refusals.extend(untyped)
+    added_warnings.extend(untyped_windows)
     removed = _removed_functions(changed, root, against, git, tmp)
     dropped = _credit_drops(root, against, git, tmp)
     unexplained = {v: n for v, n in dropped.items() if n > removed}

@@ -624,6 +624,7 @@ def accounts(config: Any, tree: Any) -> dict[str, Json]:
             "linker_fill_total": p["linker_fill"],
             "unknown_total": p["unknown"],
             "blobs": blobs.census(document, v),
+            "blob_states": blobs.states(document, v),
         }
         for v, p in partitions(config, tree).items()
     }
@@ -728,6 +729,20 @@ def _blobs_line(label: str, held: Json, cells: int) -> str:
     return _bar(label, held["blobs_decoded"], held["blobs_total"], held["blobs_total"], cells)
 
 
+def _states_line(label: str, held: Json) -> str:
+    """The README line of the blob rows by typing: rows and bytes in each of exact, fuzzy and untyped."""
+    return f"{label} " + ", ".join(
+        f"{state} {held['blob_states'][state]['rows']:,} ({held['blob_states'][state]['bytes']:,} bytes)"
+        for state in blobs.STATES
+    )
+
+
+def _functions_line(label: str, held: Json) -> str:
+    """The README line of the functions in the same words: exact (matched), fuzzy (a measured draft), none."""
+    exact, draft = held["functions_matched"], held["functions_fuzzy"]
+    return f"{label} exact {exact:,}, fuzzy {draft:,}, none {held['functions_total'] - exact - draft:,}"
+
+
 def _unknown_line(label: str, held: Json) -> str:
     """The README line of the ROM bytes no class holds: shown whenever there are any, never inside a percentage."""
     return f"{label} {held['unknown_total']:,} bytes"
@@ -800,6 +815,8 @@ def readme(text: str, config: Any, report: Json) -> str:
             rows = [_line(k.ljust(9), versions[v], cells, k) for k in ("code", "data", "functions")]
             if "rom_size" in versions[v]:
                 rows.append(_blobs_line("blobs".ljust(9), versions[v], cells))
+                rows.append(_functions_line("fn rows".ljust(9), versions[v]))
+                rows.append(_states_line("blob rows".ljust(9), versions[v]))
                 if versions[v]["unknown_total"]:
                     rows.append(_unknown_line("unknown".ljust(9), versions[v]))
             blocks.append(header + "\n|---|\n| <pre><code>" + "</code><br><code>".join(rows) + "</code></pre> |")

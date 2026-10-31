@@ -33,6 +33,11 @@ def _bucket(**values: int) -> dict[str, int]:
         "blobs_no_row": 0,
         "linker_fill_total": values.get("linker_fill_total", 0),
         "unknown_total": 0,
+        "blob_states": {
+            "exact": {"rows": 0, "bytes": 0},
+            "fuzzy": {"rows": 0, "bytes": 0},
+            "untyped": {"rows": 0, "bytes": 0},
+        },
     }
 
 
@@ -87,7 +92,15 @@ def test_progress_cart_carries_the_linker_fill_beside_code_not_in_it(tmp_path, m
     part = cart["partition"]
     assert part["linker_fill"] == {"bytes": 24}
     assert part["code"] == {"bytes": 400, "matched": 100}
-    assert part["blob"] == {"bytes": 0, "decoded": 0} and part["unknown"] == {"bytes": 0}
+    assert part["blob"] == {
+        "bytes": 0,
+        "decoded": 0,
+        "states": {
+            "exact": {"rows": 0, "bytes": 0},
+            "fuzzy": {"rows": 0, "bytes": 0},
+            "untyped": {"rows": 0, "bytes": 0},
+        },
+    } and part["unknown"] == {"bytes": 0}
 
 
 def test_progress_refuses_classes_that_do_not_sum_to_the_rom(tmp_path, monkeypatch):

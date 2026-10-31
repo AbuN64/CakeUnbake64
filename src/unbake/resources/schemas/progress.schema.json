@@ -166,11 +166,77 @@
          "decoded": {
           "type": "integer",
           "minimum": 0
+         },
+         "states": {
+          "type": "object",
+          "properties": {
+           "exact": {
+            "type": "object",
+            "properties": {
+             "rows": {
+              "type": "integer",
+              "minimum": 0
+             },
+             "bytes": {
+              "type": "integer",
+              "minimum": 0
+             }
+            },
+            "required": [
+             "rows",
+             "bytes"
+            ],
+            "additionalProperties": false
+           },
+           "fuzzy": {
+            "type": "object",
+            "properties": {
+             "rows": {
+              "type": "integer",
+              "minimum": 0
+             },
+             "bytes": {
+              "type": "integer",
+              "minimum": 0
+             }
+            },
+            "required": [
+             "rows",
+             "bytes"
+            ],
+            "additionalProperties": false
+           },
+           "untyped": {
+            "type": "object",
+            "properties": {
+             "rows": {
+              "type": "integer",
+              "minimum": 0
+             },
+             "bytes": {
+              "type": "integer",
+              "minimum": 0
+             }
+            },
+            "required": [
+             "rows",
+             "bytes"
+            ],
+            "additionalProperties": false
+           }
+          },
+          "required": [
+           "exact",
+           "fuzzy",
+           "untyped"
+          ],
+          "additionalProperties": false
          }
         },
         "required": [
          "bytes",
-         "decoded"
+         "decoded",
+         "states"
         ],
         "additionalProperties": false
        },
@@ -225,10 +291,15 @@
        "asm": {
         "type": "integer",
         "minimum": 0
+       },
+       "fuzzy": {
+        "type": "integer",
+        "minimum": 0
        }
       },
       "required": [
        "matched",
+       "fuzzy",
        "total"
       ],
       "additionalProperties": false

@@ -30,6 +30,18 @@ adds or states the reason in the commit message.
 | `source.guard-gap` | Warn | a function that is C under one VERSION guard and raw words under the other |
 | `source.sdk-name` | Refuse | a non-SGI name under a library root, or an SGI-reserved name (`__os*`, `_` + capital) outside one |
 | `source.generated-drift` | Refuse | a hand edit of README/docs/map/progress that `unbake sync` would regenerate |
+| `audit.untyped_row` | Refuse | a blob row that is untyped: a `type = "leftover"` row with no `draft` |
+| `audit.untyped_window` | Warn | no row: an untyped blob row within `[audit.untyped] reach` bytes (default 4096) of a blob row the change adds, edits or removes |
+
+## Blob rows: exact, fuzzy, untyped
+
+Every blob row is in one of three states, the words a function's credit uses. **exact**: typed by use, its typed source
+rebuilds the bytes (any row whose type is not `leftover`, except an `identified` one). **fuzzy**: a typed draft, not yet
+rebuilt from source: an `identified` row, or a `leftover` row that carries `draft = "<content type>"` and
+`draft_evidence = "<why, e.g. same type as its source in eu>"`. **untyped**: a bare `leftover`. `progress.json` carries
+rows and bytes per version in each state (`partition.blob.states`) beside `functions.fuzzy`; the README states them as
+`blob rows` and `fn rows`. `audit.untyped_row` refuses a change that raises the untyped row count over BASE;
+`audit.untyped_window` warns on the untyped rows (old ones included) that sit in a window the change touched.
 
 ## ROM partition
 

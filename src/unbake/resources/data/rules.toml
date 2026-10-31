@@ -368,5 +368,8 @@ numbered_suffixes = ['Block', 'Words', 'Bytes', 'Span', 'Gap', 'Chunk', 'Run', '
 reserved = '^(?:__os|_[A-Z])'
 prefixes = '^(?:__?)?(?:os|al|gu|ms|sn)'
 
+[audit.untyped]
+reach = 4096  # bytes around a blob row the change touches: its untyped neighbours inside are warned
+
 [audit.generated]
 paths = ['README.md', 'docs/map-*.json', 'docs/*.map.json', 'progress.json']

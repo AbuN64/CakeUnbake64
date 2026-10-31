@@ -122,6 +122,66 @@
      "functions_none": {
       "type": "integer",
       "minimum": 0
+     },
+     "blob_states": {
+      "type": "object",
+      "properties": {
+       "exact": {
+        "type": "object",
+        "properties": {
+         "rows": {
+          "type": "integer",
+          "minimum": 0
+         },
+         "bytes": {
+          "type": "integer",
+          "minimum": 0
+         }
+        },
+        "required": [
+         "rows",
+         "bytes"
+        ],
+        "additionalProperties": false
+       },
+       "fuzzy": {
+        "type": "object",
+        "properties": {
+         "rows": {
+          "type": "integer",
+          "minimum": 0
+         },
+         "bytes": {
+          "type": "integer",
+          "minimum": 0
+         }
+        },
+        "required": [
+         "rows",
+         "bytes"
+        ],
+        "additionalProperties": false
+       },
+       "untyped": {
+        "type": "object",
+        "properties": {
+         "rows": {
+          "type": "integer",
+          "minimum": 0
+         },
+         "bytes": {
+          "type": "integer",
+          "minimum": 0
+         }
+        },
+        "required": [
+         "rows",
+         "bytes"
+        ],
+        "additionalProperties": false
+       }
+      },
+      "additionalProperties": false
      }
     },
     "required": [

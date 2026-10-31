@@ -154,7 +154,7 @@ def _cart(config: Any, version: str, row: Json) -> Json:
             **({"asm": row["code_asm"]} if row.get("code_asm") else {}),  # matched library asm
         },
         "data": {"bytes": row["data_total"], "matched": row["data_matched"]},
-        "blob": {"bytes": row["blobs_total"], "decoded": row["blobs_decoded"]},
+        "blob": {"bytes": row["blobs_total"], "decoded": row["blobs_decoded"], "states": row["blob_states"]},
         "linker_fill": {"bytes": row["linker_fill_total"]},
         "unknown": {"bytes": row["unknown_total"]},
     }
@@ -174,7 +174,7 @@ def _cart(config: Any, version: str, row: Json) -> Json:
         "rom_size": row["rom_size"],
         "partition": partition,
         "functions": {
-            **{part: row[f"functions_{part}"] for part in ("matched", "total")},
+            **{part: row[f"functions_{part}"] for part in ("matched", "fuzzy", "total")},
             **({"asm": row["functions_asm"]} if row.get("functions_asm") else {}),
         },
     }

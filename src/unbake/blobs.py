@@ -40,6 +40,7 @@ CONTENT = (
     "world",
     "text",
 )  # the types the published map carries; accounting rows are not content
+STATES = ("exact", "fuzzy", "untyped")  # the words a blob row's typing is reported in, as a function's credit is
 RUN_MIN = 16  # the shortest one-value run that proves padding inside a gap of other bytes
 _ORDER = (
     "name",
@@ -48,6 +49,8 @@ _ORDER = (
     "format",
     "codec",
     "state",
+    "draft",
+    "draft_evidence",
     "limit",
     "stored_size",
     "decoded_size",
@@ -124,6 +127,18 @@ def check(config: Config, document: Json, file: str | None = None) -> tuple[Find
                 found.append(
                     Finding("blobs.schema", f"blob {name} lives in its parent: it needs decoded, no rom", path=file)
                 )
+        drafted = "draft" in row or "draft_evidence" in row
+        if drafted and (
+            row.get("type") != "leftover" or row.get("draft") not in CONTENT or not row.get("draft_evidence")
+        ):
+            found.append(
+                Finding(
+                    "blobs.schema",
+                    f"blob {name}: a draft belongs to a leftover row and names a content type "
+                    f"({', '.join(CONTENT)}) with its draft_evidence",
+                    path=file,
+                )
+            )
         if row.get("type") == "leftover" and row.get("format") not in LEFTOVER_FORMATS:
             found.append(
                 Finding(
@@ -194,6 +209,28 @@ def no_row(partition: Json, document: Json, version: str) -> int:
     for row in document.get("blob", {}).values():
         held.extend(tuple(span) for span in row.get("rom", {}).get(version, ()))
     return length(subtract([(0, partition["rom_size"])], merge(held)))
+
+
+def typing(row: Json) -> str:
+    """How a blob row is typed. untyped: a bare leftover. fuzzy: a typed draft, a leftover that names a content type
+    and the evidence for it (`draft`, `draft_evidence`) or an identified row, not yet rebuilt from source. exact: any
+    other row, typed by use."""
+    if row["type"] == "leftover":
+        return "fuzzy" if row.get("draft") else "untyped"
+    return "fuzzy" if row["state"] == "identified" else "exact"
+
+
+def states(document: Json, version: str) -> Json:
+    """Per typing (`STATES`) the rows and bytes of one version's physical blob rows. A row inside its parent's stream
+    has no bytes of its own and is no row here."""
+    out = {state: {"rows": 0, "bytes": 0} for state in STATES}
+    for row in document.get("blob", {}).values():
+        if "parent" in row or version not in row.get("rom", {}):
+            continue
+        held = out[typing(row)]
+        held["rows"] += 1
+        held["bytes"] += sum(b - a for a, b in row["rom"][version])
+    return out
 
 
 def census(document: Json, version: str | None = None) -> Json:

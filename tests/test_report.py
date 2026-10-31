@@ -331,6 +331,11 @@ def test_readme_with_blob_accounting_measures_against_the_rom_and_drops_the_part
     for v, row in held.items():
         row["blobs_identified"] = row["blobs_total"] - row["blobs_decoded"]
         row["blobs_fill"] = 0
+        row["blob_states"] = {
+            "exact": {"rows": 0, "bytes": 0},
+            "fuzzy": {"rows": 0, "bytes": 0},
+            "untyped": {"rows": 0, "bytes": 0},
+        }
         row["blobs_no_row"] = 0
         row["linker_fill_total"] = 0
         row["unknown_total"] = row["rom_size"] - current["versions"][v]["code_total"] - 4096 - row["blobs_total"]
@@ -537,6 +542,11 @@ def published_case(tmp_path, monkeypatch):
                 "linker_fill_total": 0,
                 "unknown_total": 4000,
                 "blobs": {"graphics": {"decoded": 1, "identified": 1, "observed": 1}},
+                "blob_states": {
+                    "exact": {"rows": 0, "bytes": 0},
+                    "fuzzy": {"rows": 0, "bytes": 0},
+                    "untyped": {"rows": 0, "bytes": 0},
+                },
             }
         },
     )
@@ -564,10 +574,18 @@ def test_report_publishes_schema2_and_next_from_the_same_credit_rows(published_c
     configuration.validate("result.report", result, "report")
     assert document["schema"] == 2
     cart = document["carts"][0]
-    assert cart["functions"] == {"matched": 1, "total": 3}
+    assert cart["functions"] == {"matched": 1, "fuzzy": 1, "total": 3}
     part = cart["partition"]
     assert part["code"] == {"bytes": 32, "matched": 16}
-    assert part["blob"] == {"bytes": 64, "decoded": 32}
+    assert part["blob"] == {
+        "bytes": 64,
+        "decoded": 32,
+        "states": {
+            "exact": {"rows": 0, "bytes": 0},
+            "fuzzy": {"rows": 0, "bytes": 0},
+            "untyped": {"rows": 0, "bytes": 0},
+        },
+    }
     assert part["header"]["bytes"] == 4096
     assert sum(v["bytes"] for v in part.values()) == cart["rom_size"]  # one partition: every byte in one class
     assert not {"code", "blobs", "header", "linker_fill"} & set(cart)
@@ -672,7 +690,7 @@ def test_next_fuzzy_state_matches_measured_summary_and_preserves_zero_score_c_li
         "fuzzy": "fuzzy" if expected else "unmatched",
     }
     document = json.loads((config.project.root / "progress.json").read_bytes())
-    assert document["carts"][0]["functions"] == {"matched": 1, "total": 3}
+    assert document["carts"][0]["functions"] == {"matched": 1, "fuzzy": 1, "total": 3}
     published_map = json.loads((config.project.root / "docs/map-a.json").read_bytes())
     body = next(row for row in published_map["fns"] if row[0] == "fuzzy")
     assert body[4:] == ["src/a.c", 3]

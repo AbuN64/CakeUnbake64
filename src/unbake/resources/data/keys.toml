@@ -369,6 +369,14 @@ sentence = "progress.json lost matched functions that no removed C explains"
 owner = "policy"
 sentence = "progress.json holds a cart whose ROM classes do not sum to its rom_size"
 
+[key."audit.untyped_row"]
+owner = "policy"
+sentence = "the change adds blob rows that are untyped: bare leftovers with no draft type and evidence"
+
+[key."audit.untyped_window"]
+owner = "policy"
+sentence = "untyped blob rows sit inside a window the change touched; type them as you go"
+
 [key."sync.stand-in"]
 owner = "repo"
 sentence = "sync would write a stand-in line into a source for a name no file defines; write its typed definition"
