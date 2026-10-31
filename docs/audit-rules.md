@@ -31,6 +31,13 @@ adds or states the reason in the commit message.
 | `source.sdk-name` | Refuse | a non-SGI name under a library root, or an SGI-reserved name (`__os*`, `_` + capital) outside one |
 | `source.generated-drift` | Refuse | a hand edit of README/docs/map/progress that `unbake sync` would regenerate |
 
+## ROM partition
+
+`audit.partition` (Refuse) judges the whole tree: a cart of `progress.json` whose partition classes (header, code,
+data, blob, linker fill, unknown) do not sum to its `rom_size`. `unbake report` and `sync` refuse the same defect
+earlier (`report.partition`: a byte counted twice, credited bytes the ROM classes do not hold, or a sum other than the
+ROM size).
+
 ## Linker fill records
 
 `--plan FILES.tsv` (OBJECTS.tsv and ASSIGN.tsv beside it) adds the linker fill checks, always Refuse: `fill.overlap` (a

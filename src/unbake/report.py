@@ -561,6 +561,22 @@ def unowned(config: Any, tree: Any) -> dict[str, list[tuple[int, int, str]]]:
     return {v: sorted(rows) for v, rows in out.items()}
 
 
+def extents(rows: Iterable[Credit], versions: list[str]) -> dict[str, dict[str, Any]]:
+    """Per version the ROM extent of every credit row: its credited bytes plus the platform bytes `off_platform` cut
+    out of it, so a row cut by a platform span keeps the place it has in the ROM (shrunk, it would slide onto the
+    platform bytes behind it and leave its own tail to the blobs)."""
+    tables: dict[str, dict[str, Any]] = {v: {} for v in versions}
+    for row in rows:
+        kind = "func" if row.member.kind == "function" else "data"
+        tables[row.version][f"{row.name}@{row.member.rom}"] = (
+            0,
+            row.member.rom,
+            row.code + row.data + row.platform,
+            kind,
+        )
+    return tables
+
+
 def partitions(config: Any, tree: Any) -> dict[str, Json]:
     """The partition of every version whose ROM is present, once per tree, blobs file and ROM size.
     Uses the same source extents as credit reporting without measuring fuzzy scores: scores never change byte
@@ -568,19 +584,20 @@ def partitions(config: Any, tree: Any) -> dict[str, Json]:
     `report.partition`."""
 
     def build() -> dict[str, Json]:
-        tables: dict[str, dict[str, Any]] = {v: {} for v in config.project.version}
-        for row in _rows(config, tree, frozenset(), {}):  # source extents, independent of exactness and scores
-            kind = "func" if row.member.kind == "function" else "data"
-            tables[row.version][row.name] = (0, row.member.rom, row.code + row.data, kind)
+        credited_rows = _rows(config, tree, frozenset(), {})  # source extents, independent of exactness and scores
+        tables = extents(credited_rows, list(config.project.version))
         out = {}
         for v in config.project.version:
             if (size := _rom_size(config, v)) is None:
                 continue
             parts = partition(config, v, tables[v], size)
             total = sum(parts[k] for k in blobs.PARTS)
-            if parts["overlap"] or parts["outside"] or parts["unknown"] < 0 or total != size:
+            credited = {k: sum(getattr(r, k) for r in credited_rows if r.version == v) for k in ("code", "data")}
+            lost = {k: credited[k] - parts[k] for k in credited}
+            if parts["overlap"] or parts["outside"] or parts["unknown"] < 0 or total != size or any(lost.values()):
                 why = (
-                    f"{parts['overlap']} bytes counted twice, {parts['outside']} beyond the ROM, sum {total} of {size}"
+                    f"{parts['overlap']} bytes counted twice, {parts['outside']} beyond the ROM, sum {total} of {size}, "
+                    f"credited code {lost['code']:+d} and data {lost['data']:+d} bytes against the ROM's classes"
                 )
                 raise Refusal(Finding("report.partition", f"{v}: {why}", versions=(v,)))
             out[v] = parts
@@ -675,6 +692,8 @@ def _rom_line(label: str, bucket: Json, cells: int) -> str:
     blobs, against the exact ROM size."""
     sure = bucket["code_matched"] + bucket["data_matched"] + bucket["blobs_decoded"] + bucket["platform_total"]
     reach = sure + bucket["code_fuzzy"] + bucket["data_fuzzy"] + bucket["blobs_identified"]
+    if sure > bucket["rom_size"]:  # a class counted twice: never a percentage of it
+        raise Refusal(Finding("report.partition", f"{label.strip()}: {sure} counted bytes of {bucket['rom_size']}"))
     return _bar(label, sure, reach, bucket["rom_size"], cells)
 
 
@@ -703,14 +722,22 @@ _BLOB_KEYS = (
 
 
 def _blobs_line(label: str, held: Json, cells: int) -> str:
-    """Blobs: █ decoded (proven fill included), ▒ identified, ░ the rest, over the ROM bytes outside code, data and
-    platform."""
-    return _bar(label, held["blobs_decoded"], held["blobs_total"], held["blobs_total"] + held["unknown_total"], cells)
+    """Blobs: █ decoded (proven fill included), ▒ identified, ░ the rest, over the blob bytes progress.json also
+    states; the unknown bytes are no blob and have their own line."""
+    return _bar(label, held["blobs_decoded"], held["blobs_total"], held["blobs_total"], cells)
+
+
+def _unknown_line(label: str, held: Json) -> str:
+    """The README line of the ROM bytes no class holds: shown whenever there are any, never inside a percentage."""
+    return f"{label} {held['unknown_total']:,} bytes"
 
 
 def _linker_fill(bucket: Json, counted: bool) -> str:
     """The README tail of a bar row: the linker's alignment fill, its own class beside the bar and never part of it."""
-    return f", linker fill {bucket['linker_fill_total']:,} bytes" if counted else ""
+    if not counted:
+        return ""
+    unknown = f", unknown {bucket['unknown_total']:,} bytes" if bucket["unknown_total"] else ""
+    return f", linker fill {bucket['linker_fill_total']:,} bytes{unknown}"
 
 
 def _rom_sha256(config: Any, version: str) -> str:
@@ -772,6 +799,8 @@ def readme(text: str, config: Any, report: Json) -> str:
             rows = [_line(k.ljust(9), versions[v], cells, k) for k in ("code", "data", "functions")]
             if "rom_size" in versions[v]:
                 rows.append(_blobs_line("blobs".ljust(9), versions[v], cells))
+                if versions[v]["unknown_total"]:
+                    rows.append(_unknown_line("unknown".ljust(9), versions[v]))
             blocks.append(header + "\n|---|\n| <pre><code>" + "</code><br><code>".join(rows) + "</code></pre> |")
         text = text[: text.index(begin) + len(begin)] + "\n" + "\n\n".join(blocks) + "\n" + text[text.index(end) :]
         first, last = settings["dependencies_begin"], settings["dependencies_end"]

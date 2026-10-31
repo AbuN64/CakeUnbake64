@@ -99,8 +99,8 @@ no class above (platform, code, data, blobs) holds it, so a fill byte is never c
 `unknown`. It never raises a bar either: the README bars and `matched` totals stay what source and blobs earn.
 
 - `unbake report` carries `linker_fill_total` per version beside `platform_total` and `unknown_total`.
-- The README progress block ends each bar row with `, linker fill N bytes` (the `all` row sums the versions).
-- `progress.json` schema 2 carries `linker_fill: {bytes}` per cart, beside `blobs` and `header`.
+- The README progress block ends each bar row with `, linker fill N bytes` and, when any byte is unknown, `, unknown N bytes` (the `all` row sums the versions); a version's table adds an `unknown` line. 100.00% shows only at unknown 0; every other percentage is floored.
+- `progress.json` schema 2 carries one `partition` per cart: `header`, `code`, `data`, `blob`, `linker_fill` and `unknown`, each with `bytes`, summing to `rom_size`.
 
 ### Linker fill in the audit
 

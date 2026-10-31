@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from unbake import fillaudit, linkfill, objectplan, progress, report, versions
-from unbake.contracts import sha256
+from unbake.contracts import Refusal, sha256
 from unbake.linkfill import Fill
 from unbake.objectplan import Atom
 
@@ -79,13 +79,26 @@ def test_the_fill_bytes_never_count_toward_the_matched_source(tmp_path):
 def test_progress_cart_carries_the_linker_fill_beside_code_not_in_it(tmp_path, monkeypatch):
     monkeypatch.setattr(progress, "_header", lambda config, version: {})
     row = {**_bucket(code_total=400, code_matched=100, linker_fill_total=24), "functions_total": 0}
-    row |= {"platform_total": 64}
+    row |= {"platform_total": 64, "rom_size": 488, "data_total": 0, "data_matched": 0}
+    row |= {"blobs_total": 0, "blobs_decoded": 0, "unknown_total": 0}
     config = _config(tmp_path)
     config.project.version["us"].meta = {"cartridge_id": "NUS-X-0"}
     (cart,) = progress.document(config, None, {"versions": {"us": row}})["carts"]
-    assert cart["linker_fill"] == {"bytes": 24}
-    assert cart["code"]["matched"] == 100 and cart["code"]["total"] == 400
-    assert cart["blobs"] == {"decoded": 0, "total": 0}
+    part = cart["partition"]
+    assert part["linker_fill"] == {"bytes": 24}
+    assert part["code"] == {"bytes": 400, "matched": 100}
+    assert part["blob"] == {"bytes": 0, "decoded": 0} and part["unknown"] == {"bytes": 0}
+
+
+def test_progress_refuses_classes_that_do_not_sum_to_the_rom(tmp_path, monkeypatch):
+    monkeypatch.setattr(progress, "_header", lambda config, version: {})
+    row = {**_bucket(code_total=400, code_matched=100, linker_fill_total=24), "functions_total": 0}
+    row |= {"platform_total": 64, "rom_size": 487, "data_total": 0, "data_matched": 0}
+    row |= {"blobs_total": 0, "blobs_decoded": 0, "unknown_total": 0}
+    config = _config(tmp_path)
+    config.project.version["us"].meta = {}
+    with pytest.raises(Refusal, match="sum to 488 of 487"):
+        progress.document(config, None, {"versions": {"us": row}})
 
 
 # ---------------------------------------------------------------- audit

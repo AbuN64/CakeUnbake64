@@ -303,12 +303,13 @@ Tracked generated files (`unbake sync`; each starts with the stamp `generated fr
 
 `unbake report` atomically writes `progress.json`, schema 2, and the map files, from its credit rows and checked ROM
 partition.
-`carts` contains every version: cartridge `id`, `version`, `rom_size`, then its parts `code`, `data` (each `matched`,
-`total`), `blobs` (`decoded`, `total`) and `header`: the header block's `bytes` (the platform bytes: cartridge header
-and boot code) and the parsed fields of the ROM's 64-byte cartridge header (`pi` `release`/`page_size`/`pulse_width`/
-`latency`, `clock_rate`, `entry_point`, libultra `release`, `crc1`, `crc2`, `name`, `game_id`, `country`, `version`),
-never raw bytes and nothing past 0x40; and `functions` (`matched`, `total`). There is no fuzzy credit, no blob type
-census and no unknown field: what the parts do not cover is the rest of `rom_size`, never stored.
+`carts` contains every version: cartridge `id`, `version`, `rom_size`, `partition` and `functions` (`matched`, `total`).
+The partition walks the ROM once: every byte is in exactly one class, `header` (`bytes`: the cartridge header and boot
+code, with the parsed fields of the 64-byte cartridge header: `pi` `release`/`page_size`/`pulse_width`/`latency`,
+`clock_rate`, `entry_point`, libultra `release`, `crc1`, `crc2`, `name`, `game_id`, `country`, `version`; never raw
+bytes and nothing past 0x40), `code` and `data` (`bytes`, `matched`), `blob` (`bytes`, `decoded`), `linker_fill`
+and `unknown` (`bytes`), and the `bytes` sum to `rom_size` exactly (`audit.partition` refuses any other sum). The
+README shows 100.00% only at `unknown` 0, floors every other percentage and lists the unknown bytes on their own line.
 progress.json carries no map. Each version's map is its own file `docs/map-<version>.json` (schema 1, written with
 progress.json under the same hold): `version`, `rom_size`, `fns` rows `[name, rom, size, percent, path, line]`,
 `blobs` rows `[id, rom, size, state, type]` of the live content types only (accounting rows stay in blobs.toml), and `spans` with `data`, `platform` and `fill` (proven fill) half-open

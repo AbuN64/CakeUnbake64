@@ -131,32 +131,53 @@ def maps(config: Any, tree: Any, current: Json) -> dict[str, Json]:
 
 
 def document(config: Any, tree: Any, current: Json) -> Json:
-    """One cart per version: the ROM size, then its parts (code, data, blobs as matched or decoded of total, and the
-    header block: cartridge header and boot code bytes with the header's fields), and the function counts. What the
-    parts do not cover is not stored. All totals come from the same report; the maps are their own files (`maps`,
-    `map_path`), so progress.json stays a small summary."""
+    """One cart per version: the ROM size, its partition and the function counts (`_cart`). All totals come from the
+    same report as the README; the maps are their own files (`maps`, `map_path`), so progress.json stays a small
+    summary."""
     carts = []
     for version, row in current["versions"].items():
         if "rom_size" not in row:
             raise Refusal(Finding("report.rom", "progress.json requires the ROM byte partition", versions=(version,)))
-        carts.append(
-            {
-                "id": config.project.version[version].meta.get("cartridge_id", ""),
-                "version": version,
-                "rom_size": row["rom_size"],
-                **{
-                    kind: {
-                        **{part: row[f"{kind}_{part}"] for part in ("matched", "total")},
-                        **({"asm": row[f"{kind}_asm"]} if row.get(f"{kind}_asm") else {}),  # matched library asm
-                    }
-                    for kind in ("code", "data", "functions")
-                },
-                "blobs": {"decoded": row["blobs_decoded"], "total": row["blobs_total"]},
-                "linker_fill": {"bytes": row["linker_fill_total"]},
-                "header": {"bytes": row["platform_total"], **_header(config, version)},
-            }
-        )
+        carts.append(_cart(config, version, row))
     return {"schema": 2, "carts": carts}
+
+
+def _cart(config: Any, version: str, row: Json) -> Json:
+    """One version: its ROM size and the one partition (every ROM byte in exactly one of header, code, data, blob,
+    linker fill, unknown), then the function counts. Each class's `bytes` is its swept share of the ROM; `matched`
+    and `decoded` are the part of it that is source or decoded."""
+    partition = {
+        "header": {"bytes": row["platform_total"], **_header(config, version)},
+        "code": {
+            "bytes": row["code_total"],
+            "matched": row["code_matched"],
+            **({"asm": row["code_asm"]} if row.get("code_asm") else {}),  # matched library asm
+        },
+        "data": {"bytes": row["data_total"], "matched": row["data_matched"]},
+        "blob": {"bytes": row["blobs_total"], "decoded": row["blobs_decoded"]},
+        "linker_fill": {"bytes": row["linker_fill_total"]},
+        "unknown": {"bytes": row["unknown_total"]},
+    }
+    counted = sum(part["bytes"] for part in partition.values())
+    late = [k for k in ("code", "data") if partition[k]["matched"] > partition[k]["bytes"]]
+    if counted != row["rom_size"] or late or partition["blob"]["decoded"] > partition["blob"]["bytes"]:
+        raise Refusal(
+            Finding(
+                "report.partition",
+                f"{version}: the classes sum to {counted} of {row['rom_size']} bytes (matched above its class: {late})",
+                versions=(version,),
+            )
+        )
+    return {
+        "id": config.project.version[version].meta.get("cartridge_id", ""),
+        "version": version,
+        "rom_size": row["rom_size"],
+        "partition": partition,
+        "functions": {
+            **{part: row[f"functions_{part}"] for part in ("matched", "total")},
+            **({"asm": row["functions_asm"]} if row.get("functions_asm") else {}),
+        },
+    }
 
 
 def unmatched(config: Any, tree: Any) -> list[Json]:

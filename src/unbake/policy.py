@@ -1586,6 +1586,28 @@ def _credit_drops(root: Path, against: str, git: str, tmp: Path) -> dict[str, in
     return {v: n - after[v] for v, n in before.items() if v in after and after[v] < n}
 
 
+def _partition_findings(root: Path) -> list[Finding]:
+    """A cart of progress.json whose classes do not sum to its ROM size: a byte counted twice (or in no class). The
+    report walks the ROM once, so a sum above or below `rom_size` is a counting defect, never rounding."""
+    path = root / "progress.json"
+    if not path.is_file():
+        return []
+    out = []
+    for cart in json.loads(path.read_bytes()).get("carts", ()):
+        counted = sum(part["bytes"] for part in cart.get("partition", {}).values())
+        if counted != cart["rom_size"]:
+            out.append(
+                Finding(
+                    "audit.partition",
+                    f"progress.json {cart['version']}: the classes sum to {counted} bytes, the ROM is {cart['rom_size']}",
+                    path="progress.json",
+                    versions=(cart["version"],),
+                    action="run unbake sync; the classes must hold every ROM byte exactly once",
+                )
+            )
+    return out
+
+
 def _blobs(git: str, root: Path, tmp: Path, rev: str, paths: Sequence[str]) -> dict[str, str]:
     """path -> text of each path as `rev` holds it (those it lacks are absent), in one git process."""
     request = "".join(f"{rev}:{p}\n" for p in paths).encode()
@@ -1799,6 +1821,7 @@ def _audit(params: Json) -> Json:
     drift, unchecked = _generated_drift(root, everything, settings)
     refusals.extend(drift)
     refusals.extend(fillaudit.audit(root, params.get("plan")))
+    refusals.extend(_partition_findings(root))
     removed = _removed_functions(changed, root, against, git, tmp)
     dropped = _credit_drops(root, against, git, tmp)
     unexplained = {v: n for v, n in dropped.items() if n > removed}

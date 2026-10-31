@@ -338,11 +338,12 @@ def test_readme_with_blob_accounting_measures_against_the_rom_and_drops_the_part
     out = report.readme("<!-- progress -->\n<!-- /progress -->", config, current)
     for row in ("code      [", "data      [", "functions ["):  # values of the old rows are the same
         assert row.strip() in plain and row.strip() in out
-    assert "blobs     [░░░░░░░░░░░░░░░░░░░░]   0.00% (~0.01%)  400 of 7,295,964</code>" in out
+    assert "blobs     [████████░░░░░░░░░░░░]  40.00% (~100.00%)  400 of 1,000</code>" in out
+    assert "unknown   7,294,964 bytes</code>" in out  # the bytes no class holds: their own line, in no percentage
     for gone in ("platform  [", "unknown   [", "rom       ", "data = C globals"):
         assert gone not in out
     # the top bars are measured against the exact ROM size: matched code+data+blobs plus platform, reaching fuzzy
-    assert " of 8,388,608 bytes, linker fill 0 bytes</code>" in out and "us   [" in out
+    assert " of 8,388,608 bytes, linker fill 0 bytes, unknown " in out and "us   [" in out
     assert " of 16,777,216 bytes, linker fill 0 bytes</code>" in out
     sure = sum(current["versions"]["us"][k] for k in ("code_matched", "data_matched")) + 400 + 4096
     assert f"{sure:,} of 8,388,608 bytes" in out
@@ -564,10 +565,12 @@ def test_report_publishes_schema2_and_next_from_the_same_credit_rows(published_c
     assert document["schema"] == 2
     cart = document["carts"][0]
     assert cart["functions"] == {"matched": 1, "total": 3}
-    assert cart["code"] == {"matched": 16, "total": 32}
-    assert cart["blobs"] == {"decoded": 32, "total": 64}
-    assert cart["header"]["bytes"] == 4096
-    assert not {"platform", "unknown"} & set(cart) and "by_type" not in cart["blobs"]
+    part = cart["partition"]
+    assert part["code"] == {"bytes": 32, "matched": 16}
+    assert part["blob"] == {"bytes": 64, "decoded": 32}
+    assert part["header"]["bytes"] == 4096
+    assert sum(v["bytes"] for v in part.values()) == cart["rom_size"]  # one partition: every byte in one class
+    assert not {"code", "blobs", "header", "linker_fill"} & set(cart)
     published_map = json.loads((config.project.root / "docs/map-a.json").read_bytes())
     configuration.validate("progress.map", published_map, "docs/map-a.json")
     assert published_map["schema"] == 1 and published_map["version"] == "a" and published_map["scorer"] == 4
@@ -580,7 +583,7 @@ def test_report_publishes_schema2_and_next_from_the_same_credit_rows(published_c
     assert [row[0] for row in published_map["blobs"]] == ["tex", "other", "observed"]
     assert "map" not in document and "maps" not in document
     assert sorted(p.name for p in (config.project.root / "docs").iterdir()) == ["map-a.json"]
-    assert cart["header"]["game_id"] == "NXXE" and cart["header"]["crc1"] == 0x12345678
+    assert part["header"]["game_id"] == "NXXE" and part["header"]["crc1"] == 0x12345678
     assert [(r["name"], r["size"]) for r in result["next"]] == [("asm", 8), ("fuzzy", 8)]
     before = (config.project.root / "progress.json").read_bytes()
     assert "next" not in report.run(config, {})
@@ -608,10 +611,10 @@ def test_blobs_bar_leaves_the_rest_empty_and_excludes_code_data_platform():
         "unknown_total": 500,
     }
     assert report._blobs_line("blobs", held, 20) == (
-        "blobs [" + "█" * 4 + "▒" * 6 + "░" * 10 + "]  20.00% (~50.00%)  200 of 1,000"
+        "blobs [" + "█" * 8 + "▒" * 12 + "]  40.00% (~100.00%)  200 of 500"
     )
     assert report._blobs_line("blobs", {"blobs_decoded": 0, "blobs_total": 0, "unknown_total": 1000}, 20) == (
-        "blobs [" + "░" * 20 + "]   0.00%  0 of 1,000"
+        "blobs [" + "░" * 20 + "]   0.00%  0 of 0"
     )
 
 
@@ -870,3 +873,12 @@ def test_states_count_a_fakematch_build_as_fuzzy_like_the_map(project, monkeypat
     a = report._states(_config(project), tree)["versions"]["a"]
     assert a["functions"]["fuzzy"] == 1 and a["functions"]["exact"] == 1 and a["functions"]["none"] == 0
     assert a["code"]["fuzzy"] == 20 and a["none_fns"] == []
+
+
+def test_extents_keep_the_place_of_a_row_cut_by_platform_bytes():
+    """Regression, de g_gameThreadStack: 28,880 bytes at 0xE8880 with 16,096 platform bytes inside it. Shrunk to its
+    12,784 credited bytes it slid onto platform bytes, so 624 of its own tail fell to blobs and unknown."""
+    member = report.Symbol("data", "src/a.c", "c", 0xE8880)
+    row = report.Credit("g_gameThreadStack", member, None, "seg", "de", 0, 12784, 0, True, 100.0, platform=16096)
+    (table,) = report.extents([row], ["de"]).values()
+    assert table == {"g_gameThreadStack@952448": (0, 0xE8880, 28880, "data")}
