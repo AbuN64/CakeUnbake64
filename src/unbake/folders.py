@@ -37,6 +37,7 @@ Everything about one project's folders is in its rules file; this module names n
 
 from __future__ import annotations
 
+import bisect
 import csv
 import io
 import json
@@ -641,7 +642,8 @@ def apply(config: Config, params: Json) -> Row:
         effort.forget("pin", "includes", "closure", "listing")
         loaded = Config(project, config.host, digest((project.digest, config.host.digest)))
         try:
-            written = [*map_writes, *repo.sync(loaded, {})["written"]]
+            # an existing Makefile keeps the [file] rows it was generated with, so rows that moved regenerate it
+            written = [*map_writes, *repo.sync(loaded, {"makefile": True} if changed else {})["written"]]
             held: list[Row] = []
         except (
             Refusal
@@ -803,9 +805,71 @@ def verify(config: Config, params: Json) -> Row:
         }
 
 
+def _symbols(elf: Path) -> tuple[list[int], list[tuple[int, int, str]]]:
+    """The linked image's sized object and function symbols by address: (addresses, [(address, size, name)])."""
+    from elftools.elf.elffile import ELFFile
+    from elftools.elf.sections import SymbolTableSection
+
+    with elf.open("rb") as handle:
+        table = ELFFile(handle).get_section_by_name(".symtab")
+        found = (
+            sorted(
+                (s["st_value"], s["st_size"], s.name)
+                for s in table.iter_symbols()
+                if s.name and s["st_info"]["type"] in ("STT_FUNC", "STT_OBJECT") and s["st_shndx"] != "SHN_UNDEF"
+            )
+            if isinstance(table, SymbolTableSection)
+            else []
+        )
+    return [a for a, _, _ in found], found
+
+
+def _moved(config: Config, version: str, owners: Mapping[str, str], limit: int = 50) -> list[str]:
+    """Where the built ROM of a version differs from its baserom, one line per module (a merged unit of `owners`, else
+    the symbol): the first differing ROM offset and the symbol at or before its address. A ROM shorter or longer
+    than the baserom is named first."""
+    project = config.project
+    built = project.root / "build" / version / f"{project.name}.z64"
+    if not built.is_file():
+        return [f"{version}: no ROM was built"]
+    ours, theirs = built.read_bytes(), configuration.rom(project, version).read_bytes()
+    lines = [] if len(ours) == len(theirs) else [f"{version}: ROM is {len(ours)} bytes, the baserom {len(theirs)}"]
+    elf = project.root / "build" / version / f"{project.name}.elf"
+    addresses, table = _symbols(elf) if elf.is_file() else ([], [])
+    cuts = [(start, end, vram) for _, start, end, vram in rommap.pieces(config, version)]
+    names: dict[str, str] = {}
+    for path, module in owners.items():
+        obj = project.root / "build" / version / f"{path}.o"
+        if obj.is_file():
+            names.update({n: module for n in merging.object_facts(obj)[3] if n})
+    seen: set[str] = set()
+    step = 4096
+    for at in range(0, min(len(ours), len(theirs)), step):
+        if ours[at : at + step] == theirs[at : at + step]:
+            continue
+        pair = zip(ours[at : at + step], theirs[at : at + step], strict=True)
+        first = at + next(i for i, (a, b) in enumerate(pair) if a != b)
+        vram = next((v + first - s for s, e, v in cuts if s <= first < e), None)
+        symbol = "?"
+        if vram is not None and addresses:
+            i = bisect.bisect_right(addresses, vram) - 1
+            symbol = table[i][2] if i >= 0 else "?"
+        module = names.get(symbol, "")
+        label = module or symbol
+        if label in seen:
+            continue
+        seen.add(label)
+        owner = f"module {module}, " if module else ""
+        lines.append(f"{version}: {owner}symbol {symbol}, first differing ROM offset 0x{first:X}")
+        if len(seen) >= limit:
+            break
+    return lines
+
+
 def prove(config: Config, params: Json) -> Row:
-    """The ROMs of every version, built and compared once: `make check` on the moved tree, refused with its tail when
-    any ROM differs or the build fails."""
+    """The ROMs of every version, built and compared once: `make check` on the moved tree, refused when any ROM differs
+    or the build fails. A ROM that differs is named by version, module (a merged unit of `owners`), symbol and first
+    differing offset, so the module that moves is not left to a bisection."""
     with effort.stage("layout.prove"):
         root = config.project.root
         jobs = int(params.get("jobs") or 4)
@@ -813,7 +877,9 @@ def prove(config: Config, params: Json) -> Row:
         done = process.run("make check", [make, f"-j{jobs}", "check"], root, tmp=process.scratch(root), timeout=3600)
         tail = [line for line in (done.stdout + done.stderr).decode(errors="replace").splitlines() if line.strip()]
         if done.exit != 0:
-            raise _refuse(f"make check exit {done.exit} after the move", missing=tuple(tail[-20:]))
+            owners = params.get("owners") or {}
+            named = [line for v in config.project.versions for line in _moved(config, v, owners)]
+            raise _refuse(f"make check exit {done.exit} after the move", missing=(*named, *tail[-20:]))
         return {"proved": True, "check": tail[-5:]}
 
 
@@ -931,6 +997,24 @@ def _carry_rows(text: str, project: Project, merges: Sequence[tuple[Sequence[str
                 table.remove(unit)
     if not len(table):
         document.pop("file")
+    return tomlkit.dumps(document)
+
+
+def _split_rows(text: str, unit: str, pieces: Sequence[str]) -> str:
+    """config.toml after a split: the [file] row of `unit` sits on every piece that has none, and leaves a path no
+    piece holds."""
+    document: Any = tomlkit.parse(text)
+    table = document.get("file")
+    if table is None or unit not in table:
+        return text
+    for piece in pieces:
+        if piece != unit and piece not in table:
+            body = tomlkit.table()
+            for key, value in table[unit].items():
+                body.add(key, getattr(value, "unwrap", lambda value=value: value)())
+            table.add(piece, body)
+    if unit not in pieces:
+        table.remove(unit)
     return tomlkit.dumps(document)
 
 
@@ -1263,13 +1347,39 @@ def _mergecheck_plan(params: Json) -> Row:
     return {"action": "mergecheck", "targets": len(rows), "verdicts": dict(counts), "refused": refused}
 
 
+def _build_merged(
+    config: Config, params: Json, paths: Sequence[str]
+) -> dict[tuple[str, str], dict[str, list[tuple[int, int]]]]:
+    """The merged units' own objects in every version, built by `make` and read back: per version and merged path the
+    object's sections (name -> (size, alignment) pieces). The in-object padding of a merged unit is the compiler's, so
+    it is measured on the object and not estimated."""
+    root = config.project.root
+    obj = str(params.get("obj") or "build/{version}/{unit}.o")
+    targets = {(v, p): obj.format(version=v, unit=p) for v in config.project.versions for p in paths}
+    make = process.tool(config, "make")
+    jobs = int(params.get("jobs") or 4)
+    names = sorted(set(targets.values()))
+    done = process.run("make objects", [make, f"-j{jobs}", *names], root, tmp=process.scratch(root), timeout=3600)
+    if done.exit != 0:
+        tail = [line for line in (done.stdout + done.stderr).decode(errors="replace").splitlines() if line.strip()]
+        raise _refuse(
+            f"make of the merged objects exit {done.exit}: their sizes set the fill", missing=tuple(tail[-20:])
+        )
+    return {key: merging.object_facts(root / name)[2] for key, name in targets.items() if (root / name).is_file()}
+
+
 def _regenerate_fills(
-    config: Config, seqs: Mapping[str, Sequence[Row]], prepared: Sequence[tuple[str, list[str], str, Row]]
+    config: Config,
+    params: Json,
+    seqs: Mapping[str, Sequence[Row]],
+    prepared: Sequence[tuple[str, list[str], str, Row]],
+    built: Mapping[tuple[str, str], Mapping[str, Sequence[tuple[int, int]]]] | None = None,
 ) -> dict[str, Row]:
     """Rewrite `versions/<v>/linker_fill.toml` for the merged objects: where one merged object is smaller than the
     span its pieces linked in, the ROM bytes of the difference become a fill row, and the rows the pieces held inside
-    that span go. A version whose file would be empty has none. Returns per changed version the rows dropped and
-    written."""
+    that span go. A version whose file would be empty has none. `built` holds the merged objects' real sections (by
+    version and merged path): without it the size is estimated, with it the in-object alignment is the compiler's.
+    Returns per changed version the rows dropped and written."""
     project = config.project
     out: dict[str, Row] = {}
     multi = [(units, path) for _, units, path, _ in prepared if len(units) > 1]
@@ -1277,7 +1387,8 @@ def _regenerate_fills(
         cuts = {name: (start, vram) for name, start, _, vram in rommap.pieces(config, version)}
         runs: list[tuple[str, str, int, int, int, int]] = []
         for units, merged_path in multi:
-            for section, linked, merged, start in merging.spans(seqs[version], set(units)):
+            own = None if built is None else built.get((version, merged_path))
+            for section, linked, merged, start in merging.spans(seqs[version], set(units), own):
                 if section.lstrip(".") in cuts:
                     at, vram = cuts[section.lstrip(".")]
                     runs.append(
@@ -1292,11 +1403,36 @@ def _regenerate_fills(
             store.write(
                 target, linkfill.render(version, rows, "generated by `unbake layout merge`; do not edit").encode()
             )
-        else:
-            target.unlink(missing_ok=True)
+        elif target.is_file():
+            store.remove(target)
         if dropped or written:
             out[version] = {"dropped": dropped, "written": written}
     return out
+
+
+def _index_of(config: Config, paths: Sequence[str]) -> dict[str, str]:
+    """The index entry (`<mode> <sha> <stage>\t<path>`) of each path that has one."""
+    done = _git(config, "ls-files", "-s", "-z", "--", *paths).decode()
+    return {line.partition("\t")[2]: line for line in done.split("\0") if line}
+
+
+def _restore_index(config: Config, before: Mapping[str, str], paths: Sequence[str]) -> None:
+    """Put the index entries of `paths` back as `before` held them; a path it did not hold leaves the index."""
+    gone = [p for p in paths if p not in before]
+    if gone:
+        _git(config, "rm", "-q", "--cached", "--ignore-unmatch", "--", *gone)
+    if before:
+        git = process.tool(config, "git")
+        feed = "".join(f"{line}\0" for line in before.values()).encode()
+        done = process.run(
+            "git update-index",
+            [git, "update-index", "-z", "--index-info"],
+            config.project.root,
+            tmp=process.scratch(config.project.root),
+            stdin=feed,
+        )
+        if done.exit != 0:
+            raise Refusal(Finding("native.exit", f"git update-index exit {done.exit}"))
 
 
 def merge(config: Config, params: Json) -> Row:
@@ -1370,45 +1506,64 @@ def merge(config: Config, params: Json) -> Row:
         out: Row = {"action": "merge", "modules": [], "kept": len(unchanged), "written": []}
         if not prepared:
             return out
-        map_file = Path(params["modules"])
-        map_text = _module_paths(merging.merged_modules(map_file.read_text(), mapping), mapping)
-        map_writes = _module_writes(config, mapping)
-        map_writes = {path: body for path, body in map_writes.items() if (root / path).resolve() != map_file.resolve()}
-        for module, units, merged_path, merged in prepared:
-            for unit in units:
-                if unit != merged_path:
-                    (root / unit).unlink()
-            store.write(root / merged_path, merged["text"].encode())
-            out["modules"].append(
-                {
-                    "module": module,
-                    "file": merged_path,
-                    "units": len(units),
-                    **{key: merged[key] for key in ("includes", "pads", "dropped", "conflicts", "retyped")},
+        staged = sorted(set(mapping) | destinations)
+        before_index = _index_of(config, staged)
+        with store.journal() as undone:
+            try:
+                map_file = Path(params["modules"])
+                map_text = _module_paths(merging.merged_modules(map_file.read_text(), mapping), mapping)
+                map_writes = _module_writes(config, mapping)
+                map_writes = {
+                    path: body for path, body in map_writes.items() if (root / path).resolve() != map_file.resolve()
                 }
-            )
-        _git(config, "add", "-A", "--", *sorted(set(mapping) | destinations))
-        out["fills"] = _regenerate_fills(config, seqs, prepared)
-        store.write(map_file, map_text.encode())
-        for path, body in map_writes.items():
-            store.write(root / path, body.encode())
-        tracked = (tracked - set(mapping)) | destinations
-        settings = root / "config.toml"
-        rows_moved = False
-        if settings.is_file():
-            held = settings.read_text()
-            carried = _carry_rows(held, config.project, [(us, to) for _, us, to, _ in prepared])
-            if carried != held:
-                store.write(settings, carried.encode())
-                rows_moved = True
-        project = configuration.load_project(root, lambda path: (root / path).read_bytes(), lambda: sorted(tracked))
-        effort.forget("pin", "includes", "closure", "listing")
-        loaded = Config(project, config.host, digest((project.digest, config.host.digest)))
-        # an existing Makefile keeps the [file] rows it was generated with, so rows that moved regenerate it
-        out["written"] = [*map_writes, *repo.sync(loaded, {"makefile": True} if rows_moved else {})["written"]]
-        if params.get("prove"):
-            out.update(prove(loaded, params))
-        return out
+                for module, units, merged_path, merged in prepared:
+                    for unit in units:
+                        if unit != merged_path:
+                            store.remove(root / unit)
+                    store.write(root / merged_path, merged["text"].encode())
+                    out["modules"].append(
+                        {
+                            "module": module,
+                            "file": merged_path,
+                            "units": len(units),
+                            **{key: merged[key] for key in ("includes", "pads", "dropped", "conflicts", "retyped")},
+                        }
+                    )
+                _git(config, "add", "-A", "--", *staged)
+                out["fills"] = _regenerate_fills(config, params, seqs, prepared)
+                store.write(map_file, map_text.encode())
+                for path, body in map_writes.items():
+                    store.write(root / path, body.encode())
+                tracked = (tracked - set(mapping)) | destinations
+                settings = root / "config.toml"
+                rows_moved = False
+                if settings.is_file():
+                    held = settings.read_text()
+                    carried = _carry_rows(held, config.project, [(us, to) for _, us, to, _ in prepared])
+                    if carried != held:
+                        store.write(settings, carried.encode())
+                        rows_moved = True
+                project = configuration.load_project(
+                    root, lambda path: (root / path).read_bytes(), lambda: sorted(tracked)
+                )
+                effort.forget("pin", "includes", "closure", "listing")
+                loaded = Config(project, config.host, digest((project.digest, config.host.digest)))
+                # an existing Makefile keeps the [file] rows it was generated with, so rows that moved regenerate it
+                out["written"] = [*map_writes, *repo.sync(loaded, {"makefile": True} if rows_moved else {})["written"]]
+                joined = [path for _, units, path, _ in prepared if len(units) > 1]
+                if seqs and joined:
+                    exact = _regenerate_fills(config, params, seqs, prepared, _build_merged(config, params, joined))
+                    if exact:
+                        out["fills"] = {**out["fills"], **exact}
+                        repo.sync(loaded, {})
+                if params.get("prove"):
+                    owners = {path: module for module, _, path, _ in prepared}
+                    out.update(prove(loaded, {**params, "owners": owners}))
+                return out
+            except BaseException:
+                store.undo(undone)
+                _restore_index(config, before_index, staged)
+                raise
 
 
 def _read_owners(text: str, unit: str) -> dict[str, str]:
@@ -1490,6 +1645,14 @@ def split(config: Config, params: Json) -> Row:
         for file, body in writes.items():
             store.write(file, body.encode())
         tracked = (tracked - {unit}) | set(paths.values())
+        settings = root / "config.toml"
+        rows_moved = False
+        if settings.is_file():
+            held = settings.read_text()
+            carried = _split_rows(held, unit, list(paths.values()))
+            if carried != held:
+                store.write(settings, carried.encode())
+                rows_moved = True
         project = configuration.load_project(root, lambda path: (root / path).read_bytes(), lambda: sorted(tracked))
         effort.forget("pin", "includes", "closure", "listing")
         loaded = Config(project, config.host, digest((project.digest, config.host.digest)))
@@ -1500,7 +1663,7 @@ def split(config: Config, params: Json) -> Row:
             "unassigned": done["unassigned"],
             "unstatic": done["unstatic"],
             "declared": done["declared"],
-            "written": repo.sync(loaded, {})["written"],
+            "written": repo.sync(loaded, {"makefile": True} if rows_moved else {})["written"],
         }
         if params.get("prove"):
             out.update(prove(loaded, params))

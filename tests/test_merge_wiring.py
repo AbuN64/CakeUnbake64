@@ -77,13 +77,13 @@ def test_merge_regenerates_the_fill_file_of_every_version(cfg, monkeypatch) -> N
     rom[0x108:0x10C] = b"\x00\x12\x00\x34"
     monkeypatch.setattr(folders.configuration, "rom", Mock(return_value=Mock(read_bytes=lambda: bytes(rom))))
     monkeypatch.setattr(folders.store, "write", lambda target, data: target.write_bytes(data))
-    out = folders._regenerate_fills(cfg, {version: span_seq()}, [("M", ["a", "b"], "src/M.c", {})])
+    out = folders._regenerate_fills(cfg, {}, {version: span_seq()}, [("M", ["a", "b"], "src/M.c", {})])
     assert out == {version: {"dropped": 0, "written": 1}}
     rows = linkfill.read(root, version)
     assert [(f.object, f.rom, f.address) for f in rows] == [("src/M.c", 0x108, 0x80000008)]
     # the next merge finds the rows it wrote inside the span of a merged object that now fills it
     rom[0x108:0x10C] = bytes(4)
-    again = folders._regenerate_fills(cfg, {version: span_seq()}, [("M", ["a", "b"], "src/M.c", {})])
+    again = folders._regenerate_fills(cfg, {}, {version: span_seq()}, [("M", ["a", "b"], "src/M.c", {})])
     assert again == {version: {"dropped": 1, "written": 0}}
     assert not (root / linkfill.path(version)).exists()
 
@@ -92,7 +92,7 @@ def test_a_module_of_one_unit_has_no_fill_to_regenerate(cfg, monkeypatch) -> Non
     pieces = Mock()
     monkeypatch.setattr(folders.rommap, "pieces", pieces)
     version = cfg.project.versions[0]
-    assert folders._regenerate_fills(cfg, {version: span_seq()}, [("M", ["a"], "src/M.c", {})]) == {}
+    assert folders._regenerate_fills(cfg, {}, {version: span_seq()}, [("M", ["a"], "src/M.c", {})]) == {}
 
 
 A = "int shared;\nint first_text(void) { return shared; }\nint first_data = 1;\n"

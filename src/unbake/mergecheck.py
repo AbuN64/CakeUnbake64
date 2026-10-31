@@ -214,13 +214,17 @@ def _up(position: int, align: int) -> int:
     return -(-position // align) * align
 
 
-def spans(seq: Sequence[Row], units: set[str]) -> list[tuple[str, int, int, int]]:
+def spans(
+    seq: Sequence[Row], units: set[str], built: Mapping[str, Sequence[tuple[int, int]]] | None = None
+) -> list[tuple[str, int, int, int]]:
     """Per output section holding entries of `units`: (section, bytes the linked entries span, bytes one merged object
     spans, offset in the section where the module starts). The linked span walks the section from the module's first
     entry to its last (the module's pieces aligned as linked, ALIGN directives and `MAX(., offset)` pins between
     them); the bytes of other modules between two entries are the `gap` finding's, so they are not walked and the
     pins after them are not read. The merged span packs the module's pieces of each class again, each at its own
-    alignment inside the object (the compiler packs them so), class after class as the link places the sections."""
+    alignment inside the object (the compiler packs them so), class after class as the link places the sections.
+    `built` holds the merged object's own sections (name -> (size, alignment) pieces, `object_facts`): a class it
+    holds is measured on those pieces, so the in-object padding the model cannot see is part of the span."""
     out: list[tuple[str, int, int, int]] = []
     for section in dict.fromkeys(e["o"] for e in seq if e["k"] == "entry" and e["u"] in units):
         rows = [(i, e) for i, e in enumerate(seq) if e["o"] == section]
@@ -250,7 +254,11 @@ def spans(seq: Sequence[Row], units: set[str]) -> list[tuple[str, int, int, int]
                     if i >= mine[0]:
                         classes[cls].append((size, align, row.get("subalign") or 0))
         merged = 0
-        for pieces in classes.values():
+        for cls, pieces in classes.items():
+            if built is not None:
+                own = [p for name, found in built.items() if _section_class(name) == cls for p in found]
+                if own:
+                    pieces = [(size, align, pieces[0][2]) for size, align in own]
             merged = _up(merged, pieces[0][2] or max(a for _, a, _ in pieces))
             packed = 0
             for size, align, _ in pieces:

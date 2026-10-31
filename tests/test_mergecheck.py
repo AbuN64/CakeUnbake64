@@ -515,3 +515,14 @@ def test_sections_parts_real_rows_scene_text_parts_agree_across_five_versions_an
     assert [p["units"] for p in out["M"]["parts"]["text"]] == [["s0"], ["s1"]]
     assert out["N"]["parts"] == {}
     assert out["N"]["verdict"] == "merge"
+
+
+def test_merged_span_follows_the_built_objects_own_padding() -> None:
+    """CURVE: the model packs 4 + 8 B of rodata into 12 B, the built object holds 4 B of padding more (a 8-aligned
+    piece), so the span is 16 B and the regenerated fill starts where the object really ends."""
+    seq = [
+        with_parts(entry("a", "rodata", 4, ".rodata"), rodata=piece(4, 4)),
+        with_parts(entry("b", "rodata", 8, ".rodata"), rodata=piece(8, 4)),
+    ]
+    assert mergecheck.spans(seq, {"a", "b"}) == [(".rodata", 12, 12, 0)]
+    assert mergecheck.spans(seq, {"a", "b"}, {".rodata": [(16, 8)]}) == [(".rodata", 12, 16, 0)]

@@ -487,3 +487,14 @@ def test_a_journal_undoes_what_was_written_in_it(tmp_path: Path) -> None:
     assert (kept.read_bytes(), changed.read_bytes(), made.exists()) == (b"k", b"old", False)
     store.write(changed, b"after")  # outside a journal: recorded nowhere
     assert seen == {changed: b"old", made: None}
+
+
+def test_remove_is_undone_with_the_journal(tmp_path):
+    kept = tmp_path / "a" / "kept.c"
+    kept.parent.mkdir()
+    kept.write_text("int x;\n")
+    with store.journal() as seen:
+        store.remove(kept)
+        assert not kept.exists()
+    store.undo(seen)
+    assert kept.read_text() == "int x;\n"

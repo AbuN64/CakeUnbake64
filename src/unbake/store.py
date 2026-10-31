@@ -48,7 +48,17 @@ def undo(seen: dict[Path, bytes | None]) -> None:
         if before is None:
             path.unlink(missing_ok=True)
         else:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(before)
+    effort.forget("pin", "includes", "closure", "listing")
+
+
+def remove(path: Path) -> None:
+    """Delete a project file the way `write` changes one: the journal keeps its bytes for `undo`."""
+    before = path.read_bytes()
+    for seen in _JOURNALS:
+        seen.setdefault(path, before)
+    path.unlink()
     effort.forget("pin", "includes", "closure", "listing")
 
 

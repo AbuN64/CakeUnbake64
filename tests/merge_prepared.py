@@ -26,7 +26,7 @@ def prepared(cfg: Config, monkeypatch, count=2):
     monkeypatch.setattr(folders, "_verdicts", scan)
     tracked = Mock(side_effect=lambda _: [str(p.relative_to(root)) for p in root.rglob("*.c")])
     monkeypatch.setattr(folders, "_tracked", tracked)
-    stage = Mock()
+    stage = Mock(return_value=b"")
     monkeypatch.setattr(folders, "_git", stage)
     monkeypatch.setattr(folders.configuration, "load_project", Mock(return_value=cfg.project))
     sync = Mock(return_value={"written": ["Makefile"]})

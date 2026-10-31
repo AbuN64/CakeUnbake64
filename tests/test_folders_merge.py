@@ -6,7 +6,7 @@ import pytest
 from merge_prepared import prepared
 
 from unbake import folders, mergecheck
-from unbake.contracts import FileFacts, Refusal
+from unbake.contracts import FileFacts, Finding, Refusal
 
 
 def test_full_map_scans_stages_syncs_and_proves_once(cfg, monkeypatch):
@@ -14,8 +14,9 @@ def test_full_map_scans_stages_syncs_and_proves_once(cfg, monkeypatch):
     result = folders.merge(cfg, {"modules": path, "prove": True})
     assert len(result["modules"]) == 3
     assert [r["units"] for r in result["modules"]] == [2, 2, 2]
-    for call in (scan, stage, sync, prove):
+    for call in (scan, sync, prove):
         assert call.call_count == 1
+    assert [c.args[1] for c in stage.call_args_list] == ["ls-files", "add"]
     for i in range(3):
         merged = cfg.project.root / f"src/group{i}/group{i}.c"
         assert f"function_{i}_0" in merged.read_text() and f"function_{i}_1" in merged.read_text()
@@ -25,7 +26,7 @@ def test_full_map_scans_stages_syncs_and_proves_once(cfg, monkeypatch):
     scan.return_value = ([], rows, {})
     again = folders.merge(cfg, {"modules": path})
     assert again["modules"] == [] and again["kept"] == 3
-    assert sync.call_count == stage.call_count == 1
+    assert sync.call_count == 1 and stage.call_count == 2
 
 
 def test_multiple_hard_refusals_leave_all_files_and_map_unchanged(cfg, monkeypatch):
@@ -101,7 +102,7 @@ def test_single_module_uses_same_batch_path(cfg, monkeypatch):
     result = folders.merge(cfg, {"modules": path, "module": "src/group0.c"})
     assert [r["module"] for r in result["modules"]] == ["src/group0.c"]
     assert (cfg.project.root / "src/group1/part0.c").is_file()
-    assert scan.call_count == stage.call_count == sync.call_count == 1
+    assert scan.call_count == sync.call_count == 1 and stage.call_count == 2
 
 
 @pytest.mark.parametrize("path", ["/outside.c", "../outside.c", "src/../outside.c", "src//bad.c", ".", ".."])
@@ -132,7 +133,7 @@ def test_flat_library_ownership_follows_the_destination(cfg, monkeypatch):
     path, _, stage, _sync, _ = prepared(cfg, monkeypatch)
     cfg.project.libraries = ("src/group0/part0.c",)
     folders.merge(cfg, {"modules": path})
-    stage.assert_called_once()
+    assert [c.args[1] for c in stage.call_args_list] == ["ls-files", "add"]
 
 
 def test_verdict_uses_same_emitted_order_as_merge_on_real_barrel_rows(cfg, monkeypatch):
@@ -155,3 +156,45 @@ def test_verdict_uses_same_emitted_order_as_merge_on_real_barrel_rows(cfg, monke
     seqs["de"] = list(reversed(seq))
     verdicts, _, _ = folders._verdicts(cfg, {})
     assert any(reason.startswith("order: de text") for reason in verdicts[0]["soft"])
+
+
+def test_failed_prove_restores_sources_map_and_index(cfg, monkeypatch):
+    path, _, stage, _sync, prove = prepared(cfg, monkeypatch, 2)
+    root = cfg.project.root
+    prove.side_effect = Refusal(Finding("layout.prove", "make check exit 2 after the move"))
+    before = {p: p.read_bytes() for p in [path, *root.rglob("*.c")]}
+    with pytest.raises(Refusal):
+        folders.merge(cfg, {"modules": path, "prove": True})
+    assert {p: p.read_bytes() for p in before} == before
+    assert sorted(p for p in root.rglob("*.c") if p not in before) == []
+    assert any(call.args[1:3] == ("rm", "-q") for call in stage.call_args_list)
+
+
+def test_prove_names_the_module_whose_bytes_move(cfg, monkeypatch):
+    project = cfg.project
+    version = project.versions[0]
+    build = project.root / "build" / version
+    build.mkdir(parents=True)
+    ours = bytearray(8192)
+    theirs = bytearray(8192)
+    ours[5000] = 1
+    (build / f"{project.name}.z64").write_bytes(bytes(ours))
+    (build / f"{project.name}.elf").write_bytes(b"")
+    monkeypatch.setattr(folders.configuration, "rom", Mock(return_value=build / "base.z64"))
+    (build / "base.z64").write_bytes(bytes(theirs))
+    monkeypatch.setattr(folders.rommap, "pieces", Mock(return_value=(("seg", 4096, 8192, 0x80000000),)))
+    table = [(0x80000000, 4, "a"), (0x80000300, 4, "curve_init")]
+    monkeypatch.setattr(folders, "_symbols", Mock(return_value=([0x80000000, 0x80000300], table)))
+    (build / "src").mkdir()
+    (build / "src" / "CURVE.CPP.o").write_bytes(b"")
+    monkeypatch.setattr(folders.merging, "object_facts", Mock(return_value=({}, set(), {}, {"curve_init"})))
+    lines = folders._moved(cfg, version, {"src/CURVE.CPP": "SOURCE/CURVE"})
+    assert lines == [f"{version}: module SOURCE/CURVE, symbol curve_init, first differing ROM offset 0x1388"]
+
+
+def test_split_carries_the_file_row_to_every_piece():
+    text = '[file."src/A.c"]\ncflags = "-mfp32"\n\n[file."src/B.c"]\ncflags = "-O1"\n'
+    out = folders._split_rows(text, "src/A.c", ["src/A_1.c", "src/A_2.c"])
+    assert 'file."src/A.c"' not in out and out.count("-mfp32") == 2
+    assert "src/A_1.c" in out and "src/A_2.c" in out and "-O1" in out
+    assert folders._split_rows(text, "src/A.c", ["src/A.c", "src/A_2.c"]).count("-mfp32") == 2
