@@ -246,9 +246,10 @@ def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -
     try:
         sha = landed_sha(dict(os.environ) if environ is None else environ)
         for line in deploy(sha, args.board, args.card, TOOLKIT, job_invoke, git, read_log):
-            print(line, flush=True)
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
     except Refused as refusal:
-        print(f"deploy refused: {refusal}", file=sys.stderr)
+        sys.stderr.write(f"deploy refused: {refusal}\n")
         return 1
     return 0
 

@@ -72,8 +72,8 @@ def test_the_activation_deploys_package_unbake_at_the_landed_sha_then_reads_it_b
 
 
 def test_main_moved_on_deploys_the_head_and_defers_the_older_deploy():
-    rig = Rig(activation_log=f"suite-checkout: {CHECKOUT}\nsuite-sha: {NEWER}\nsuite-import: {CHECKOUT}/src/unbake/__init__.py\n",
-              readback=f"readback-pin: unbake {NEWER}\n")
+    log = f"suite-checkout: {CHECKOUT}\nsuite-sha: {NEWER}\nsuite-import: {CHECKOUT}/src/unbake/__init__.py\n"
+    rig = Rig(activation_log=log, readback=f"readback-pin: unbake {NEWER}\n")
     rig.git = lambda *args: (0, NEWER) if args[:2] == ("rev-parse", "gitea/main") else (0, "")
     lines = rig.deploy()
     assert "the older deploy deferred" in lines[0]
@@ -118,7 +118,7 @@ def test_an_already_active_build_skips_the_suite_and_the_readback_still_decides(
 
 def test_job_invoke_refusals_and_bad_answers_are_one_line():
     refusal = json.dumps({"Response": {"Error": {"Code": "Busy", "Message": "no", "NextStep": "wait"}}})
-    with pytest.raises(deploy_rig.Refused, match="Job Invoke refused Busy .*: no; next: wait"):
+    with pytest.raises(deploy_rig.Refused, match=r"Job Invoke refused Busy .*: no; next: wait"):
         deploy_rig.answer_of(1, refusal)
     with pytest.raises(deploy_rig.Refused, match="no Response"):
         deploy_rig.answer_of(0, "not json")
@@ -150,8 +150,12 @@ def wrapper(path, body):
 
 def bash(script, *args, env=None, cwd=None):
     return subprocess.run(
-        ["bash", "-c", script, "t", *args], env={"PATH": os.environ["PATH"], **(env or {})}, cwd=cwd,
-        capture_output=True, text=True, check=False,
+        ["bash", "-c", script, "t", *args],
+        env={"PATH": os.environ["PATH"], **(env or {})},
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 
