@@ -102,11 +102,6 @@ def test_a_file_moved_one_folder_deeper_keeps_its_relative_includes(cfg, monkeyp
     assert result["modules"][0]["file"] == "src/sdk/audio/alsynset/alsynset.c"
 
 
-PRINTF_A = (
-    "extern const char g_printfLowercaseHexDigits[];\n"
-    "const char *Printf_Digit(int i) { return &g_printfLowercaseHexDigits[i]; }\n"
-)
-PRINTF_B = 'const char g_printfLowercaseHexDigits[] = "0123456789abcdef";\n'
 PRINTF_C = (
     "#if defined(VERSION_DE)\nconst char k_PrintfEncodedWords[4] = {1, 2, 3, 4};\n#endif\n"
     "#if !defined(VERSION_DE)\nconst char k_PrintfEncodedWords[4] = {5, 6, 7, 8};\n#endif\n"
@@ -120,12 +115,23 @@ def arranged(units: dict[str, str], classes: dict, orders: dict):
 
 
 def test_data_used_before_its_definition_gets_an_extern_as_a_function_gets_a_prototype() -> None:
-    use = "const char *Printf_Digit(int i) { return &g_printfLowercaseHexDigits[i]; }\n"
-    classes = {"a": {"Printf_Digit": "text"}, "b": {"g_printfLowercaseHexDigits": "rodata"}}
-    text, conflicts = arranged({"a": use, "b": PRINTF_B}, classes, {"text": ["a"], "rodata": ["b"]})
+    # the text chunk uses D, D sits behind R in the rodata chain, R uses Z, Z sits behind W, W uses D: a cycle only a
+    # declaration breaks
+    units = {
+        "a": "int Printf_Digit(void) { return g_printfDigits; }\n",
+        "b": "const int g_printfRef = g_printfFlag;\nconst int g_printfDigits = 5;\n",
+        "c": "int g_printfLate = g_printfDigits;\nint g_printfFlag = 7;\n",
+    }
+    classes = {
+        "a": {"Printf_Digit": "text"},
+        "b": {"g_printfRef": "rodata", "g_printfDigits": "rodata"},
+        "c": {"g_printfLate": "data", "g_printfFlag": "data"},
+    }
+    text, conflicts = arranged(units, classes, {"text": ["a"], "rodata": ["b"], "data": ["c"]})
     assert conflicts == []
-    assert text.index("extern const char g_printfLowercaseHexDigits[];") < text.index("Printf_Digit")
-    assert text.count("g_printfLowercaseHexDigits[] =") == 1
+    assert text.count("extern const int g_printfDigits;") == 1
+    assert text.index("extern const int g_printfDigits;") < text.index("Printf_Digit")
+    assert text.count("g_printfDigits = 5;") == 1
 
 
 def test_definitions_under_mutually_exclusive_conditions_are_one_definition() -> None:
