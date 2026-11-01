@@ -369,7 +369,9 @@ def interior_fills(units: Sequence[str], seqs: Mapping[str, Sequence[Row]]) -> l
                 continue
             before = next((e for e in reversed(seq[:i]) if e["k"] == "entry" and e.get("n", 0) > 0), None)
             after = next((e for e in seq[i + 1 :] if e["k"] == "entry" and e.get("n", 0) > 0), None)
-            if before and after and before["u"] in wanted and after["u"] in wanted and len(before["cls"].split("+")) == 1:
+            if before is None or after is None:
+                continue
+            if before["u"] in wanted and after["u"] in wanted and len(before["cls"].split("+")) == 1:
                 found.setdefault((before["u"], before["cls"], row["data"]), []).append(version)
     return [{"after": u, "cls": c, "data": d, "versions": v} for (u, c, d), v in found.items()]
 

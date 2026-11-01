@@ -22,6 +22,7 @@ from typing import Any
 
 Row = dict[str, Any]
 CLASSES = ("text", "data", "rodata", "bss")
+_STORED = CLASSES[1:3]
 _IF = re.compile(r"^[ \t]*#[ \t]*(if|ifdef|ifndef)\b")
 _ENDIF = re.compile(r"^[ \t]*#[ \t]*endif\b")
 _WORD = re.compile(r"[A-Za-z_]\w*")
@@ -234,7 +235,8 @@ def arrange(
     chain: dict[str, list[Chunk]] = defaultdict(list)
     for chunk in sorted(storage, key=lambda c: place[c]):
         chain[chunk.cls].append(chunk)
-    for n, fill in enumerate(f for f in fills if f["cls"] in ("data", "rodata") and f["after"] in rank.get(f["cls"], {})):
+    kept = [f for f in fills if f["cls"] in _STORED and f["after"] in rank.get(f["cls"], {})]
+    for n, fill in enumerate(kept):
         chunk = _fill(n, fill, guards or {})
         storage.append(chunk)
         at = rank[chunk.cls][chunk.unit]

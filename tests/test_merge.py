@@ -276,7 +276,10 @@ def test_the_stale_link_bytes_between_two_units_stay_as_an_array_before_the_next
         [("defs", defs), ("cosine", cosine)],
         never,
         orders={"text": {"de": ["defs"]}, "rodata": {"de": ["cosine", "defs"]}},
-        classes={"defs": {"Defs_Fn": "text", "RODATA_SYM_0": "rodata"}, "cosine": {"g_Defs_CosineEaseConstantWords": "rodata"}},
+        classes={
+            "defs": {"Defs_Fn": "text", "RODATA_SYM_0": "rodata"},
+            "cosine": {"g_Defs_CosineEaseConstantWords": "rodata"},
+        },
         guards={"de": "VERSION_DE"},
         fills=[fill],
     )
