@@ -862,6 +862,27 @@ def publish_hold(config: Any, tree: Any) -> Finding | None:
     return None
 
 
+def _unknown_bytes(document: Json) -> dict[str, int]:
+    return {c["version"]: c["partition"]["unknown"]["bytes"] for c in document.get("carts", [])}
+
+
+def _ratchet(path: Path, document: Json) -> None:
+    """Unknown bytes only shrink: a version whose unknown bytes exceed the progress.json already written refuses (sync and
+    sync --check alike), so closed bytes cannot come back. Lower the ceiling by closing bytes, never by editing it."""
+    if not path.is_file():
+        return
+    before, after = _unknown_bytes(json.loads(path.read_text())), _unknown_bytes(document)
+    grown = {v: (before[v], n) for v, n in after.items() if n > before.get(v, n)}
+    if grown:
+        raise Refusal(
+            Finding(
+                "unknown.grew",
+                "unknown bytes grew in " + ", ".join(f"{v} {a:,} -> {b:,}" for v, (a, b) in sorted(grown.items())),
+                action="close the span that came back (`unbake report --unknown` lists it with its cause class); the ratchet only lets unknown bytes shrink",
+            )
+        )
+
+
 def progress_files(config: Any, tree: Any) -> dict[str, bytes]:
     """progress.json and each version's map file for this tree, by project path."""
     from unbake import progress as published
@@ -869,6 +890,7 @@ def progress_files(config: Any, tree: Any) -> dict[str, bytes]:
     now = current(config, tree)
     document = published.document(config, tree, now)
     configuration.validate("progress", document, "progress.json")
+    _ratchet(Path(config.project.root) / "progress.json", document)
     out = {"progress.json": (json.dumps(document, sort_keys=True) + "\n").encode()}
     for version, row in published.maps(config, tree, now).items():
         path = published.map_path(version)
@@ -922,11 +944,15 @@ def _unknown_run(config: Any) -> Json:
     with stages.stage("report.unknown"):
         tree = _capture(config)
         found = unknown_spans(config, tree)
-        document = {"digest": tree.digest, "versions": found}
+        document = {
+            "digest": tree.digest,
+            "versions": found,
+            "ledger": import_module("unbake.ledger").ledger(config, tree, found),
+        }
         store.write(
             Path(config.project.root) / ".unbake/unknown.json", (json.dumps(document, sort_keys=True) + "\n").encode()
         )
-        return {"unknown": found, "digest": tree.digest}
+        return {"unknown": found, "digest": tree.digest, "ledger": document["ledger"]}
 
 
 def run(config: Any, params: Json) -> Json:
