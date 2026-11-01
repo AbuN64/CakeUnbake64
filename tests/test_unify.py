@@ -726,3 +726,47 @@ def test_a_struct_tag_in_a_rewritten_prototype_is_declared_before_it_on_its_line
         "struct Begin; extern s32 Snapshot_Check(struct Begin *m, s32 ch);\n"
         "struct Begin; extern s32 Snapshot_Check(struct Begin *m, s32 ch);\n"
     )
+
+
+class SameCodeWorld(World):
+    """Every rewrite of a read compiles to the code it had (the real compiler's verdict), so an object is its unit."""
+
+    armed: Sequence[str] = ()
+
+    def make(self, targets: Sequence[str]) -> tuple[int, str]:
+        self.fail = list(self.armed) if self.calls else []  # the baseline builds, the attempts after it may not
+        code, log = super().make(targets)
+        for t in targets:
+            if (self.root / t).exists():
+                (self.root / t).write_text(t)
+        return code, log
+
+
+def _label_world(tmp_path: Path, fail: Sequence[str] = ()) -> World:
+    """g_pakDefaultPreviewTypeLabel: no definition, the header and one unit say `u8 *`, one unit says `char[]`."""
+    files = {
+        "include/h.H": "extern unsigned char *g_label;\n",
+        "src/a.CPP": "extern char g_label[];\nvoid *f(void) { return (char **)g_label; }\n",
+        "src/b.CPP": "extern char *g_label;\nvoid *k(void) { return &g_label; }\nchar *m(void) { return g_label; }\n",
+    }
+    world = SameCodeWorld(tmp_path, files, ["src/a.CPP", "src/b.CPP"])
+    world.armed = fail
+    return world
+
+
+def test_the_array_stays_and_the_pointer_readers_load_through_it_when_its_objects_match(tmp_path: Path) -> None:
+    world = _label_world(
+        tmp_path, fail=["extern unsigned char *g_label;", "extern char *g_label;"]
+    )  # pointer objects differ
+    result = typeunify.run(tmp_path, world.seams, ["g_label"])
+    assert result["unified"]["g_label"]["type"] == "char[]" and result["unresolved"] == {}
+    assert "(*(char **)g_label)" in (tmp_path / "src/b.CPP").read_text()
+    assert (tmp_path / "src/a.CPP").read_text().startswith("extern char g_label[];")
+
+
+def test_the_pointer_wins_and_the_array_readers_take_its_address_when_the_array_objects_differ(tmp_path: Path) -> None:
+    world = _label_world(tmp_path, fail=["extern char g_label[];"])  # the array objects differ
+    result = typeunify.run(tmp_path, world.seams, ["g_label"])
+    assert result["unified"]["g_label"]["type"].endswith("*") and result["unresolved"] == {}
+    assert "g_label[]" not in (tmp_path / "src/a.CPP").read_text()
+    assert "(char **)((" in (tmp_path / "src/a.CPP").read_text()  # the array read is the address of the pointer
