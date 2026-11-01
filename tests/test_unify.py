@@ -442,3 +442,83 @@ def test_a_quiet_make_that_made_its_objects_ran(tmp_path: Path) -> None:
     seams = Seams(lambda: {"us": ["src/a.CPP"]}, lambda items: [], make)
     made = typeunify.rebuild(tmp_path, seams, [("us", "src/a.CPP")])
     assert made[("us", "src/a.CPP")] is not None
+
+
+def test_an_anonymous_struct_extern_is_a_candidate_with_a_plan(tmp_path: Path) -> None:
+    """g_controllerPakPreviewProfileFlags: two externs spell `u8`, one `struct { u8 value; }` that reads `.value`.
+    The most declared type goes first; when it fails to build the anonymous struct has a plan, not a refusal."""
+    files = {
+        "include/h.H": "extern unsigned char g_flags;\n",
+        "src/a.CPP": "extern unsigned char g_flags;\nint f(void) { return g_flags; }\n",
+        "src/b.CPP": "extern struct { unsigned char value; } g_flags;\nint k(void) { return g_flags.value; }\n",
+    }
+    world = World(tmp_path, files, ["src/a.CPP", "src/b.CPP"], fail=["unsigned char g_flags;\nint k"])
+    census = typeunify.collect(world.found(), world.read)
+    src = typeplan.Sources(lambda p: (tmp_path / p).read_text())
+    sites = typeplan.sites_of(census.per, "g_flags")
+    first = typeplan.plan("g_flags", sites, 0, src, census.norm)
+    second = typeplan.plan("g_flags", sites, 1, src, census.norm)
+    assert isinstance(first, typeplan.Plan) and first.ctext == "unsigned char g_flags"
+    assert isinstance(second, typeplan.Plan) and second.ctext == "struct { unsigned char value; } g_flags"
+    expected = "extern struct { unsigned char value; } g_flags;\n"
+    assert typeplan.render("include/h.H", [second], src) == expected
+    result = typeunify.run(tmp_path, world.seams, ["g_flags"], say=lambda _text: None)
+    assert result["unified"]["g_flags"]["type"] == second.canon
+    assert (tmp_path / "src/a.CPP").read_text().startswith(expected)
+
+
+def test_an_anonymous_struct_definition_is_the_type_of_every_extern(tmp_path: Path) -> None:
+    """g_pakControllerRecord: the definition is `struct { u16 value; }`, an extern spells a scalar."""
+    files = {"include/h.H": "extern int g_rec;\n", "src/a.CPP": "struct { unsigned short value; } g_rec = { 1 };\n"}
+    world = World(tmp_path, files, ["src/a.CPP"])
+    census = typeunify.collect(world.found(), world.read)
+    src = typeplan.Sources(lambda p: (tmp_path / p).read_text())
+    got = typeplan.plan("g_rec", typeplan.sites_of(census.per, "g_rec"), 0, src, census.norm)
+    assert isinstance(got, typeplan.Plan) and got.why == "definition"
+    assert got.ctext == "struct { unsigned short value; } g_rec"
+    assert typeplan.render("include/h.H", [got], src) == "extern struct { unsigned short value; } g_rec;\n"
+
+
+def _plan_of(tmp_path: Path, files: dict[str, str], name: str) -> tuple[typeplan.Plan | str, typeplan.Sources]:
+    world = World(tmp_path, files, sorted(f for f in files if f.startswith("src/")))
+    census = typeunify.collect(world.found(), world.read)
+    src = typeplan.Sources(lambda p: (tmp_path / p).read_text())
+    return typeplan.plan(name, typeplan.sites_of(census.per, name), 0, src, census.norm), src
+
+
+def test_a_definition_typed_by_a_typedef_array_is_the_type_of_the_char_externs(tmp_path: Path) -> None:
+    """SRC-AI-2 WEAPON.CPP g_weaponFireStateCallbackTable: `WEAPON_STATE_TABLE(8)` defined, `char[]` read elsewhere."""
+    files = {
+        "include/h.H": "extern char g_table[];\n",
+        "src/a.CPP": "typedef struct { int fire; } WEAPON_STATE_ENTRY;\nWEAPON_STATE_ENTRY g_table[8] = { { 1 } };\n",
+        "src/b.CPP": "extern char g_table[];\nchar *k(void) { return g_table; }\n",
+    }
+    got, src = _plan_of(tmp_path, files, "g_table")
+    assert isinstance(got, typeplan.Plan) and got.why == "definition", got
+    assert got.ctext == "WEAPON_STATE_ENTRY g_table[]"
+    assert typeplan.render("include/h.H", [got], src) == "extern WEAPON_STATE_ENTRY g_table[];\n"
+
+
+def test_a_definition_of_a_struct_array_is_the_type_of_the_scalar_extern(tmp_path: Path) -> None:
+    """SRC-AI-2 g_localPlayerProfiles: `Profile[4]` defined, an array of another element type read elsewhere."""
+    files = {
+        "include/h.H": "extern int g_profiles[];\n",
+        "src/a.CPP": "typedef struct Profile { int id; } Profile;\nProfile g_profiles[4];\n",
+        "src/b.CPP": "extern int g_profiles[];\nint k(void) { return g_profiles[0]; }\n",
+    }
+    got, src = _plan_of(tmp_path, files, "g_profiles")
+    assert isinstance(got, typeplan.Plan) and got.why == "definition", got
+    assert got.ctext == "struct Profile g_profiles[]"
+    assert typeplan.render("include/h.H", [got], src) == "extern struct Profile g_profiles[];\n"
+
+
+def test_a_function_definition_is_the_type_of_the_proto_read_elsewhere(tmp_path: Path) -> None:
+    """SRC-AI-2 SoundElement_PlaySoundAtPosition: the definition's signature against a differing proto."""
+    files = {
+        "include/h.H": "void SoundElement_Play(void*, int);\n",
+        "src/a.CPP": "void SoundElement_Play(void *e, int x, int y) { }\n",
+        "src/b.CPP": "void SoundElement_Play(void*, int);\nvoid k(void) { SoundElement_Play(0, 1); }\n",
+    }
+    got, _src = _plan_of(tmp_path, files, "SoundElement_Play")
+    assert isinstance(got, typeplan.Plan) and got.why == "definition", got
+    assert got.ctext == "void SoundElement_Play(void *e, int x, int y)"

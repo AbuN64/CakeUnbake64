@@ -105,11 +105,32 @@ def _span(src: Sources, path: str, line: int, name: str) -> tuple[int, int] | No
     return None
 
 
+_TAG_OPEN = re.compile(r"\b(?:struct|union|enum)\s*\w*\s*$")
+
+
+def _declaration(s: str) -> str:
+    """A statement without its function body or initializer; the body of an anonymous `struct { .. }` type stays."""
+    depth = 0
+    for i, c in enumerate(s):
+        if c == "{":
+            if depth == 0 and not _TAG_OPEN.search(s[:i]):
+                return s[:i].strip()
+            depth += 1
+        elif c == "}":
+            depth -= 1
+        elif c == "=" and depth == 0:
+            return s[:i].strip()
+    return s
+
+
+def _outside_braces(text: str) -> str:
+    """`text` with everything inside `{ .. }` dropped."""
+    return re.sub(r"\{[^{}]*\}", "", text) if "{" in text else text
+
+
 def _decl_text(stmt: str, name: str) -> str | None:
     """The single declaration `BASE declarator` of `name` in a statement text (comments blanked)."""
-    s = re.sub(r"^(extern|static)\s+", "", ws(stmt.rstrip(";").strip()))
-    s = s[: s.index("{")].strip() if "{" in s else s
-    s = s.split("=")[0].strip() if "=" in s else s
+    s = _declaration(re.sub(r"^(extern|static)\s+", "", ws(stmt.rstrip(";").strip())))
     parts = split_top(s)
     m = re.match(r"^(.*?)(\*+\s*)?\b" + re.escape(name) + r"\b", parts[0])
     if m:
@@ -161,7 +182,7 @@ def plan(name: str, sites: Mapping[str, Site], rank: int, src: Sources, norm: No
         file, line = loc.rsplit(":", 1)
         span = _span(src, file, int(line), name)
         text = _decl_text(src.text(file)[1][span[0] : span[1]], name) if span else None
-        if text and ";" not in text:
+        if text and ";" not in _outside_braces(text):
             cloc, ctext = loc, _spell(text, norm)
             break
     if not cloc:

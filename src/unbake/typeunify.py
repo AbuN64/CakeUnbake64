@@ -264,10 +264,12 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
     units = seams.units()
     if not any(units.values()):
         raise Refusal(Finding("unify.units", "no compiled unit found: build the tree first (unbake setup)"))
-    base = baseline(root, seams, units)
-    census = collect(units, seams.read)
+    with effort.stage("unify.baseline"):
+        base = baseline(root, seams, units)
+    with effort.stage("unify.census"):
+        census = collect(units, seams.read)
+        found = clashes(census.per)
     src = Sources(lambda p: (root / p).read_bytes().decode("latin-1"))
-    found = clashes(census.per)
     todo = sorted(found if names is None else [n for n in names if n in found])
     rank = dict.fromkeys(todo, 0)
     settled: dict[str, Plan] = {}
@@ -279,7 +281,8 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
         rounds += 1
         plans: dict[str, Plan] = {}
         for name in pending:
-            got = plan(name, sites_of(census.per, name), rank[name], src, census.norm)
+            with effort.stage("unify.plan"):
+                got = plan(name, sites_of(census.per, name), rank[name], src, census.norm)
             if isinstance(got, Plan):
                 plans[name] = got
             else:
@@ -287,7 +290,8 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
                     failed[name][""] = got
                 say(line(name, None, failed[name], spent[name]))
         pending = []
-        units_of = {n: touched(census, p) for n, p in plans.items()}
+        with effort.stage("unify.touch"):
+            units_of = {n: touched(census, p) for n, p in plans.items()}
         for group in batches(units_of):
             started, built = time.monotonic(), built + 1
             files = {f for n in group for f in plans[n].files}
@@ -295,7 +299,8 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
             span = set().union(*(units_of[n] for n in group))
             tried |= span
             rebuilt += len(span)
-            made = rebuild(root, seams, span)
+            with effort.stage("unify.rebuild"):
+                made = rebuild(root, seams, span)
             for name in group:
                 bad = differing(units_of[name], made, base)
                 spent[name] += (time.monotonic() - started) / len(group)
@@ -309,7 +314,8 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
                     say(line(name, plans[name], failed[name], spent[name]))
             _write(root, files, settled.values(), src)  # the names that failed go back to their original text
     reached = set().union(tried, *(reach(census, p) for p in settled.values()))
-    back = rebuild(root, seams, reached)
+    with effort.stage("unify.verify"):
+        back = rebuild(root, seams, reached)
     drift = sorted(target(u) for u, h in back.items() if h != base[u])
     if drift:
         raise Refusal(
