@@ -82,7 +82,7 @@ def _budgeted(cfg, *changes):
 
 def test_budget_flags_a_single_core_stage(cfg):
     (record,) = _budgeted(cfg, {"wall_seconds": 5.0, "cores": 0.5})
-    assert [f.key for f in record.findings] == ["budget.single_core"]
+    assert [f["key"] for f in record.findings] == ["budget.single_core"]
     assert not record.findings[0].blocking
 
 
@@ -90,14 +90,14 @@ def test_budget_flags_an_underused_pool_and_a_warm_dispatch(cfg):
     (record,) = _budgeted(
         cfg, {"kind": "pool", "jobs": 40, "workers_admitted": 2, "cores": 0.5, "cache": {"x": (3, 0)}}
     )
-    assert {f.key for f in record.findings} == {"budget.pool_underused", "budget.warm_dispatch"}
+    assert {f["key"] for f in record.findings} == {"budget.pool_underused", "budget.warm_dispatch"}
     (inline,) = _budgeted(cfg, {"kind": "pool", "jobs": 1, "workers_admitted": 0, "cache": {"x": (3, 0)}})
     assert not inline.findings
 
 
 def test_budget_flags_a_stage_that_closes_twice(cfg):
     first, second = _budgeted(cfg, {"wall_seconds": 5.0, "cores": 3.0}, {"wall_seconds": 5.0, "cores": 3.0})
-    assert not first.findings and [f.key for f in second.findings] == ["budget.repeated"]
+    assert not first.findings and [f["key"] for f in second.findings] == ["budget.repeated"]
 
 
 def test_two_slow_dispatches_of_different_work_are_not_repeated_but_the_same_dispatch_twice_is(cfg):
@@ -106,7 +106,7 @@ def test_two_slow_dispatches_of_different_work_are_not_repeated_but_the_same_dis
         return {"path": ("land", "pool.map"), "span": span, "wall_seconds": 5.0, "cores": 3.0}
 
     keys = _budgeted(cfg, gather("a", "rescore.keys"), gather("b", "rescore.measure"), gather("c", "rescore.keys"))
-    assert [[f.key for f in r.findings] for r in keys] == [[], [], ["budget.repeated"]]
+    assert [[f["key"] for f in r.findings] for r in keys] == [[], [], ["budget.repeated"]]
 
 
 def test_a_gather_is_not_the_repeat_of_its_own_dispatch_record(cfg):
@@ -114,7 +114,7 @@ def test_a_gather_is_not_the_repeat_of_its_own_dispatch_record(cfg):
     stages._dispatched["g"] = ("policy.unclean.keys",)
     pool = {"kind": "pool", "path": ("report", "pool.map", "policy.unclean.keys"), "wall_seconds": 5.0, "cores": 3.0}
     gather = {"path": ("report", "pool.map"), "span": "g", "wall_seconds": 5.0, "cores": 3.0}
-    assert [[f.key for f in r.findings] for r in _budgeted(cfg, pool, gather)] == [[], []]
+    assert [[f["key"] for f in r.findings] for r in _budgeted(cfg, pool, gather)] == [[], []]
 
 
 def test_process_refuses_make_without_jobs(tmp_path):
@@ -164,7 +164,7 @@ def test_a_pool_is_judged_against_the_slots_it_held_not_the_most_it_was_admitted
             "cache": {"x": (0, 501)},
         },
     )
-    assert ("budget.pool_underused" in {f.key for f in record.findings}) is flagged
+    assert ("budget.pool_underused" in {f["key"] for f in record.findings}) is flagged
 
 
 @pytest.mark.parametrize("changed", [False, True])
@@ -193,4 +193,4 @@ def test_sync_stand_in_recapture_has_its_own_stage_boundary(cfg, monkeypatch, ch
         ("sync", "repo.sync", "tree.capture"),
         *(([("sync", "repo.sync", "repo.stand_ins", "tree.capture")]) if changed else []),
     ]
-    assert not [f for r in stages.closed() for f in r.findings if f.key == "budget.repeated"]
+    assert not [f for r in stages.closed() for f in r.findings if f["key"] == "budget.repeated"]

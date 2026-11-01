@@ -264,7 +264,7 @@ def test_wait4_accounting_and_record_callback(tmp_path, monkeypatch):
     record.assert_called_once()
     name, recorded, start = record.call_args.args
     assert name == "accounting" and (recorded.argv, recorded.exit) == (result.argv, result.exit)
-    assert (recorded.cpu_seconds, recorded.wall_seconds) == (result.cpu_seconds, result.wall_seconds)
+    assert (recorded.cpu, recorded.wall) == (result.cpu_seconds, result.wall_seconds)
     assert before * 1e9 <= start <= after * 1e9
 
 

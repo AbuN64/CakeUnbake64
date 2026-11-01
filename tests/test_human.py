@@ -97,7 +97,7 @@ def _records():
         path=("check", "(own)"),
         kind="own",
         wall_seconds=2,
-        findings=(Finding("budget.single_core", "too slow", blocking=False),),
+        findings=(stages.finding("budget.single_core", "too slow", blocking=False),),
     )
     return [own, stage, root]
 
