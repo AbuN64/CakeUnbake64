@@ -351,7 +351,14 @@ def test_readme_with_blob_accounting_measures_against_the_rom_and_drops_the_part
     assert len(boxes) == len(config.project.version)
     for box in boxes:  # a per-version box holds the barred rows and the two count lines, never a bare unknown row
         rows = re.findall(r"<code>(.*?)</code>", box)
-        assert [" ".join(r.split()[:2]) for r in rows] == ["code [", "data [", "functions [", "blobs [", "fn rows", "blob rows"]
+        assert [" ".join(r.split()[:2]) for r in rows] == [
+            "code [",
+            "data [",
+            "functions [",
+            "blobs [",
+            "fn rows",
+            "blob rows",
+        ]
     # the top bars are measured against the exact ROM size: matched code+data+blobs plus platform, reaching fuzzy
     assert " of 8,388,608 bytes, linker fill 0 bytes, unknown " in out and "us   [" in out
     assert " of 16,777,216 bytes, linker fill 0 bytes, unknown " in out
