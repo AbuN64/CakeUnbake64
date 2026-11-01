@@ -31,7 +31,7 @@ import psutil
 from abucache import memo, stages
 from abucache.store import absorb_touched, take_touched
 
-from unbake import journal, store
+from unbake import effort, journal, store
 from unbake.contracts import Config, Finding, Host, Json, Refusal, Snapshot, code_identity, digest, sha256
 
 __plumbing__ = True  # contracts.code_identity names this code and never follows it: it shapes no result
