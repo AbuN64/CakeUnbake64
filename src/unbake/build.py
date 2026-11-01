@@ -420,18 +420,21 @@ def _rows(config: Config, held: Tree, v: str, piece: str) -> list[tuple[int, str
 
 
 def _scattered(rows: Sequence[tuple[int, str, str]]) -> set[str]:
-    """The files whose code or compiled read-only data lies in more than one run of a piece: other files' bytes sit
-    between them in the ROM, so one `.text` and one `.rodata` of the object cannot be placed."""
+    """The files whose code or compiled read-only data lies in more than one run of a piece: other bytes sit between
+    them in the ROM (another file's, or the file's own data of another section: a merged unit's non-const array among
+    its constants), so one `.text` and one `.rodata` of the object cannot be placed."""
     last: tuple[str, str] | None = None
     seen: set[tuple[str, str]] = set()
     found: set[str] = set()
     for _, path, section in rows:
         key = (path, section)
-        if section in (".text", ".rodata") and last != key:
+        if last == key:
+            continue
+        last = key
+        if section in (".text", ".rodata"):
             if key in seen:
                 found.add(path)
             seen.add(key)
-            last = key
     return found
 
 

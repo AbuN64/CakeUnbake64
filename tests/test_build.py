@@ -1876,6 +1876,21 @@ def test_a_file_with_the_pools_of_several_functions_is_built_apart_and_the_other
     assert build._apart_paths(make_config(tmp_path), _merged_unit(), "us") == {"src/a.c"}
 
 
+def test_a_merged_unit_whose_own_data_lies_among_its_read_only_data_is_built_apart():
+    """DEFS.CPP in eu-x (ROM 0xC5278): the lookup text and cosine constants, the unit's non-const array (.data), then
+    the `literals_` pool of its function. The file's .rodata is two runs, so it is built with a section per function
+    rather than refused as literals apart from the rest of the file; eu, which has no array, stays one run."""
+    eu_x = [
+        (0xC5278, "src/DEFS.CPP", ".rodata"),
+        (0xC5288, "src/DEFS.CPP", ".rodata"),
+        (0xC5298, "src/DEFS.CPP", ".data"),
+        (0xC52A0, "src/DEFS.CPP", ".rodata"),
+        (0xC52B0, "src/EVENTS.CPP", ".rodata"),
+    ]
+    assert build._scattered(eu_x) == {"src/DEFS.CPP"}
+    assert build._scattered([row for row in eu_x if row[2] != ".data"]) == set()
+
+
 def test_text_sizes_mark_the_apart_object_to_be_built_with_a_section_per_function(tmp_path, monkeypatch):
     config = make_config(tmp_path)
     assert "build/us/src/a.c.o: FSPLIT := fsplit" in build.text_sizes(config, _merged_unit(), "us").decode()
