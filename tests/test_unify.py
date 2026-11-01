@@ -584,5 +584,59 @@ def test_a_units_own_extern_of_a_function_is_edited_with_the_header_declaration(
     got, src = _plan_of(tmp_path, files, "Menu_CountLineChars")
     assert isinstance(got, typeplan.Plan) and got.why == "definition", got
     assert {e[0] for e in got.edits} == {"include/h.H", "src/b.CPP"}
-    want = "extern s32 Menu_CountLineChars(struct LayeredText *t);\n"
+    want = "struct LayeredText; extern s32 Menu_CountLineChars(struct LayeredText *t);\n"
     assert typeplan.render("src/b.CPP", [got], src).startswith(want)
+
+
+def test_a_call_with_fewer_arguments_than_the_definition_takes_the_callers_own_parameters(tmp_path: Path) -> None:
+    """SNAPSHOT_RESTORESAVEBLOCK.CPP Snapshot_UpdateScoreTitle calls `Menu_CountLineChars()` where the definition takes
+    one parameter: the argument is the register the call leaves untouched, the caller's own first parameter."""
+    files = {
+        "include/h.H": "typedef int s32;\n",
+        "src/a.CPP": "s32 Menu_CountLineChars(struct LayeredText *t) { return 0; }\n",
+        "src/b.CPP": "extern s32 Menu_CountLineChars(void);\n"
+        "s32 k(struct Entry *item, int n) { return n + Menu_CountLineChars() - 11; }\n"
+        "s32 j(void) { return Menu_CountLineChars(); }\n"
+        'static char *s = "Menu_CountLineChars()";\n',
+    }
+    got, src = _plan_of(tmp_path, files, "Menu_CountLineChars")
+    assert isinstance(got, typeplan.Plan), got
+    assert got.params == ("struct LayeredText *t",) and got.callers == {"src/b.CPP"}
+    assert typeplan.render("src/b.CPP", [got], src) == (
+        "struct LayeredText; extern s32 Menu_CountLineChars(struct LayeredText *t);\n"
+        "s32 k(struct Entry *item, int n) { return n + Menu_CountLineChars(item) - 11; }\n"
+        "s32 j(void) { return Menu_CountLineChars(); }\n"  # no parameter to pass: the build reports it
+        'static char *s = "Menu_CountLineChars()";\n'
+    )
+
+
+def test_missing_trailing_arguments_are_the_callers_parameters_at_the_same_positions(tmp_path: Path) -> None:
+    files = {
+        "include/h.H": "typedef int s32;\n",
+        "src/a.CPP": "s32 Snapshot_Check(struct Menu *m, s32 ch, s32 q) { return 0; }\n",
+        "src/b.CPP": "s32 Snapshot_Check(void *, s32, s32);\n"
+        "s32 k(struct Menu *m, s32 ch, s32 q) {\n    if (Snapshot_Check(m)) return Snapshot_Check(m, ch);\n"
+        "    return Snapshot_Check(m, ch, 0) + Snapshot_Check(m, Snapshot_Check(m, ch, q), q);\n}\n",
+    }
+    got, src = _plan_of(tmp_path, files, "Snapshot_Check")
+    assert isinstance(got, typeplan.Plan), got
+    body = typeplan.render("src/b.CPP", [got], src).split("\n", 1)[1]
+    assert "if (Snapshot_Check(m, ch, q)) return Snapshot_Check(m, ch, q);" in body
+    assert "Snapshot_Check(m, ch, 0) + Snapshot_Check(m, Snapshot_Check(m, ch, q), q);" in body
+
+
+def test_a_struct_tag_in_a_rewritten_prototype_is_declared_before_it_on_its_line(tmp_path: Path) -> None:
+    """PAK.CPP Snapshot_CheckStatusPrompt: three prototypes take the definition's struct, whose tag the file never
+    declares; each would otherwise open its own tag inside the parameter list and conflict with the others."""
+    files = {
+        "include/h.H": "typedef int s32;\n",
+        "src/a.CPP": "s32 Snapshot_Check(struct Begin *m, s32 ch) { return 0; }\n",
+        "src/b.CPP": "extern s32 Snapshot_Check(struct Menu *, s32);\n"
+        "extern s32 Snapshot_Check(struct Menu *x, s32 c);\n",
+    }
+    got, src = _plan_of(tmp_path, files, "Snapshot_Check")
+    assert isinstance(got, typeplan.Plan), got
+    assert typeplan.render("src/b.CPP", [got], src) == (
+        "struct Begin; extern s32 Snapshot_Check(struct Begin *m, s32 ch);\n"
+        "struct Begin; extern s32 Snapshot_Check(struct Begin *m, s32 ch);\n"
+    )
