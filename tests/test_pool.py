@@ -1982,7 +1982,7 @@ def test_a_priority_command_says_so_in_its_lock_file_and_its_ticket_sorts_first(
     peer.write_text("8 16")
     assert pool._declared(peer, 16) == (8, 16, False)
     lock, older = _queued_peer(runtime, 424251, 1)  # a lane waiting since long before
-    monkeypatch.setenv(pool.PRIORITY, "1")
+    monkeypatch.setattr(effort, "priority", True)
     pool._enter(folder)
     try:
         assert pool._queue(folder)[0] == pool._ticket[0] and not pool._queued(folder)  # the ship waits behind nobody
@@ -2002,7 +2002,7 @@ def test_under_contention_a_lane_frees_its_slots_to_the_priority_job(tmp_path, m
         mine = pool._register(folder)
         pool._demand(4, 4)
         assert pool._divide(folder, mine, 4)[2] == 0  # this lane's share while the ship wants every slot
-        monkeypatch.setenv(pool.PRIORITY, "1")
+        monkeypatch.setattr(effort, "priority", True)
         assert pool._divide(folder, mine, 4)[2] == 2  # two priority jobs split the slots between them
     finally:
         pool._release()

@@ -240,13 +240,10 @@ def _pid(path: Path) -> int:
     return int(path.stem.rsplit("-", 1)[1])
 
 
-PRIORITY = "UNBAKE_PRIORITY"  # "1" in the environment of the job every tree waits on (the ship/land lock holder)
-
-
 def _priority() -> bool:
     """Whether this command is the job the others wait on: its launcher holds the project's ship or land lock and
-    says so in the environment, which every child inherits."""
-    return os.environ.get(PRIORITY) == "1"
+    says so with `unbake --priority` (an explicit field of the command, never read from the environment)."""
+    return effort.priority
 
 
 def _demand(count: int, budget: int) -> None:

@@ -158,7 +158,14 @@ def _group(outcome: dict[str, int], argv: Sequence[str]) -> click.Group:
     path = click.Path(path_type=Path)
     group = click.Group(
         "unbake",
-        params=[click.Option(["--host"], type=path, envvar="UNBAKE_HOST"), click.Option(["--project"], type=path)],
+        params=[
+            click.Option(["--host"], type=path, envvar="UNBAKE_HOST"),
+            click.Option(["--project"], type=path),
+            click.Option(
+                ["--priority"], is_flag=True, help="this command is the job every tree waits on (ship/land lock holder)"
+            ),
+        ],
+        callback=lambda priority, **_: effort.set_priority(priority),
     )
     click.version_option(__version__, prog_name="unbake", message="%(prog)s %(version)s")(group)
     for name, spec in config.load_resource("commands.toml")["command"].items():

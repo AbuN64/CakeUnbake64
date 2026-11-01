@@ -492,7 +492,7 @@ def test_a_command_running_past_the_beat_says_its_stage_and_cpu(monkeypatch):
 
 
 def test_only_the_ship_lock_holder_keeps_normal_priority(monkeypatch):
-    """One rule: a command without UNBAKE_PRIORITY=1 runs nice (inherited by its workers); the holder is not niced."""
+    """One rule: a command without `--priority` runs nice (inherited by its workers); the holder is not niced."""
     calls = []
     level = [0]
 
@@ -503,9 +503,9 @@ def test_only_the_ship_lock_holder_keeps_normal_priority(monkeypatch):
 
     monkeypatch.setattr(effort.os, "nice", nice)
     monkeypatch.delenv("UNBAKE_NICE", raising=False)
-    monkeypatch.setenv("UNBAKE_PRIORITY", "1")
+    monkeypatch.setattr(effort, "priority", True)
     assert effort.yield_cpu() == 0 and calls == [0]
-    monkeypatch.delenv("UNBAKE_PRIORITY")
+    monkeypatch.setattr(effort, "priority", False)
     assert effort.yield_cpu() == effort.NICE
     assert effort.yield_cpu() == effort.NICE and calls[-1] == 0  # never lowers it, never nices twice
     monkeypatch.setenv("UNBAKE_NICE", "0")

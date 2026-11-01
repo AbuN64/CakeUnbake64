@@ -96,15 +96,21 @@ def closed() -> tuple[StageRecord, ...]:
     return tuple(_closed)
 
 
-NICE = 15  # the niceness of every command but the ship lock holder (UNBAKE_PRIORITY=1); UNBAKE_NICE overrides, 0 keeps
+NICE = 15  # the niceness of every command but the ship lock holder (`unbake --priority`); UNBAKE_NICE overrides, 0 keeps
+priority = False  # this command is the job every tree waits on (the ship/land lock holder): `unbake --priority`
+
+
+def set_priority(on: bool) -> None:
+    global priority
+    priority = on
 
 
 def yield_cpu() -> int:
-    """One rule for the host: only the job every tree waits on (the ship/land lock holder, UNBAKE_PRIORITY=1) runs at
+    """One rule for the host: only the job every tree waits on (the ship/land lock holder, `unbake --priority`) runs at
     normal priority; any other command (and its workers, compilers and permuters, which inherit it) runs nice, so a
     crowd of lane commands never slows the lock holder. Returns the niceness now (never lowers an existing one)."""
     want = int(os.environ.get("UNBAKE_NICE", NICE))
-    if os.environ.get("UNBAKE_PRIORITY") == "1" or want <= 0:
+    if priority or want <= 0:
         return os.nice(0)
     try:
         now = os.nice(0)

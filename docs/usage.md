@@ -303,6 +303,16 @@ row credits.
 See [compiler ownership](compiler-families.md) and
 [publication](publication.md) for the recipe and proof contracts.
 
+## Priority and the host runtime file
+
+`unbake --priority CMD` marks the command as the job every tree waits on (the ship/land lock holder): it runs at normal
+priority, splits the host slots ahead of the others and queues first. It is a flag, not an environment variable; the old
+`UNBAKE_PRIORITY` is gone.
+
+`python -m unbake.hostruntime [--host H] [--out P]` renders the host's abucache `runtime.toml` (cores, workers, memory,
+cache directory and size) from its unbake host config; write it to `~/.config/abu/runtime.toml` (or the file `ABU_RUNTIME`
+names). Site facts stay in the host's operator file; the runtime file follows them and is never committed.
+
 ## Build without unbake
 
 ```sh
