@@ -499,3 +499,25 @@ def test_remove_is_undone_with_the_journal(tmp_path):
         assert not kept.exists()
     store.undo(seen)
     assert kept.read_text() == "int x;\n"
+
+
+def test_undo_puts_a_file_back_over_the_folder_a_block_made_of_its_name(tmp_path: Path) -> None:
+    unit = tmp_path / "vi.CPP"
+    unit.write_text("code\n")
+    with store.journal() as seen:
+        store.remove(unit)
+        store.write(unit / "vi.CPP.c", b"merged\n")
+    store.undo(seen)
+    assert unit.read_text() == "code\n"
+
+
+def test_undo_refuses_a_folder_holding_files_it_never_journaled_by_its_path(tmp_path: Path) -> None:
+    unit = tmp_path / "vi.CPP"
+    unit.write_text("code\n")
+    with store.journal() as seen:
+        store.remove(unit)
+        store.write(unit / "vi.CPP.c", b"merged\n")
+        (unit / "stray.o").write_bytes(b"\0")
+    with pytest.raises(Refusal) as caught:
+        store.undo(seen)
+    assert caught.value.findings[0].path == str(unit)

@@ -444,3 +444,14 @@ def test_a_call_with_no_host_falls_back_to_the_user_config_or_names_the_fix(tmp_
     (tmp_path / ".config/unbake").mkdir(parents=True)
     (tmp_path / ".config/unbake/unbake.toml").write_text("")
     assert config.default_host() == tmp_path / ".config/unbake/unbake.toml"
+
+
+def test_an_internal_error_names_the_path_an_os_error_failed_on_and_the_line_that_raised_it(tmp_path: Path) -> None:
+    try:
+        (tmp_path / "vi.CPP").mkdir()
+        store.write(tmp_path / "vi.CPP", b"x")
+    except IsADirectoryError as error:
+        finding = cli._crash(error, tmp_path)
+    assert finding.key == "internal.error"
+    assert finding.path == "vi.CPP"
+    assert "IsADirectoryError" in finding.reason and "store.py:" in finding.reason

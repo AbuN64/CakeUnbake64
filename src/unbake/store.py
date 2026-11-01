@@ -45,12 +45,30 @@ def journal() -> Iterator[dict[Path, bytes | None]]:
 
 
 def undo(seen: dict[Path, bytes | None]) -> None:
+    """Put the journaled files back. The files the block created go first, so a name that changed between file and
+    folder (`vi.CPP` the file, `vi.CPP/` the folder of its merged module) is free for its old kind again; a folder
+    the block made over a file's name goes once it holds nothing, and one that still holds something is refused by its
+    path."""
     for path, before in seen.items():
         if before is None:
             path.unlink(missing_ok=True)
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(before)
+    for path, before in seen.items():
+        if before is None:
+            continue
+        if path.is_dir():
+            for folder, _, _ in os.walk(path, topdown=False):
+                try:
+                    Path(folder).rmdir()
+                except OSError as error:
+                    raise Refusal(
+                        Finding(
+                            "journal.changed",
+                            f"{path} is a folder holding unjournaled files, its file cannot return ({error.strerror})",
+                            path=str(path),
+                        )
+                    ) from error
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(before)
     memo.forget("pin", "includes", "closure", "listing")
 
 

@@ -7,7 +7,7 @@ import signal
 import sys
 import traceback
 from collections.abc import Sequence
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import asdict
 from importlib import import_module
 from pathlib import Path
@@ -109,6 +109,19 @@ _MEASURERS = frozenset(
 )  # read-only: a ship in flight never holds them (map: 475 s)
 
 
+def _crash(exc: Exception, root: Path) -> Finding:
+    """The internal error of an unexpected exception, with the path an OS error failed on (project-relative inside
+    the project) and the unbake source line that raised it, so the owner is never left with a bare repr."""
+    frames = traceback.extract_tb(exc.__traceback__)
+    own = [f for f in frames if Path(f.filename).resolve().is_relative_to(Path(__file__).resolve().parent)]
+    where = f" at {Path((own or frames)[-1].filename).name}:{(own or frames)[-1].lineno}" if frames else ""
+    named = str(getattr(exc, "filename", None) or "")
+    if named:
+        with suppress(ValueError):
+            named = Path(named).relative_to(root).as_posix()
+    return Finding("internal.error", f"{exc!r}{where}", path=named)
+
+
 def _run(name: str, params: dict[str, Any], argv: Sequence[str]) -> int:
     result: Json | None = None
     findings: list[Finding] = []
@@ -138,7 +151,7 @@ def _run(name: str, params: dict[str, Any], argv: Sequence[str]) -> int:
         code, findings = 1, list(refusal.findings)
     except Exception as exc:
         sys.stderr.write(traceback.format_exc())
-        code, findings = 3, [Finding("internal.error", repr(exc))]
+        code, findings = 3, [_crash(exc, root)]
     if cfg is not None:  # success, refusal or crash alike: the command's touched keys become one manifest
         store.finish_command(cfg)
     return _emit(name, code, result, findings, bool(params.get("short")))

@@ -253,3 +253,79 @@ def test_make_failure_names_every_symbol_splat_could_not_place():
 def test_make_failure_without_errors_is_the_last_20_lines():
     tail = tuple(f"GAME.CPP.i:{i}: warning: w" for i in range(10, 30))
     assert folders._make_failure_lines("", "".join(f"GAME.CPP.i:{i}: warning: w\n" for i in range(30))) == tail
+
+
+def _vi_slice(cfg, monkeypatch):
+    """The layout slice that crashed the rig: module `vi.CPP.c` holds the unit `vi.CPP`, so its merged file
+    `vi.CPP/vi.CPP.c` needs a folder named like the unit file that the merge removes."""
+    path, scan, _, sync, _ = prepared(cfg, monkeypatch, 0)
+    root = cfg.project.root
+    rows = [("sdk/io/vi/vi.CPP", "sdk/io/vi/vi.CPP.c"), ("src/DATA/VI_DATA.CPP", "sdk/io/vi/vi.CPP.c")]
+    for unit, body in zip(
+        (u for u, _ in rows), ("int vi_code(void) { return 1; }\n", "int vi_data = 2;\n"), strict=True
+    ):
+        (root / unit).parent.mkdir(parents=True, exist_ok=True)
+        (root / unit).write_text(body)
+    path.write_text("unit\tmodule\n" + "".join(f"{u}\t{m}\n" for u, m in rows))
+    verdicts = [{"module": "sdk/io/vi/vi.CPP.c", "hard": [], "soft": [], "verdict": "merge"}]
+    scan.return_value = (verdicts, rows, {})
+    monkeypatch.setattr(
+        folders, "_tracked", lambda _: [str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()]
+    )
+    return path, rows, sync
+
+
+def test_a_merge_that_fails_after_writing_puts_the_unit_file_back_over_the_module_folder(cfg, monkeypatch):
+    path, rows, sync = _vi_slice(cfg, monkeypatch)
+    root = cfg.project.root
+    before = {u: (root / u).read_bytes() for u, _ in rows}
+    sync.side_effect = Refusal(Finding("layout.input", "sync refused"))
+    with pytest.raises(Refusal) as caught:
+        folders.merge(cfg, {"modules": path})
+    assert caught.value.findings[0].reason == "sync refused"
+    assert {u: (root / u).read_bytes() for u in before} == before
+    assert not (root / "sdk/io/vi/vi.CPP").is_dir()
+    assert not (root / "sdk/io/vi/vi.CPP/vi.CPP.c").exists()
+
+
+def test_the_vi_slice_merges_into_the_folder_named_like_its_unit_file(cfg, monkeypatch):
+    path, _rows, _ = _vi_slice(cfg, monkeypatch)
+    root = cfg.project.root
+    folders.merge(cfg, {"modules": path})
+    merged = root / "sdk/io/vi/vi.CPP/vi.CPP.c"
+    assert "vi_code" in merged.read_text() and "vi_data" in merged.read_text()
+    assert not (root / "src/DATA/VI_DATA.CPP").exists()
+
+
+def test_a_directory_at_the_destination_is_refused_by_its_path(cfg, monkeypatch):
+    path, _scan, stage, sync, _ = prepared(cfg, monkeypatch, 1)
+    (cfg.project.root / "src/group0/group0.c").mkdir()
+    with pytest.raises(Refusal) as caught:
+        folders.merge(cfg, {"modules": path})
+    assert "destination src/group0/group0.c is a directory, not a file" in caught.value.findings[0].missing[0]
+    stage.assert_not_called()
+    sync.assert_not_called()
+
+
+def test_a_file_where_the_destination_folder_belongs_is_refused_by_its_path(cfg, monkeypatch):
+    path, *_ = prepared(cfg, monkeypatch, 1)
+    root = cfg.project.root
+    for unit in ("part0.c", "part1.c"):
+        (root / "src/group0" / unit).rename(root / "src" / unit)
+    path.write_text("unit\tmodule\nsrc/part0.c\tsrc/group0.c\nsrc/part1.c\tsrc/group0.c\n")
+    (root / "src/group0").rmdir()
+    (root / "src/group0").write_text("not a folder\n")
+    monkeypatch.setattr(
+        folders,
+        "_verdicts",
+        Mock(
+            return_value=(
+                [{"module": "src/group0.c", "hard": [], "soft": []}],
+                [("src/part0.c", "src/group0.c"), ("src/part1.c", "src/group0.c")],
+                {},
+            )
+        ),
+    )
+    with pytest.raises(Refusal) as caught:
+        folders.merge(cfg, {"modules": path})
+    assert "needs the folder src/group0, which is a file" in caught.value.findings[0].missing[0]

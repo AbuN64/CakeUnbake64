@@ -49,7 +49,7 @@ import re
 import tomllib
 from collections import defaultdict
 from collections.abc import Collection, Mapping, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
 
@@ -1060,7 +1060,16 @@ def _refusals(
     if missing:
         return missing, []
     out: list[str] = []
-    if destination in taken or ((destination in tracked or (root / destination).exists()) and destination not in units):
+    blocking = next(
+        (p for p in PurePosixPath(destination).parents if (root / p).is_file() and p.as_posix() not in units), None
+    )
+    if blocking is not None:
+        out.append(f"destination {destination} needs the folder {blocking}, which is a file")
+    if (root / destination).is_dir():
+        out.append(f"destination {destination} is a directory, not a file")
+    elif destination in taken or (
+        (destination in tracked or (root / destination).exists()) and destination not in units
+    ):
         out.append(f"destination {destination} is already owned")
     taken.add(destination)
     identity = _identity(_carried(project, units, destination), project.toolchain, destination)
