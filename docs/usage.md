@@ -379,6 +379,12 @@ The scan reads each ELF once, counts named function/data sections individually, 
 input alignment overrides and defined alignment markers. Missing selected objects and units absent from every version's
 linker inputs refuse: merging an unplaced unit could activate its data. An internal linker hole
 cannot disappear merely because the source files are concatenated. These checks do not replace the final ROM proof.
+`unbake layout mergecheck --closure --modules reviewed.tsv [--out parts.tsv]` answers which set must merge together: every
+unit between two entries of a module of one class in one output section joins it (with its whole module in the map),
+until none is between. A group that then holds a class in several output sections is `unbounded` (one module would be
+refused for `sections`); it is proposed in parts, each one output section per class and version with no unit of another
+part between, and `--out` writes them as a module map (`unit`, `module`; a bounded group is one module).
+
 `unbake layout mergecheck --plan FILES.tsv --out mergecheck.tsv` judges a recovered object plan instead: FILES.tsv, with
 OBJECTS.tsv and ASSIGN.tsv beside it, names every target and the objects the linker built for it in each version. Each
 target gets one row (`version`, `target`, `verdict`, measured `reason`): the merged object is laid out the way the linker

@@ -533,3 +533,183 @@ def verdicts(
         }
         for m, us in multi.items()
     ]
+
+
+def _between(seqs: Mapping[str, Sequence[Row]], members: set[str]) -> set[str]:
+    """The units outside `members` that sit between two entries of `members` of one class in one output section of a
+    version: the units a `gap` finding of the group would name."""
+    found: set[str] = set()
+    for seq in seqs.values():
+        live = [i for i, e in enumerate(seq) if e["k"] == "entry" and e.get("n", 0) > 0]
+        hits: dict[tuple[str, str], list[int]] = defaultdict(list)
+        for n, i in enumerate(live):
+            if seq[i]["u"] in members:
+                for cls in seq[i]["cls"].split("+"):
+                    hits[cls, seq[i]["o"]].append(n)
+        for places in hits.values():
+            for one, two in pairwise(places):
+                found.update(u for k in live[one + 1 : two] if (u := seq[k]["u"]) not in members)
+    return found
+
+
+def _grow(seed: Sequence[str], seqs: Mapping[str, Sequence[Row]], modules: Mapping[str, Sequence[str]]) -> set[str]:
+    """The units that must merge together with `seed`: every unit between two entries of the set joins it, with the
+    whole module of the map it belongs to, until no unit is between. `modules`: a unit to the units of its module."""
+    members = set(seed)
+    while added := _between(seqs, members) - members:
+        for unit in added:
+            members.update(modules.get(unit, (unit,)))
+    return members
+
+
+def _sections_of(units: Sequence[str], seqs: Mapping[str, Sequence[Row]]) -> dict[str, dict[tuple[str, str], str]]:
+    """Per unit, the output section of each (class, version) it holds bytes in."""
+    wanted = set(units)
+    placed: dict[str, dict[tuple[str, str], str]] = {u: {} for u in units}
+    for version, seq in seqs.items():
+        for row in seq:
+            if row["k"] == "entry" and row["u"] in wanted and row.get("n", 0) > 0:
+                for cls in row["cls"].split("+"):
+                    placed[row["u"]][cls, version] = row["o"]
+    return placed
+
+
+def _one_section(units: Sequence[str], placed: Mapping[str, Mapping[tuple[str, str], str]]) -> bool:
+    seen: dict[tuple[str, str], str] = {}
+    return all(seen.setdefault(key, o) == o for u in units for key, o in placed[u].items())
+
+
+def _parts_of(units: Sequence[str], seqs: Mapping[str, Sequence[Row]]) -> tuple[list[list[str]], bool]:
+    """The units of an unbounded group in parts that each hold every class in one output section per version and
+    leave no unit of another part between theirs (so neither `sections` nor `gap` arises for a part), units in
+    link order. A unit joins the first part it agrees with on every (class, version) both hold, one it shares a key
+    with first; parts a gap ties together become one. False when a part left holds a class in several sections."""
+    placed = _sections_of(units, seqs)
+    found: list[tuple[list[str], dict[tuple[str, str], str]]] = []
+    for unit in units:
+        fits = [p for p in found if all(p[1].get(k, o) == o for k, o in placed[unit].items())]
+        shared = [p for p in fits if p[1].keys() & placed[unit].keys()]
+        if not fits:
+            found.append(([], {}))
+        part = (shared or fits or found[-1:])[0]
+        part[0].append(unit)
+        part[1].update(placed[unit])
+    parts = [p[0] for p in found]
+    while True:
+        for one in parts:
+            tied = _between(seqs, set(one)) & set(units)
+            if tied:
+                break
+        else:
+            return parts, all(_one_section(p, placed) for p in parts)
+        joined = [p for p in parts if p is one or tied & set(p)]
+        parts = [p for p in parts if p not in joined]
+        parts.append([u for u in units if any(u in p for p in joined)])
+
+
+def _part_sections(part: Sequence[str], placed: Mapping[str, Mapping[tuple[str, str], str]]) -> dict[str, str]:
+    """Per class the part holds, its output section (`_part_label`)."""
+    seen: dict[str, dict[str, str]] = defaultdict(dict)
+    for unit in part:
+        for (cls, version), section in placed[unit].items():
+            seen[cls].setdefault(version, section)
+    return {cls: _part_label(per) for cls, per in seen.items()}
+
+
+def _conflicts(part: Sequence[str], placed: Mapping[str, Mapping[tuple[str, str], str]]) -> dict[str, dict[str, int]]:
+    """Per `class version` the part holds in several output sections, the units each section holds: what keeps a part
+    from being sound, so the owner sees what to split."""
+    seen: dict[tuple[str, str], dict[str, int]] = defaultdict(dict)
+    for unit in part:
+        for key, section in placed[unit].items():
+            seen[key][section] = seen[key].get(section, 0) + 1
+    return {f"{cls} {version}": per for (cls, version), per in sorted(seen.items()) if len(per) > 1}
+
+
+def _blockers(units: Sequence[str], seqs: Mapping[str, Sequence[Row]], top: int = 5) -> list[Row]:
+    """The widest runs of units outside `units` that sit between two of their entries of one class in one output
+    section of a version: what a merge of `units` as one object cannot reproduce, widest first."""
+    members = set(units)
+    found: list[Row] = []
+    for version, seq in seqs.items():
+        live = [i for i, e in enumerate(seq) if e["k"] == "entry" and e.get("n", 0) > 0]
+        hits: dict[tuple[str, str], list[int]] = defaultdict(list)
+        for n, i in enumerate(live):
+            if seq[i]["u"] in members:
+                for cls in seq[i]["cls"].split("+"):
+                    hits[cls, seq[i]["o"]].append(n)
+        for (cls, section), places in hits.items():
+            for one, two in pairwise(places):
+                if width := sum(1 for k in live[one + 1 : two] if seq[k]["u"] not in members):
+                    found.append(
+                        {
+                            "class": cls,
+                            "section": section,
+                            "version": version,
+                            "width": width,
+                            "between": [seq[live[one]]["u"], seq[live[two]]["u"]],
+                        }
+                    )
+    return sorted(found, key=lambda b: -b["width"])[:top]
+
+
+def unplaced(rows: Sequence[tuple[str, str]], seqs: Mapping[str, Sequence[Row]]) -> list[str]:
+    """The units of a module map that no version's link names: a closure over them would see no gap, so the map and the
+    built tree disagree (a stale build, another source layout) and the answer must be refused, not read as bounded."""
+    placed = {row["u"] for seq in seqs.values() for row in seq if row["k"] == "entry"}
+    return [u for u, _ in rows if u not in placed]
+
+
+def closures(rows: Sequence[tuple[str, str]], seqs: Mapping[str, Sequence[Row]]) -> list[Row]:
+    """The groups of a module map that must merge together: modules (and the loose units) tied by units between their
+    entries, each `{"modules", "units", "added", "bounded", "parts"}`. A group is bounded when its closure holds
+    every class in one output section per version; then it is one part. Otherwise a merge would be refused for
+    `sections`, and the parts (`_parts_of`) are the modules to merge instead. A lone module is left out."""
+    members: dict[str, list[str]] = defaultdict(list)
+    for unit, module in rows:
+        members[module].append(unit)
+    siblings = {u: us for us in members.values() for u in us}
+    owner = {u: m for m, us in members.items() for u in us}
+    groups: list[set[str]] = []
+    for units in members.values():
+        if len(units) < 2 or any(set(units) <= g for g in groups):
+            continue
+        found = _grow(units, seqs, siblings)
+        tied = [g for g in groups if g & found]
+        if len(found) == len(units) and not tied:
+            continue
+        groups = [g for g in groups if g not in tied]
+        groups.append(_grow([*found, *(u for g in tied for u in g)], seqs, siblings))
+    out: list[Row] = []
+    for group in groups:
+        order = code_order(sorted(group), seqs)
+        seeds = [m for m in dict.fromkeys(owner[u] for u in order if u in owner) if len(members[m]) > 1]
+        placed = _sections_of(order, seqs)
+        bounded = _one_section(order, placed)
+        carried = order if bounded else [u for u in order if owner.get(u) in seeds]
+        parts, sound = ([order], True) if bounded else _parts_of(carried, seqs)
+        walls = [[] if bounded else _blockers(part, seqs) for part in parts]
+        sound = sound and not any(walls)
+        first = PurePosixPath(seeds[0])
+        out.append(
+            {
+                "modules": seeds,
+                "units": len(order),
+                "added": [u for u in order if owner.get(u) not in seeds],
+                "bounded": bounded,
+                "sound": sound,
+                "parts": [
+                    {
+                        "module": seeds[0]
+                        if bounded
+                        else first.with_name(f"{first.stem}_PART{n}{first.suffix}").as_posix(),
+                        "units": part,
+                        "sections": _part_sections(part, placed),
+                        "conflicts": _conflicts(part, placed),
+                        "blockers": walls[n - 1],
+                    }
+                    for n, part in enumerate(parts, 1)
+                ],
+            }
+        )
+    return out

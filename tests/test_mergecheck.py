@@ -640,3 +640,106 @@ def test_interior_fills_are_the_stale_link_bytes_between_two_units_of_the_module
     assert [r["data"] for r in seq if r["k"] == "fill"] == [bytes([0x24, 0x63, 0]), bytes([1])]
     found = mergecheck.interior_fills(["src/a.CPP", "src/b.CPP"], {"de": seq})
     assert found == [{"after": "src/a.CPP", "cls": "rodata", "data": bytes([0x24, 0x63, 0]), "versions": ["de"]}]
+
+
+def _cluster() -> tuple[list[tuple[str, str]], dict[str, list[dict[str, Any]]]]:
+    """The player cluster's gap shape: PLAYER and PLAYERAI interleave in rodata, PLAYERAI reaches the WEAPONAI
+    units and those the loose CAMERA unit, so no one module is mergeable before the others (a slice of SRC-AI-1
+    cluster.tsv)."""
+    rows = [
+        ("P1", "PLAYER"), ("P2", "PLAYER"), ("A1", "PLAYERAI"), ("A2", "PLAYERAI"),
+        ("W1", "WEAPONAI"), ("W2", "WEAPONAI"), ("Q1", "OTHER"), ("Q2", "OTHER"),
+    ]  # fmt: skip
+    ro = [
+        ("P1", 4),
+        ("A1", 4),
+        ("P2", 4),
+        ("W1", 4),
+        ("A2", 4),
+        ("CAM", 4),
+        ("W2", 4),
+        ("FAR", 4),
+        ("Q1", 4),
+        ("Q2", 4),
+    ]
+    seq = [entry("P1", "text", 8), entry("P2", "text", 8), entry("A1", "text", 8), entry("A2", "text", 8)]
+    seq += [entry(u, "rodata", n, ".rodata") for u, n in ro]
+    return rows, {"us": seq, "eu": list(seq)}
+
+
+def test_closure_reports_the_group_that_must_merge_together() -> None:
+    rows, seqs = _cluster()
+    [group] = mergecheck.closures(rows, seqs)
+    assert group["modules"] == ["PLAYER", "PLAYERAI", "WEAPONAI"]
+    assert group["added"] == ["CAM"]
+    assert group["units"] == 7 and group["bounded"] is True
+    assert [sorted(p["units"]) for p in group["parts"]] == [["A1", "A2", "CAM", "P1", "P2", "W1", "W2"]]
+    assert group["parts"][0]["module"] == "PLAYER"
+    # the units left out are not between anything of the group: a verdict on the group has no gap
+    merged = [(u, "G") for u in group["parts"][0]["units"]]
+    assert not [h for h in mergecheck.verdicts(merged, seqs, {}, lambda _: "cc")[0]["hard"] if h.startswith("gap")]
+
+
+def test_unplaced_units_of_the_map_are_named_not_read_as_a_bounded_closure() -> None:
+    # a slice of lanes/SRC-AI-1/cluster.tsv against a build whose link names the units under another layout (src/)
+    rows = [
+        ("SOURCE/AI/PLAYER/CARTRIDGE_INDEX.CPP", "SOURCE/AI/PLAYER.CPP"),
+        ("SOURCE/AI/PLAYER/DECODE.CPP", "SOURCE/AI/PLAYER.CPP"),
+        ("SOURCE/AI/PLAYER2.CPP", "SOURCE/AI/PLAYER2.CPP"),
+    ]
+    stale = [entry("src/AI/PLAYER/DECODE.CPP", "text", 8), entry("src/AI/PLAYER2.CPP", "text", 8)]
+    assert mergecheck.closures(rows, {"us": stale}) == []
+    assert mergecheck.unplaced(rows, {"us": stale}) == [u for u, _ in rows]
+    fresh = [entry(u, "text", 8) for u, _ in rows]
+    assert mergecheck.unplaced(rows, {"us": fresh, "eu": stale}) == []
+
+
+def test_closure_leaves_a_module_with_nothing_between_out() -> None:
+    seq = [entry("a", "text", 8), entry("b", "text", 8), entry("c", "text", 8)]
+    assert mergecheck.closures([("a", "M"), ("b", "M"), ("c", "N")], {"us": seq}) == []
+
+
+def test_closure_of_a_group_in_two_output_sections_is_unbounded_and_proposed_in_parts() -> None:
+    rows = [("X", "M"), ("Y", "M"), ("Z", "N"), ("Z2", "N")]
+    seq = [entry("X", "text", 8), entry("Z", "text", 8), entry("Z2", "text", 8), entry("Y", "text", 8, ".boot")]
+    seq += [entry(u, "rodata", 4, ".rodata") for u in ("X", "Z", "Z2", "Y")]
+    [group] = mergecheck.closures(rows, {"us": seq})
+    assert group["bounded"] is False and group["sound"] is True
+    assert [p["units"] for p in group["parts"]] == [["X", "Z", "Z2"], ["Y"]]
+    assert [p["module"] for p in group["parts"]] == ["M_PART1", "M_PART2"]
+    assert group["parts"][1]["sections"] == {"text": ".boot", "rodata": ".rodata"}
+    for part in (p for p in group["parts"] if len(p["units"]) > 1):  # a lone unit has no verdict
+        mapped = [(u, "G") for u in part["units"]]
+        assert not [
+            h
+            for h in mergecheck.verdicts(mapped, {"us": seq}, {}, lambda _: "cc")[0]["hard"]
+            if h.startswith(("sections", "gap"))
+        ]
+
+
+def test_parts_tied_by_a_gap_become_one_and_are_not_sound() -> None:
+    seq = [entry("X", "text", 8), entry("Y", "text", 8, ".boot"), entry("Z", "text", 8)]
+    seq += [entry(u, "rodata", 4, ".rodata") for u in ("X", "Y", "Z")]
+    rows = [("X", "M"), ("Z", "M")]
+    [group] = mergecheck.closures(rows, {"us": seq})
+    assert [part["units"] for part in group["parts"]] == [["X", "Z"]] and group["sound"] is False
+    assert group["parts"][0]["conflicts"] == {}
+    assert {(b["class"], b["width"], tuple(b["between"])) for b in group["parts"][0]["blockers"]} == {
+        ("text", 1, ("X", "Z")),
+        ("rodata", 1, ("X", "Z")),
+    }
+
+
+def test_closure_of_a_module_with_a_far_unit_names_the_wide_gap_not_the_program() -> None:
+    # real shape of SRC-AI-1 PLAYER.CPP: two rodata-only units of one module sit 183 foreign units apart in `.game_data`
+    # of one version; the foreign units (libultra xprintf among them) must not join the group
+    foreign = [f"sdk/libultra/F{n}.c" for n in range(6)]
+    seq = [entry("P1", "text", 8), entry("P2", "text", 8), entry("xprintf", "text", 8, ".libultra")]
+    seq += [entry("P1", "rodata", 4, ".game_data"), *(entry(u, "rodata", 4, ".game_data") for u in foreign)]
+    seq += [entry("xprintf", "rodata", 4, ".game_data"), entry("P2", "rodata", 4, ".game_data")]
+    [group] = mergecheck.closures([("P1", "PLAYER"), ("P2", "PLAYER")], {"de": seq, "us": list(seq)})
+    assert group["bounded"] is False and group["units"] == 2 + len(foreign) + 1 and group["sound"] is False
+    carried = {u for p in group["parts"] for u in p["units"]}
+    assert carried == {"P1", "P2"}
+    [blocker, *_] = group["parts"][0]["blockers"]
+    assert blocker["width"] == len(foreign) + 1 and blocker["between"] == ["P1", "P2"] and blocker["class"] == "rodata"

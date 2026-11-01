@@ -111,6 +111,24 @@
   "separate": {
    "type": "integer"
   },
+  "closure": {
+   "enum": [
+    "bounded",
+    "unbounded"
+   ]
+  },
+  "units": {
+   "type": "integer"
+  },
+  "parts": {
+   "type": "integer"
+  },
+  "merge_groups": {
+   "type": "array",
+   "items": {
+    "type": "object"
+   }
+  },
   "created": {
    "type": "boolean"
   },

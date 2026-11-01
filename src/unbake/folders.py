@@ -1354,9 +1354,35 @@ def mergecheck(config: Config, params: Json) -> Row:
     with stages.stage("layout.mergecheck"):
         if params.get("plan"):
             return _mergecheck_plan(params)
+        if params.get("closure"):
+            return _closure(config, params)
         modules = _verdicts(config, params)[0]
         separate = sum(1 for m in modules if m["verdict"] == "separate")
         return {"action": "mergecheck", "modules": modules, "separate": separate, "mergeable": len(modules) - separate}
+
+
+def _closure(config: Config, params: Json) -> Row:
+    """The groups of the map that must merge together (`mergecheck.closures`); `out` receives the part map, a module
+    map in the form of `--modules` that names each group, or each part of an unbounded group, as one module."""
+    rows, seqs, _ = _module_facts(config, params)
+    if missing := merging.unplaced(rows, seqs):
+        raise _refuse(
+            f"{len(missing)} of {len(rows)} units of the map have no linker input in any version "
+            f"(first: {missing[0]}): "
+            "the built tree does not match the map, rebuild it before asking for a closure"
+        )
+    found = merging.closures(rows, seqs)
+    if params.get("out"):
+        lines = ["unit\tmodule", *(f"{u}\t{p['module']}" for g in found for p in g["parts"] for u in p["units"])]
+        Path(str(params["out"])).write_text("\n".join(lines) + "\n")
+    unbounded = [g for g in found if not g["bounded"]]
+    return {
+        "action": "mergecheck",
+        "closure": "unbounded" if unbounded else "bounded",
+        "merge_groups": found,
+        "units": sum(g["units"] for g in found),
+        "parts": sum(len(g["parts"]) for g in found),
+    }
 
 
 def _mergecheck_plan(params: Json) -> Row:
