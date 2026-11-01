@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Any
 
 import click
+from abucache import stages
 from click.core import ParameterSource
 
-from abucache import stages
 from unbake import __version__, config, effort, human, store, treelock
 from unbake.contracts import Finding, Json, Refusal
 

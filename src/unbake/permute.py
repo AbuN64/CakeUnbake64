@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from abucache import stages
+
 from unbake import process, store
 from unbake.contracts import Config, Finding, Json, Refusal
 

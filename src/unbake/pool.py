@@ -76,8 +76,6 @@ _sent: dict[str, set[Any]] = {}  # name -> the keys of that table a spill file o
 _forked: set[str] = set()  # the keys of `_SHARED` the current workers were forked with
 
 
-
-
 _HARD_LIMIT = 4  # a worker is refused memory at this many times host memory_worker_bytes; that budget sizes the pool
 
 

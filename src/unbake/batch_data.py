@@ -8,6 +8,7 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from abucache import stages
+
 from unbake import journal, process, publish, store, tree, treelock
 from unbake.contracts import Config, Finding, Json, Refusal, digest
 

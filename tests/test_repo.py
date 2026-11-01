@@ -12,8 +12,8 @@ from unittest.mock import Mock
 
 import fixture
 import pytest
-
 from abucache import stages
+
 from unbake import adapters, repo
 from unbake import config as configuration
 from unbake.contracts import Finding, NativeResult, Refusal, sha1

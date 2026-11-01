@@ -6,8 +6,8 @@ import os
 from dataclasses import replace
 
 import pytest
-
 from abucache import stages
+
 from unbake import cli, compare, config, human
 from unbake.contracts import Finding, Origin, StageRecord
 

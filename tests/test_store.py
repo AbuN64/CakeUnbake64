@@ -15,8 +15,8 @@ from functools import partial
 from pathlib import Path
 
 import pytest
-
 from abucache import stages
+
 from unbake import effort, pool, store
 from unbake.contracts import Config, Refusal
 

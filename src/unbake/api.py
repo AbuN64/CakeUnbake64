@@ -8,7 +8,8 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
-from abucache import memo as cache, stages
+from abucache import memo as cache
+from abucache import stages
 
 from unbake import (
     adapters,

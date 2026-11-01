@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Protocol
 
 from abucache import stages
+
 from unbake import store
 from unbake.contracts import Config, Finding, Plan, Refusal, sha256
 

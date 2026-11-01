@@ -14,7 +14,8 @@ from typing import Any
 
 import abucache
 import abucache.compile
-from abucache import link as linking, stages
+from abucache import link as linking
+from abucache import stages
 from abucache.compile import Step
 
 from unbake import config as configuration

@@ -9,6 +9,7 @@ from dataclasses import asdict
 from typing import TextIO
 
 from abucache import stages
+
 from unbake import config
 from unbake.contracts import Finding, Json
 

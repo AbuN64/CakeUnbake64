@@ -14,8 +14,8 @@ from unittest.mock import Mock
 import fixture
 import psutil
 import pytest
-
 from abucache import stages
+
 from unbake import effort, process
 from unbake.contracts import Config, Host, Project, Refusal
 

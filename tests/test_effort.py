@@ -11,8 +11,6 @@ from unbake import effort
 from unbake.contracts import Config, Finding, Host, Origin, Refusal
 
 
-
-
 def _config(tmp_path):
     keys = ("resources.memory_parent_bytes", "resources.memory_worker_bytes", "budgets.serial_seconds")
     origins = {key: Origin(key, "/host.toml", "0" * 64) for key in keys}
@@ -26,8 +24,6 @@ def _config(tmp_path):
         cflags=(), asflags=(), files={}, libraries=(), names_from="", digest="project",
     )  # fmt: skip
     return Config(project, host, "config")  # type: ignore[arg-type]
-
-
 
 
 @pytest.fixture(autouse=True)

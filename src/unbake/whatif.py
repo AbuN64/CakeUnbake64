@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from abucache import stages
+
 from unbake import compare, config, native, pool, process, sched, store
 from unbake.contracts import Config, Finding, Json, Proof, Refusal
 

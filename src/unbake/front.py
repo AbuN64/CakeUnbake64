@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from abucache import stages
+
 from unbake import process
 from unbake.contracts import Host
 from unbake.resources import cc_cache

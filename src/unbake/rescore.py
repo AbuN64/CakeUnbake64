@@ -9,6 +9,7 @@ from importlib import import_module
 from typing import Any, Protocol
 
 from abucache import stages
+
 from unbake import config as configuration
 from unbake import pool, store, symptoms
 from unbake.contracts import code_identity, digest, sha256

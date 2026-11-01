@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from abucache import stages
+
 from unbake import compare, pool, store
 from unbake.contracts import Config, Finding, Json, Refusal
 

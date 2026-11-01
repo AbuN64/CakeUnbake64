@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from abucache import stages
+
 from unbake.contracts import Finding, Refusal
 
 ENV = "UNBAKE_TREE_LOCK"

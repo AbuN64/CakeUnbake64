@@ -169,7 +169,15 @@ def _execute(
     stages.record_native(
         name,
         Completed(
-            result.argv, result.cwd, result.exit, result.signal, b"", b"", result.wall_seconds, result.cpu_seconds, result.max_rss_bytes
+            result.argv,
+            result.cwd,
+            result.exit,
+            result.signal,
+            b"",
+            b"",
+            result.wall_seconds,
+            result.cpu_seconds,
+            result.max_rss_bytes,
         ),
         start,
     )
