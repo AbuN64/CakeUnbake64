@@ -83,7 +83,7 @@ def _copy(roms: dict[str, bytes], held: dict[str, tuple[Spans, list[int]]], v: s
 
 
 def classify(d: bytes, a: int, b: int, segment: str, copy: Json | None) -> tuple[str, str]:
-    """(class, evidence) of one span: the bytes `d` at ROM [a, b) in `segment`; `copy` where accounted bytes equal them."""
+    """(class, evidence) of one span: bytes `d` at ROM [a, b) in `segment`; `copy` where accounted bytes equal them."""
     n = len(d)
     if len(set(d)) == 1:
         return (
@@ -118,8 +118,8 @@ def classify(d: bytes, a: int, b: int, segment: str, copy: Json | None) -> tuple
 
 
 def ledger(config: Any, tree: Any, spans: Json) -> Json:
-    """`spans` as `report.unknown_spans` answers (`{version: {total, spans: [[low, high, size, segment]]}}`) with a cause
-    class and evidence per span, the byte table per class and version, and the unclassified total."""
+    """`spans` as `report.unknown_spans` answers (`{version: {total, spans: [[low, high, size, segment]]}}`) with a
+    cause class and evidence per span, the byte table per class and version, and the unclassified total."""
     parts = import_module("unbake.report").partitions(config, tree)
     root = Path(config.project.root)
     roms = {v: (root / "roms" / f"baserom.{v}.z64").read_bytes() for v in spans}
@@ -129,7 +129,7 @@ def ledger(config: Any, tree: Any, spans: Json) -> Json:
     rows: dict[str, list[Json]] = {}
     table: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for v, x in spans.items():
-        out = []
+        out: list[Json] = []
         for low, high, size, segment in x["spans"]:
             d = roms[v][low:high]
             copy = _copy(roms, held, v, low, high) if size >= MIN_COPY and len(set(d)) >= MIN_DISTINCT else None

@@ -867,8 +867,8 @@ def _unknown_bytes(document: Json) -> dict[str, int]:
 
 
 def _ratchet(path: Path, document: Json) -> None:
-    """Unknown bytes only shrink: a version whose unknown bytes exceed the progress.json already written refuses (sync and
-    sync --check alike), so closed bytes cannot come back. Lower the ceiling by closing bytes, never by editing it."""
+    """Unknown bytes only shrink: a version whose unknown bytes exceed the progress.json already written refuses
+    (sync and sync --check alike), so closed bytes cannot come back. Lower the ceiling by closing bytes."""
     if not path.is_file():
         return
     before, after = _unknown_bytes(json.loads(path.read_text())), _unknown_bytes(document)
@@ -878,7 +878,7 @@ def _ratchet(path: Path, document: Json) -> None:
             Finding(
                 "unknown.grew",
                 "unknown bytes grew in " + ", ".join(f"{v} {a:,} -> {b:,}" for v, (a, b) in sorted(grown.items())),
-                action="close the span that came back (`unbake report --unknown` lists it with its cause class); the ratchet only lets unknown bytes shrink",
+                action="close the span that came back (`unbake report --unknown` lists it with its cause class)",
             )
         )
 
