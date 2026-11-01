@@ -40,6 +40,7 @@ _ENTRY = re.compile(r"^\s*(\S+?)\.o\(([^)]*)\);")
 _ALIGN = re.compile(r"^\s*\.\s*=\s*ALIGN\((0x[0-9A-Fa-f]+|\d+)\)")
 _MINIMUM = re.compile(r"^\s*\.\s*=\s*MAX\(\s*\.\s*,\s*(0x[0-9A-Fa-f]+|\d+)\s*\)")
 _CONDITIONAL_ALIGN = re.compile(r"^\s*\.\s*=\s*DEFINED\((\w+)\)\s*\?\s*ALIGN\((\d+)\)\s*:\s*\.")
+_FILL = re.compile(r"^\s*\.\s*=\s*0x[0-9A-Fa-f]+;\s*((?:BYTE\(0x[0-9A-Fa-f]{2}\);?\s*)+)")
 _OUTSEC = re.compile(r"^\s*(\.[A-Za-z0-9_.]+)\s+(?:0x[0-9A-Fa-f]+\s*)?(?:\(NOLOAD\)\s*)?:")
 
 
@@ -141,6 +142,11 @@ def parse_link(text: str) -> list[Row]:
         align = _ALIGN.match(line)
         if align:
             rows.append({"o": outsec, "k": "align", "a": int(align.group(1), 0)})
+            continue
+        fill = _FILL.match(line)
+        if fill:
+            data = bytes(int(b, 16) for b in re.findall(r"BYTE\(0x([0-9A-Fa-f]{2})\)", fill.group(1)))
+            rows.append({"o": outsec, "k": "fill", "data": data})
             continue
         minimum = _MINIMUM.match(line)
         if minimum:
@@ -349,6 +355,23 @@ def class_orders(units: Sequence[str], seqs: Mapping[str, Sequence[Row]]) -> dic
         if per:
             out[cls] = per
     return out
+
+
+def interior_fills(units: Sequence[str], seqs: Mapping[str, Sequence[Row]]) -> list[Row]:
+    """The stale link bytes (`fill` rows of the link script) that lie between two entries of `units` in some version:
+    a merged object keeps them only as data of its own. Per (unit before the bytes, class, bytes) one row
+    {"after", "cls", "data", "versions"}; the class is the one the entry before them holds."""
+    wanted = set(units)
+    found: dict[tuple[str, str, bytes], list[str]] = {}
+    for version, seq in seqs.items():
+        for i, row in enumerate(seq):
+            if row["k"] != "fill":
+                continue
+            before = next((e for e in reversed(seq[:i]) if e["k"] == "entry" and e.get("n", 0) > 0), None)
+            after = next((e for e in seq[i + 1 :] if e["k"] == "entry" and e.get("n", 0) > 0), None)
+            if before and after and before["u"] in wanted and after["u"] in wanted and len(before["cls"].split("+")) == 1:
+                found.setdefault((before["u"], before["cls"], row["data"]), []).append(version)
+    return [{"after": u, "cls": c, "data": d, "versions": v} for (u, c, d), v in found.items()]
 
 
 def object_classes(path: Path) -> dict[str, str]:

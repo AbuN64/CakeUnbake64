@@ -229,3 +229,73 @@ def test_a_definition_in_a_version_branch_against_a_header_extern_of_another_typ
     assert [(c["kind"], c["name"]) for c in out["conflicts"]] == [("extern", "s_pirawreadText")]
     same = "#if defined(X)\ns32 s_pirawreadText = 1;\n#endif\n"
     assert merge.merge([("code.c", '#include "a.h"\n'), ("data.c", same)], never, headers.get)["conflicts"] == []
+
+
+def test_a_unit_whose_functions_emit_literals_follows_the_read_only_data_of_the_units_linked_before_it() -> None:
+    """MERGE-LITERALS-2, DEFS.CPP in de: the object holds RODATA_SYM_0 (the literal its function emits), which the
+    baseline links after the two data units' constants; the merged file put the function first, so the literal came
+    first and every later constant moved 4 B."""
+    defs = 'int Defs_Fn(void) { return puts("O"); }\nint k_Defs_Block = 1;\n'
+    read = 'const char s_romLookupTableText[15] = "ROMLookupTable";\n'
+    cosine = "const float g_Defs_CosineEaseConstantWords[4] = { 1.0f, 3.14f, 1.0f, 0.5f };\n"
+    out = merge.merge(
+        [("defs", defs), ("cosine", cosine), ("read", read)],
+        never,
+        orders={"text": {"de": ["defs"]}, "rodata": {"de": ["read", "cosine", "defs"]}, "data": {"de": ["defs"]}},
+        classes={
+            "defs": {"Defs_Fn": "text", "RODATA_SYM_0": "rodata", "k_Defs_Block": "data"},
+            "read": {"s_romLookupTableText": "rodata"},
+            "cosine": {"g_Defs_CosineEaseConstantWords": "rodata"},
+        },
+    )
+    text = out["text"]
+    assert out["conflicts"] == []
+    assert text.index("s_romLookupTableText") < text.index("g_Defs_CosineEaseConstantWords") < text.index("Defs_Fn")
+
+
+def test_a_unit_without_literals_keeps_its_functions_first() -> None:
+    defs = "int Defs_Fn(void) { return 1; }\n"
+    read = 'const char s_romLookupTableText[15] = "ROMLookupTable";\n'
+    out = merge.merge(
+        [("defs", defs), ("read", read)],
+        never,
+        orders={"text": {"de": ["defs"]}, "rodata": {"de": ["read", "defs"]}},
+        classes={"defs": {"Defs_Fn": "text"}, "read": {"s_romLookupTableText": "rodata"}},
+    )
+    assert out["text"].index("Defs_Fn") < out["text"].index("s_romLookupTableText")
+
+
+def test_the_stale_link_bytes_between_two_units_stay_as_an_array_before_the_next_units_literals() -> None:
+    """MERGE-LITERALS-2, DEFS.CPP in de: the link script puts 8 stale bytes (`. = 0x29E8; BYTE(0x24)...`) after the
+    cosine constants and before the literal of DEFS; the merged object spans them or the literal and every later
+    address move by 8 B."""
+    defs = 'int Defs_Fn(void) { return puts("O"); }\n'
+    cosine = "const float g_Defs_CosineEaseConstantWords[4] = { 1.0f, 3.14f, 1.0f, 0.5f };\n"
+    fill = {"after": "cosine", "cls": "rodata", "data": bytes([0x24, 0x63, 0, 1, 3, 0xE0, 0, 8]), "versions": ["de"]}
+    out = merge.merge(
+        [("defs", defs), ("cosine", cosine)],
+        never,
+        orders={"text": {"de": ["defs"]}, "rodata": {"de": ["cosine", "defs"]}},
+        classes={"defs": {"Defs_Fn": "text", "RODATA_SYM_0": "rodata"}, "cosine": {"g_Defs_CosineEaseConstantWords": "rodata"}},
+        guards={"de": "VERSION_DE"},
+        fills=[fill],
+    )
+    text = out["text"]
+    assert out["conflicts"] == []
+    assert "const unsigned char unbake_fill_0[] = {0x24, 0x63, 0x00, 0x01, 0x03, 0xE0, 0x00, 0x08};" in text
+    assert text.index("g_Defs_CosineEaseConstantWords") < text.index("unbake_fill_0") < text.index("Defs_Fn")
+
+
+def test_stale_bytes_only_some_versions_link_are_guarded_by_those_versions() -> None:
+    fill = {"after": "a", "cls": "data", "data": b"\x01\x02", "versions": ["de"]}
+    out = merge.merge(
+        [("a", "int k_A = 1;\n"), ("b", "int k_B = 2;\n")],
+        never,
+        orders={"data": {"de": ["a", "b"], "us": ["a", "b"]}},
+        classes={"a": {"k_A": "data"}, "b": {"k_B": "data"}},
+        guards={"de": "VERSION_DE", "us": "VERSION_US"},
+        fills=[fill],
+    )
+    text = out["text"]
+    assert "#if defined(VERSION_DE)\nunsigned char unbake_fill_0[] = {0x01, 0x02};\n#endif" in text
+    assert text.index("k_A") < text.index("unbake_fill_0") < text.index("k_B")

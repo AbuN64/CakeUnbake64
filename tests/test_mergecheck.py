@@ -620,3 +620,23 @@ def test_a_gap_in_a_version_leaves_no_lma_finding_for_it() -> None:
     ]
     out = run(rows, seq)["M"]
     assert out["hard"] == ["gap: us rodata a .. b has 1 between: x"]
+
+
+def test_interior_fills_are_the_stale_link_bytes_between_two_units_of_the_module() -> None:
+    link = (
+        "  .rodata : {\n"
+        "        src/a.CPP.o(.rodata .rdata);\n"
+        "        . = 0x29E8; BYTE(0x24); BYTE(0x63); BYTE(0x00);\n"
+        "        . = MAX(., 0x29F0);\n"
+        "        src/b.CPP.o(.rodata .rdata);\n"
+        "        . = 0x3000; BYTE(0x01);\n"
+        "        src/other.CPP.o(.rodata .rdata);\n"
+        "  }\n"
+    )
+    seq = mergecheck.parse_link(link)
+    for row in seq:
+        if row["k"] == "entry":
+            row["n"], row["cls"] = 4, "+".join(row["cls"])
+    assert [r["data"] for r in seq if r["k"] == "fill"] == [bytes([0x24, 0x63, 0]), bytes([1])]
+    found = mergecheck.interior_fills(["src/a.CPP", "src/b.CPP"], {"de": seq})
+    assert found == [{"after": "src/a.CPP", "cls": "rodata", "data": bytes([0x24, 0x63, 0]), "versions": ["de"]}]

@@ -1111,6 +1111,7 @@ def _arranged(
         merging.class_orders(list(units), seqs),
         classes,
         {v: macro(v) for v in config.project.versions},
+        merging.interior_fills(list(units), seqs),
     )
 
 

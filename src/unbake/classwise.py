@@ -174,6 +174,16 @@ def _condition(versions: Iterable[str], guards: Mapping[str, str]) -> str:
     return " || ".join(f"defined({guards[v]})" for v in sorted(versions))
 
 
+def _fill(n: int, fill: Row, guards: Mapping[str, str]) -> Chunk:
+    """The array of the stale bytes `fill` names; under a condition when only some versions link them there."""
+    const = "const " if fill["cls"] == "rodata" else ""
+    text = f"{const}unsigned char unbake_fill_{n}[] = {{{', '.join(f'0x{b:02X}' for b in fill['data'])}}};"
+    chunk = Chunk(fill["after"], 1 << 30, text, text, [fill["cls"]], [f"unbake_fill_{n}"])
+    if guards and set(fill["versions"]) != set(guards):
+        chunk.when = _condition(fill["versions"], guards)
+    return chunk
+
+
 def _extern(text: str, masked: str) -> str:
     """The `extern` declaration of the data defined by a statement: its text up to the initialiser."""
     cut = masked.find("=")
@@ -185,10 +195,13 @@ def arrange(
     orders: Mapping[str, Mapping[str, Sequence[str]]],
     classes: Mapping[str, Mapping[str, str]],
     guards: Mapping[str, str] | None = None,
+    fills: Sequence[Row] = (),
 ) -> tuple[str, list[Row]]:
     """The merged body of `parts` ((unit, body, masked body, declarations) in code order) with every class in the base
     order of its `orders` (class -> version -> units in that version's linked order) and each unit a version links
-    elsewhere also emitted under `guards` (version -> macro) where that version links it, and the conflicts left."""
+    elsewhere also emitted under `guards` (version -> macro) where that version links it, and the conflicts left.
+    `fills` ({after, cls, data, versions}) are the stale link bytes between two units: each is emitted as an array of
+    those bytes after the unit's data of that class, for the versions that link them there."""
     conflicts: list[Row] = []
     every = [c for unit, body, masked, decls in parts for c in chunks(unit, body, masked, decls, classes.get(unit, {}))]
     for chunk in every:
@@ -221,7 +234,22 @@ def arrange(
     chain: dict[str, list[Chunk]] = defaultdict(list)
     for chunk in sorted(storage, key=lambda c: place[c]):
         chain[chunk.cls].append(chunk)
-    ordered, forward = _sequence(chain, storage)
+    for n, fill in enumerate(f for f in fills if f["cls"] in ("data", "rodata") and f["after"] in rank.get(f["cls"], {})):
+        chunk = _fill(n, fill, guards or {})
+        storage.append(chunk)
+        at = rank[chunk.cls][chunk.unit]
+        members = chain[chunk.cls]
+        members.insert(next((i for i, c in enumerate(members) if rank[c.cls][c.unit] > at), len(members)), chunk)
+    # a unit whose object holds read-only data no statement of it defines (the literals its functions emit) has that
+    # data where its functions are compiled, so its functions sit at the unit's place in the read-only data order
+    defined = {(c.unit, n) for c in storage for n in c.defines}
+    literals = {
+        unit: rank["rodata"][unit]
+        for unit in {c.unit for c in storage if c.cls == "text"}
+        if unit in rank.get("rodata", {})
+        and any(cls == "rodata" and (unit, name) not in defined for name, cls in classes.get(unit, {}).items())
+    }
+    ordered, forward = _sequence(chain, storage, literals, rank.get("rodata", {}))
     functions = {n: c.heads[n] for c in storage for n in c.heads}
     externs = {n: c.externs[n] for c in storage for n in c.externs}
     protos: list[str] = []
@@ -254,11 +282,26 @@ def arrange(
 
 
 def _sequence(
-    chain: Mapping[str, list[Chunk]], storage: Sequence[Chunk]
+    chain: Mapping[str, list[Chunk]],
+    storage: Sequence[Chunk],
+    literals: Mapping[str, int] | None = None,
+    rodata: Mapping[str, int] | None = None,
 ) -> tuple[list[Chunk], list[tuple[Chunk, list[str]]]]:
     """The storage chunks in one order that keeps each class chain: the next chunk of the class whose head is first in
     the default order (the order of the text chain, then the rest) and whose data names are all defined; when none
-    is ready, the first head goes anyway and its early uses are returned."""
+    is ready, the first head goes anyway and its early uses are returned. `literals` (unit -> its place in the
+    read-only data order) holds the units whose functions emit read-only data: their functions wait for the
+    read-only chunks of the units before them, and the read-only chunks of the units after them wait for their
+    functions. `rodata` is every unit's place in that order."""
+    literals, rodata = literals or {}, rodata or {}
+
+    def waits(head: Chunk) -> bool:
+        if head.cls == "text" and head.unit in literals:
+            return any(rodata.get(c.unit, 0) < literals[head.unit] for c in heads.get("rodata", [])[:1])
+        if head.cls == "rodata":
+            return any(literals[c.unit] < rodata.get(head.unit, 0) for c in heads.get("text", []) if c.unit in literals)
+        return False
+
     home = {c: i for i, c in enumerate(c for cls in ("text", *CLASSES) for c in chain.get(cls, ()))}
     owner: dict[str, list[Chunk]] = defaultdict(list)
     for c in storage:
@@ -278,7 +321,11 @@ def _sequence(
         for c in storage
     }
     while any(heads.values()):
-        ready = [h[0] for h in heads.values() if h and all(id(o) in done for w in uses[h[0]] for o in owner[w])]
+        ready = [
+            h[0]
+            for h in heads.values()
+            if h and not waits(h[0]) and all(id(o) in done for w in uses[h[0]] for o in owner[w])
+        ]
         pick = min(ready or [h[0] for h in heads.values() if h], key=lambda c: home[c])
         if pick not in ready:
             forward.append((pick, sorted(w for w in uses[pick] if any(id(o) not in done for o in owner[w]))))

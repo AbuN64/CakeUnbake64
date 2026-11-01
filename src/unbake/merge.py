@@ -462,13 +462,16 @@ def merge(
     orders: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
     classes: Mapping[str, Mapping[str, str]] | None = None,
     guards: Mapping[str, str] | None = None,
+    fills: Sequence[Row] = (),
 ) -> Row:
     """The merged text of `units` ((name, text) in link order) and the report:
     {"text", "includes", "pads": [names], "dropped": n, "conflicts": [{kind, name, detail}], "retyped": [text]}:
     `retyped` lists the prototypes dropped for a differing earlier definition, whose callers may need a cast.
     `orders` (class -> version -> units in that version's linked order) with `classes` (unit -> symbol -> class, read
     from the built objects) emits each class in its base order when the classes are not linked in the order of `units`,
-    and a unit some version links elsewhere again under `guards` (version -> macro) of the versions that move it."""
+    and a unit some version links elsewhere again under `guards` (version -> macro) of the versions that move it.
+    `fills` are the stale link bytes between two of the units (`mergecheck.interior_fills`): the merged object keeps
+    them as arrays, so it spans the bytes the units linked in."""
     seen: list[str] = []
     bodies: list[tuple[str, str]] = []
     pads: list[str] = []
@@ -501,9 +504,9 @@ def merge(
         spans = [(d.start, d.end) for d in marked[name]]
         removed += len(spans)
         cut.append((name, _cut(body, spans).strip("\n")))
-    if orders and _differs(orders, [name for name, _ in cut]):
+    if orders and (fills or _differs(orders, [name for name, _ in cut])):
         arranged, more = classwise.arrange(
-            [(name, body, mask(body), decls(body, name)) for name, body in cut], orders, classes or {}, guards
+            [(name, body, mask(body), decls(body, name)) for name, body in cut], orders, classes or {}, guards, fills
         )
         out, conflicts = [arranged], [*conflicts, *more]
     else:
