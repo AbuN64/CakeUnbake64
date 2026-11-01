@@ -1,57 +1,43 @@
 #!/usr/bin/env python3
-"""Deploys the landed CakeUnbake64 commit to the rig toolkit through Job Invoke. Run from a run's CakeUnbake64
-worktree, whose card has a live run (Job Invoke pushes the commit from there):
+"""The rig deploy steps of CakeUnbake64: one step per `.deploy` line, each an entry point of this file. The close runs
+them in file order on the rig at the landed revision, from the root of the tree, with
+LANDED_Projects_AbuN64_CakeUnbake64 set and `deploy-env TOOLKIT=<live link>` in the environment; it appends its own
+landing arguments, which no step reads.
+Unbake is pinned by no other repository: the toolkit's installed `decomp tools deploy` installs the package `unbake` at
+the landed SHA and carries every other installed package over as it is. A step prints its facts and exits 0, or prints
+one line on stderr and exits 1; it calls no other tool of the close.
 
-  LANDED_Projects_AbuN64_CakeUnbake64=SHA ci/deploy_rig.py --Subject.Board BOARD --Subject.Card CARD
+  name       the toolkit's own `decomp tools name` (AbuDecomp64's engine owns the rule; this repository holds no copy)
+             answers the build's NAME, a digest of every package commit the new toolkit holds (the live toolkit's, with
+             unbake at the landed SHA), never the SHA alone. A live toolkit whose decomp lacks `tools name` refuses:
+             deploy AbuDecomp64 first;
+  build      the activation (`activate`, BUILD is <toolkit>.<SHA>): `decomp tools deploy --package unbake --sha SHA`
+             builds a fresh venv through a private `<toolkit>-stage` link, BUILD is linked to it, and the full test
+             suite runs in the tree with BUILD's python and the tree's src first on the import path. A failing suite
+             exits non-zero and the live link stays; on exit 0 the close switches the live link to BUILD;
+  readback   the live link resolves to BUILD and the installed commit of unbake equals the landed SHA. A mismatch
+             refuses (fix forward, no rollback).
 
-ButlerMaster's close appends the two Subject arguments (the landing card) to the .deploy argv. Unbake is pinned by no
-other repository: the toolkit's installed `decomp tools deploy` installs the package `unbake` at SHA and carries every
-other installed package over as it is. Any refusal or failed step prints one line on stderr and exits 1. Every rig step
-is one `mo-butlermaster Job Invoke` at the exact SHA in a Worktree (JOBS is Dos's width):
+  deploy-env TOOLKIT=/home/abu/venv-decomp
+  rig run ci/deploy_rig.py name
+  rig activate ci/deploy_rig.py /home/abu/venv-decomp build
+  rig run ci/deploy_rig.py readback"""
 
-  1. the SHA must be on gitea main; when gitea main has moved past it to a descendant, main's head
-     is deployed instead and the log says the older deploy deferred;
-  2. the name job: the toolkit's own `decomp tools name` (AbuDecomp64's engine owns the rule; this repository holds no
-     copy) answers the build's NAME, a digest of every package commit the new toolkit holds (the live toolkit's, with
-     unbake at SHA), never the SHA alone: a toolkit build holds several packages, and another repository's deploy must
-     not collide with this one's name. A live toolkit whose decomp lacks `tools name` refuses: deploy AbuDecomp64 first;
-  3. the activation job (Toolkit = the live link, Revision = NAME, so BUILD is <toolkit>.<NAME>):
-     `decomp tools deploy --package unbake --sha SHA` builds a fresh venv through a private `<toolkit>-stage` link,
-     BUILD is linked to it, and the full test suite runs in the Worktree with BUILD's python and the Worktree's src
-     first on the import path. A failing suite exits non-zero: Job Invoke leaves the live link alone. On exit 0 Job
-     Invoke switches the live link to BUILD. When the live link already names BUILD, Job Invoke answers Exit 0 with
-     `<link> is <target>: already active` and runs nothing: the readback still decides;
-  4. the readback job: the live link resolves to BUILD and the installed commit of unbake equals SHA. A mismatch
-     refuses (fix forward, no rollback).
-The deploy's answer is the deployed SHA with each job's Exit and Log."""
-
-import argparse
 import json
 import os
 import re
 import subprocess
 import sys
 from collections.abc import Callable
-from pathlib import Path, PurePosixPath
 
 ENV = "LANDED_Projects_AbuN64_CakeUnbake64"
-REPOSITORY = "Projects/AbuN64/CakeUnbake64"
-HOST = "rig"
-TOOLKIT = "/home/abu/venv-decomp"
-PACKAGE = "unbake"
-GITEA = "http://10.10.10.130:18556/Projects/CakeUnbake64.git"
 SHA = re.compile(r"[0-9a-f]{40}")
 NAME_RE = re.compile(r"[0-9a-f]{12}")
-# The job log may carry the line behind a `mo-butlermaster: ` prefix.
-ALREADY_ACTIVE = re.compile(r"\S+ is \S+: already active$", re.MULTILINE)
 
-# git(args) runs git here and returns (exit code, output); job(request) is `mo-butlermaster Job Invoke` and returns its
-# answer; read(path) reads a job's Log, which lives on this machine.
-Seam = Callable[..., "tuple[int, str]"]
-Job = Callable[[dict], "Answer"]
-Read = Callable[[str], str]
+# bash(script, args) runs one of the scripts below and returns its exit code and, when captured, its stdout.
+Bash = Callable[..., "tuple[int, str]"]
 
-# NAME runs in the Worktree before the activation and answers the build's name: the engine's JSON envelope on stdout,
+# NAME runs in the tree before the activation and answers the build's name: the engine's JSON envelope on stdout,
 # whose result.name is the digest of the whole content. Arguments: SHA TOOLKIT.
 NAME = r"""set -u
 sha=$1 toolkit=$2
@@ -60,13 +46,13 @@ sha=$1 toolkit=$2
        exit 1; }
 """
 
-# BUILD runs inside the activation job with BUILD (<toolkit>.<name>) set by Job Invoke. The stage link starts at the
+# BUILD runs inside the activation job with BUILD (<toolkit>.<name>) set by the close. The stage link starts at the
 # live toolkit, so the packages `decomp tools deploy` carries over are the live ones; it builds
 # `<toolkit>-stage.<name>` (or -N when that name is taken) and swaps only the stage link. BUILD becomes a link to that
-# venv: Job Invoke's switch is the only way a venv goes live. Arguments: SHA TOOLKIT NAME.
+# venv: the close's switch is the only way a venv goes live. Arguments: SHA TOOLKIT NAME.
 BUILD = r"""set -u
 sha=$1 toolkit=$2 name=$3
-: "${BUILD:?Job Invoke sets BUILD for an activation}"
+: "${BUILD:?the close sets BUILD for an activation}"
 stage=$toolkit-stage
 ln -sfn "$(readlink -f "$toolkit")" "$stage" || exit 1
 (cd "$HOME" && "$toolkit/bin/decomp" tools deploy --package unbake --sha "$sha" --venv "$stage") \
@@ -80,18 +66,21 @@ ln -sfn "$built" "$BUILD" || exit 1
 echo "deploy-build: $built"
 """
 
-# SUITE runs in the Worktree after BUILD, with BUILD set: the full suite on BUILD's python with the Worktree's src
-# first on the import path. One `suite-KEY: value` line per fact, then the suite's own output.
+# SUITE runs in the tree after BUILD (Arguments: SHA), with BUILD set: the full suite on BUILD's python with the
+# tree's src first on the import path. One `suite-KEY: value` line per fact, then the suite's own output.
 SUITE = r"""set -u
+sha=$1
 echo "suite-checkout: $(pwd -P)"
 echo "suite-sha: $(git rev-parse HEAD)"
+head=$(git rev-parse HEAD)
+[ "$head" = "$sha" ] || { echo "suite: the tree is at $head, not the landed $sha" >&2; exit 1; }
 export PYTHONPATH=$PWD/src PYTHONDONTWRITEBYTECODE=1
 imported=$("$BUILD/bin/python" -c 'import os, unbake; print(os.path.realpath(unbake.__file__))') || exit 9
 echo "suite-import: $imported"
-"$BUILD/bin/python" -m pytest -q -p no:cacheprovider -n "${JOBS:?Job Invoke sets JOBS}" --rootdir "$PWD" tests
+"$BUILD/bin/python" -m pytest -q -p no:cacheprovider -n "${JOBS:?the close sets JOBS}" --rootdir "$PWD" tests
 """
 
-# READBACK runs in the Worktree after the switch. Arguments: SHA TOOLKIT BUILD.
+# READBACK runs in the tree after the switch. Arguments: SHA TOOLKIT BUILD.
 READBACK = r"""set -u
 sha=$1 toolkit=$2 build=$3
 live=$(readlink -f "$toolkit") || exit 9
@@ -118,87 +107,19 @@ class Refused(Exception):
     """One line cause of a refusal or failed step."""
 
 
-class Answer(dict):
-    """The Response of one Job Invoke: Exit, Log, Width, Host and Subject."""
-
-
-def run(argv: list[str], stdin: str | None = None) -> tuple[int, str]:
-    done = subprocess.run(argv, input=stdin, capture_output=True, text=True, check=False)
-    return done.returncode, (done.stdout + done.stderr).strip()
-
-
-def git(*args: str) -> tuple[int, str]:
-    return run(["git", *args])
-
-
-def read_log(path: str) -> str:
-    try:
-        return Path(path).read_text(errors="replace")
-    except OSError as error:
-        raise Refused(f"cannot read the job log {path}: {error}") from error
+def bash(script: str, *args: str, capture: bool = False) -> tuple[int, str]:
+    done = subprocess.run(
+        ["bash", "-c", script, "step", *args], stdout=subprocess.PIPE if capture else None, text=True, check=False
+    )
+    return done.returncode, done.stdout or ""
 
 
 def last_line(text: str, default: object) -> str:
     return text.strip().splitlines()[-1] if text.strip() else str(default)
 
 
-def answer_of(code: int, out: str) -> Answer:
-    """Parses `Job Invoke --output=json`: the Response, or Refused with the refusal's Code, Message and NextStep."""
-    try:
-        response = json.loads(out)["Response"]
-    except (ValueError, KeyError, TypeError):
-        raise Refused(f"Job Invoke answered no Response (exit {code}): {last_line(out, 'no output')}") from None
-    error = response.get("Error") if isinstance(response, dict) else None
-    if error or code:
-        error = error or {}
-        raise Refused(
-            f"Job Invoke refused {error.get('Code', 'Fault')} (exit {code}): {error.get('Message', 'no message')}"
-            + (f"; next: {error['NextStep']}" if error.get("NextStep") else "")
-        )
-    if not isinstance(response.get("Exit"), int) or not isinstance(response.get("Log"), str):
-        raise Refused(f"Job Invoke answered no Exit and Log: {json.dumps(response)[:200]}")
-    return Answer(response)
-
-
-def job_invoke(body: dict) -> Answer:
-    """The public CLI: `mo-butlermaster Job Invoke --input=json` with the request on stdin."""
-    stdin = json.dumps({"Metadata": {}, "Request": body})
-    return answer_of(*run(["mo-butlermaster", "Job", "Invoke", "--input=json", "--output=json"], stdin))
-
-
-def landed_sha(environ: dict[str, str]) -> str:
-    sha = environ.get(ENV, "")
-    if not SHA.fullmatch(sha):
-        raise Refused(f"{ENV} is not a 40-hex SHA: {sha!r}")
-    return sha
-
-
-def newest_main(sha: str, git: Seam) -> str:
-    """The SHA to deploy: gitea main's head when it descends from sha (sha itself when it is the head), else Refused.
-    The checkout the deploy runs in has no `gitea` remote, so gitea main is fetched by URL (as AbuDecomp64's and
-    CakeTaste64's deploys do); FETCH_HEAD is that main."""
-    code, out = git("fetch", "-q", "--no-tags", GITEA, "main")
-    if code:
-        raise Refused(f"cannot fetch gitea main ({GITEA}): {last_line(out, code)}")
-    if git("merge-base", "--is-ancestor", sha, "FETCH_HEAD")[0]:
-        raise Refused(f"{sha[:12]} is not on gitea main")
-    code, out = git("rev-parse", "FETCH_HEAD")
-    return out if code == 0 and SHA.fullmatch(out) else sha
-
-
-def have_commit(sha: str, git: Seam) -> None:
-    """Job Invoke pushes the commit from this repository: it must be here (newest_main fetched gitea main)."""
-    if git("cat-file", "-e", f"{sha}^{{commit}}")[0]:
-        raise Refused(f"{sha[:12]} is not in this repository, so Job Invoke cannot push it to the rig")
-
-
-def request(board: str, card: str, sha: str, argv: list[str], activation: dict[str, str] | None = None) -> dict:
-    body = {"Subject": {"Board": board, "Card": card}, "Host": HOST, "Worktree": f"{REPOSITORY}@{sha}", "Argv": argv}
-    return {**body, "Activation": activation} if activation else body
-
-
 def build_name(text: str) -> str:
-    """The name the engine answered: result.name of the JSON envelope on the name job's log."""
+    """The name the engine answered: result.name of the JSON envelope on the name step's stdout."""
     for line in reversed(text.splitlines()):
         try:
             name = json.loads(line)["result"]["name"]
@@ -206,75 +127,56 @@ def build_name(text: str) -> str:
             continue
         if isinstance(name, str) and NAME_RE.fullmatch(name):
             return name
-    raise Refused(f"the name job answered no build name: {last_line(text, 'no output')}")
+    raise Refused(f"the name step answered no build name: {last_line(text, 'no output')}")
 
 
-def suite_facts(text: str) -> dict[str, str]:
-    facts = {}
-    for line in text.splitlines():
-        key, sep, value = line.partition(": ")
-        if sep and key.startswith("suite-"):
-            facts[key] = value
-    return facts
+def landed(environ: dict[str, str]) -> tuple[str, str]:
+    """The landed SHA and the live toolkit link, each from its own explicit variable."""
+    sha = environ.get(ENV, "")
+    if not SHA.fullmatch(sha):
+        raise Refused(f"{ENV} is not a 40-hex SHA: {sha!r}")
+    toolkit = environ.get("TOOLKIT", "")
+    if not toolkit.startswith("/"):
+        raise Refused(f"TOOLKIT is not an absolute path (a `deploy-env TOOLKIT=<live link>` line): {toolkit!r}")
+    return sha, toolkit
 
 
-def checked_suite(sha: str, log: str, text: str) -> list[str]:
-    """The suite facts of the activation job's log: each must hold, else Refused."""
-    facts = suite_facts(text)
-    for key in ("suite-checkout", "suite-sha", "suite-import"):
-        if key not in facts:
-            raise Refused(f"suite gate did not finish at {sha[:12]} ({log}): {last_line(text, 'no output')}")
-    if facts["suite-sha"] != sha:
-        raise Refused(f"suite ran at {facts['suite-sha']}, not the landed {sha}")
-    if not PurePosixPath(facts["suite-import"]).is_relative_to(facts["suite-checkout"]):
-        raise Refused(f"suite imported {PACKAGE} from {facts['suite-import']}, outside {facts['suite-checkout']}")
-    return [f"{sha[:12]}: suite sha {sha}", f"{sha[:12]}: suite imported {facts['suite-import']}"]
+def name(sha: str, toolkit: str, run: Bash) -> str:
+    code, out = run(NAME, sha, toolkit, capture=True)
+    sys.stdout.write(out)
+    if code:
+        raise Refused(f"name exit {code}: {last_line(out, 'no output')}")
+    return build_name(out)
 
 
-def deploy(sha: str, board: str, card: str, toolkit: str, job: Job, git: Seam, read: Read) -> list[str]:
-    """Deploys the newest landed main; returns the log lines to print. Raises Refused on the first failed step."""
-    lines = []
-    head = newest_main(sha, git)
-    if head != sha:
-        lines.append(f"{sha[:12]}: main has moved to {head[:12]}, deploying main's head; the older deploy deferred")
-        sha = head
-    have_commit(sha, git)
-    named = job(request(board, card, sha, ["bash", "-c", NAME, "name", sha, toolkit]))
-    text = read(named["Log"])
-    lines.append(f"{sha[:12]}: name job Exit {named['Exit']}, Log {named['Log']}")
-    if named["Exit"]:
-        raise Refused(f"name exit {named['Exit']}: {last_line(text, 'no output')} ({named['Log']})")
-    revision = build_name(text)
-    build = f"{toolkit}.{revision}"
-    argv = ["bash", "-c", BUILD + SUITE, "deploy", sha, toolkit, revision]
-    activation = job(request(board, card, sha, argv, {"Toolkit": toolkit, "Revision": revision}))
-    log = activation["Log"]
-    lines.append(f"{revision}: activation job Exit {activation['Exit']}, Log {log}")
-    text = read(log)
-    if activation["Exit"]:
-        raise Refused(f"activation exit {activation['Exit']}, links unchanged: {last_line(text, 'no output')} ({log})")
-    if ALREADY_ACTIVE.search(text):
-        lines.append(f"{revision}: activation was a no-op, the live link already names the build; suite gate skipped")
-    else:
-        lines += checked_suite(sha, log, text)
-    readback = job(request(board, card, sha, ["bash", "-c", READBACK, "readback", sha, toolkit, build]))
-    lines.append(f"{revision}: readback job Exit {readback['Exit']}, Log {readback['Log']}")
-    final = read(readback["Log"])
-    if readback["Exit"]:
-        raise Refused(f"readback exit {readback['Exit']}: {last_line(final, 'no output')} ({readback['Log']})")
-    return [*lines, f"{revision}: {toolkit} reads {build}; {last_line(final, '')}", f"deployed {sha}"]
+def step_name(sha: str, toolkit: str, run: Bash) -> None:
+    sys.stdout.write(f"name: {name(sha, toolkit, run)}\n")
+    sys.stdout.flush()
 
 
-def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Deploy the landed CakeUnbake64 commit to the rig toolkit.")
-    parser.add_argument("--Subject.Board", dest="board", required=True)
-    parser.add_argument("--Subject.Card", dest="card", required=True)
-    args = parser.parse_args(argv)
+def step_build(sha: str, toolkit: str, run: Bash) -> None:
+    revision = name(sha, toolkit, run)
+    code, _ = run(BUILD + SUITE, sha, toolkit, revision)
+    if code:
+        raise Refused(f"build exit {code}, links unchanged")
+
+
+def step_readback(sha: str, toolkit: str, run: Bash) -> None:
+    code, _ = run(READBACK, sha, toolkit, f"{toolkit}.{sha}")
+    if code:
+        raise Refused(f"readback exit {code}")
+
+
+STEPS = {"name": step_name, "build": step_build, "readback": step_readback}
+
+
+def main(argv: list[str] | None = None, environ: dict[str, str] | None = None, run: Bash = bash) -> int:
+    argv = sys.argv[1:] if argv is None else argv
     try:
-        sha = landed_sha(dict(os.environ) if environ is None else environ)
-        for line in deploy(sha, args.board, args.card, TOOLKIT, job_invoke, git, read_log):
-            sys.stdout.write(line + "\n")
-            sys.stdout.flush()
+        step = STEPS.get(argv[0] if argv else "")
+        if step is None:
+            raise Refused(f"the step is one of {', '.join(STEPS)}, not {argv[0] if argv else 'nothing'!r}")
+        step(*landed(dict(os.environ) if environ is None else environ), run)
     except Refused as refusal:
         sys.stderr.write(f"deploy refused: {refusal}\n")
         return 1

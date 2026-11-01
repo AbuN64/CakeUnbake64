@@ -14,178 +14,106 @@ deploy_rig = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deploy_rig)
 
 SHA = "a" * 12 + "b" * 28
-NEWER = "d" * 12 + "e" * 28
-TOOLKIT = deploy_rig.TOOLKIT
+TOOLKIT = "/home/abu/venv-decomp"
 NAME = "0123456789ab"  # the engine's digest of the whole content; never the SHA
-BUILD = f"{TOOLKIT}.{NAME}"
-CHECKOUT = "/srv/runs/board1.card1/Projects/AbuN64/CakeUnbake64"
+ENVIRON = {deploy_rig.ENV: SHA, "TOOLKIT": TOOLKIT}
+ENVELOPE = json.dumps({"result": {"name": NAME}}) + "\n"
+ARGS = ["--Subject.Board", "board1", "--Subject.Card", "card1"]  # the close appends them; no step reads them
 
 
-class Rig:
-    """Job Invoke, git and the log reader as the deploy sees them."""
+class Bash:
+    """The seam: records each script run with its arguments and answers (exit code, stdout) from a queue."""
 
-    def __init__(self, activation_exit=0, activation_log=None, readback_exit=0, readback=None, on_gitea=True):
-        self.requests = []
-        self.commands = []
-        self.logs = {
-            "/log/1": activation_log
-            if activation_log is not None
-            else f"suite-checkout: {CHECKOUT}\nsuite-sha: {SHA}\nsuite-import: {CHECKOUT}/src/unbake/__init__.py\n",
-            "/log/2": readback if readback is not None else f"readback-pin: unbake {SHA}\n",
-        }
-        self.exits = [activation_exit, readback_exit]
-        self.on_gitea = on_gitea
-        self.names = []  # the name jobs, answered before the numbered ones
-        self.name_log = json.dumps({"ok": True, "result": {"name": NAME}}) + "\n"
-        self.name_exit = 0
-        self.fetched = None  # what FETCH_HEAD holds: the URL of the last fetch
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.calls = []
 
-    def job(self, body):
-        if body["Argv"][2] == deploy_rig.NAME:
-            self.names.append(body)
-            return deploy_rig.Answer(Exit=self.name_exit, Log="/log/name")
-        self.requests.append(body)
-        index = len(self.requests)
-        return deploy_rig.Answer(Exit=self.exits[index - 1], Log=f"/log/{index}")
-
-    def git(self, *args):
-        self.commands.append(args)
-        if args[:1] == ("fetch",):
-            if "gitea" in args:  # the checkout the deploy runs in has no remote of that name
-                return 128, "fatal: 'gitea' does not appear to be a git repository and the repository exists."
-            self.fetched = args[-2]
-        if args[:1] == ("merge-base",) and self.fetched == deploy_rig.GITEA and not self.on_gitea:
-            return 1, ""
-        if args[:2] == ("rev-parse", "FETCH_HEAD"):
-            return 0, SHA
-        return 0, ""
-
-    def read(self, path):
-        return self.name_log if path == "/log/name" else self.logs[path]
-
-    def deploy(self, sha=SHA):
-        return deploy_rig.deploy(sha, "board1", "card1", TOOLKIT, self.job, self.git, self.read)
+    def __call__(self, script, *args, capture=False):
+        self.calls.append((script, args, capture))
+        return self.answers.pop(0)
 
 
-def test_the_activation_deploys_package_unbake_at_the_landed_sha_then_reads_it_back():
-    rig = Rig()
-    lines = rig.deploy()
-    activation, readback = rig.requests
-    assert activation["Worktree"] == f"Projects/AbuN64/CakeUnbake64@{SHA}"
-    assert activation["Host"] == "rig"
-    assert activation["Activation"] == {"Toolkit": TOOLKIT, "Revision": NAME}
-    assert activation["Argv"][-3:] == [SHA, TOOLKIT, NAME]
-    assert "tools deploy --package unbake --sha" in activation["Argv"][2]
-    assert "pytest" in activation["Argv"][2]
-    assert readback["Argv"][-3:] == [SHA, TOOLKIT, BUILD]
-    assert "Activation" not in readback
-    assert lines[-1] == f"deployed {SHA}"
-    assert f"readback-pin: unbake {SHA}" in lines[-2]
+def main(step, bash, environ=ENVIRON):
+    code = deploy_rig.main([step, *ARGS], environ, bash)
+    return code
 
 
-def test_main_moved_on_deploys_the_head_and_defers_the_older_deploy():
-    log = f"suite-checkout: {CHECKOUT}\nsuite-sha: {NEWER}\nsuite-import: {CHECKOUT}/src/unbake/__init__.py\n"
-    rig = Rig(activation_log=log, readback=f"readback-pin: unbake {NEWER}\n")
-    rig.git = lambda *args: (0, NEWER) if args[:2] == ("rev-parse", "FETCH_HEAD") else (0, "")
-    lines = rig.deploy()
-    assert "the older deploy deferred" in lines[0]
-    assert rig.requests[0]["Worktree"].endswith(f"@{NEWER}")
+def test_name_prints_the_engines_name(capsys):
+    bash = Bash((0, "noise\n" + ENVELOPE))
+    assert main("name", bash) == 0
+    assert f"name: {NAME}" in capsys.readouterr().out
+    assert bash.calls == [(deploy_rig.NAME, (SHA, TOOLKIT), True)]
 
 
-def test_gitea_main_is_fetched_by_url_never_by_a_remote_name_the_checkout_lacks():
-    """8b74bbd: `git fetch gitea main` refused in the checkout the deploy runs in, which has no remote of that name.
-    Gitea main is the only main consulted: no github fetch, no github check (DEPLOY-GITEA-ONLY)."""
-    rig = Rig()
-    rig.deploy()
-    fetches = [args for args in rig.commands if args[:1] == ("fetch",)]
-    assert [args[-2] for args in fetches] == [deploy_rig.GITEA]
-    assert all(args[-1] == "main" for args in fetches)
-    assert not any("gitea/main" in args for args in rig.commands)
-    assert not any("github" in str(args) for args in rig.commands)
-    assert not hasattr(deploy_rig, "GITHUB")
+def test_a_failed_name_refuses_and_stops_build_before_any_build(capsys):
+    assert main("name", Bash((1, "name-error\n"))) == 1
+    assert "name exit 1" in capsys.readouterr().err
+    bash = Bash((1, ""))
+    assert main("build", bash) == 1
+    assert len(bash.calls) == 1
 
 
-def test_an_unreachable_gitea_refuses_naming_the_url_before_any_job():
-    rig = Rig()
-    rig.git = lambda *args: (128, "fatal: unable to access") if args[:1] == ("fetch",) else (0, "")
-    with pytest.raises(deploy_rig.Refused, match=r"cannot fetch gitea main \(http"):
-        rig.deploy()
-    assert rig.requests == []
+def test_build_names_the_build_then_runs_build_and_suite_with_the_name():
+    bash = Bash((0, ENVELOPE), (0, ""))
+    assert main("build", bash) == 0
+    script, args, capture = bash.calls[1]
+    assert (args, capture) == ((SHA, TOOLKIT, NAME), False)
+    assert script == deploy_rig.BUILD + deploy_rig.SUITE
 
 
-def test_a_sha_off_gitea_main_refuses_before_any_job():
-    rig = Rig(on_gitea=False)
-    with pytest.raises(deploy_rig.Refused, match="not on gitea main"):
-        rig.deploy()
-    assert rig.requests == []
+def test_a_failing_build_or_suite_refuses_with_the_links_unchanged(capsys):
+    assert main("build", Bash((0, ENVELOPE), (1, ""))) == 1
+    assert "build exit 1, links unchanged" in capsys.readouterr().err
 
 
-def test_a_failing_suite_refuses_and_names_the_last_line():
-    rig = Rig(activation_exit=1, activation_log="FAILED tests/test_x.py::test_y\n")
-    with pytest.raises(deploy_rig.Refused, match=r"activation exit 1, links unchanged: FAILED tests/test_x.py::test_y"):
-        rig.deploy()
-    assert len(rig.requests) == 1
+def test_readback_reads_the_build_linked_for_the_landed_sha(capsys):
+    bash = Bash((0, ""))
+    assert main("readback", bash) == 0
+    assert bash.calls == [(deploy_rig.READBACK, (SHA, TOOLKIT, f"{TOOLKIT}.{SHA}"), False)]
+    assert main("readback", Bash((1, ""))) == 1
+    assert "readback exit 1" in capsys.readouterr().err
 
 
-def test_a_suite_that_imported_unbake_outside_its_checkout_refuses():
-    log = f"suite-checkout: {CHECKOUT}\nsuite-sha: {SHA}\nsuite-import: /elsewhere/unbake/__init__.py\n"
-    with pytest.raises(deploy_rig.Refused, match="outside"):
-        Rig(activation_log=log).deploy()
+@pytest.mark.parametrize("step", ["deploy", "serve", ""])
+def test_an_unknown_or_missing_step_refuses_before_any_script(step, capsys):
+    bash = Bash()
+    assert main(step, bash) == 1
+    assert "the step is one of" in capsys.readouterr().err
+    assert bash.calls == []
 
 
-def test_a_suite_at_another_commit_refuses():
-    log = f"suite-checkout: {CHECKOUT}\nsuite-sha: {NEWER}\nsuite-import: {CHECKOUT}/src/unbake/__init__.py\n"
-    with pytest.raises(deploy_rig.Refused, match="not the landed"):
-        Rig(activation_log=log).deploy()
+@pytest.mark.parametrize(
+    ("environ", "want"),
+    [
+        ({}, "is not a 40-hex SHA"),
+        ({deploy_rig.ENV: "abc", "TOOLKIT": TOOLKIT}, "is not a 40-hex SHA"),
+        ({deploy_rig.ENV: SHA}, "TOOLKIT is not an absolute path"),
+        ({deploy_rig.ENV: SHA, "TOOLKIT": "venv"}, "TOOLKIT is not an absolute path"),
+    ],
+)
+def test_the_landed_sha_must_be_forty_hex_and_the_toolkit_absolute(environ, want, capsys):
+    bash = Bash()
+    assert main("name", bash, environ) == 1
+    assert want in capsys.readouterr().err
+    assert bash.calls == []
 
 
-def test_an_already_active_build_skips_the_suite_and_the_readback_still_decides():
-    rig = Rig(activation_log=f"{TOOLKIT} is {BUILD}: already active\n")
-    assert any("no-op" in line for line in rig.deploy())
-    rig = Rig(
-        activation_log=f"{TOOLKIT} is {BUILD}: already active\n", readback_exit=1, readback="readback: unbake is x\n"
-    )
-    with pytest.raises(deploy_rig.Refused, match="readback exit 1: readback: unbake is x"):
-        rig.deploy()
+def test_the_orchestrator_is_gone():
+    text = (Path(__file__).parent.parent / "ci" / "deploy_rig.py").read_text()
+    for gone in ("job_invoke", "answer_of", "newest_main", "have_commit", "Subject.Board", "def deploy(", "Job Invoke"):
+        assert gone not in text, gone
 
 
-def test_the_butlermaster_prefixed_already_active_line_is_the_no_op():
-    """rig-20261031T193711Z: the whole log was this one line and the 1e6d9bc deploy refused it as a gate failure."""
-    rig = Rig(activation_log=f"mo-butlermaster: {TOOLKIT} is {BUILD}: already active\n")
-    assert any("no-op" in line for line in rig.deploy())
-    rig = Rig(
-        activation_log=f"mo-butlermaster: {TOOLKIT} is {BUILD}: already active\n",
-        readback_exit=1,
-        readback="readback: unbake is x\n",
-    )
-    with pytest.raises(deploy_rig.Refused, match="readback exit 1: readback: unbake is x"):
-        rig.deploy()
-
-
-def test_job_invoke_refusals_and_bad_answers_are_one_line():
-    refusal = json.dumps({"Response": {"Error": {"Code": "Busy", "Message": "no", "NextStep": "wait"}}})
-    with pytest.raises(deploy_rig.Refused, match=r"Job Invoke refused Busy .*: no; next: wait"):
-        deploy_rig.answer_of(1, refusal)
-    with pytest.raises(deploy_rig.Refused, match="no Response"):
-        deploy_rig.answer_of(0, "not json")
-    with pytest.raises(deploy_rig.Refused, match="no Exit and Log"):
-        deploy_rig.answer_of(0, json.dumps({"Response": {"Exit": 0}}))
-
-
-def test_the_landed_sha_must_be_forty_hex():
-    assert deploy_rig.landed_sha({deploy_rig.ENV: SHA}) == SHA
-    for bad in ("", "main", SHA[:12]):
-        with pytest.raises(deploy_rig.Refused, match=deploy_rig.ENV):
-            deploy_rig.landed_sha({deploy_rig.ENV: bad})
-
-
-def test_main_prints_the_deploy_and_exits_one_on_a_refusal(capsys, monkeypatch):
-    args = ["--Subject.Board", "board1", "--Subject.Card", "card1"]
-    monkeypatch.setattr(deploy_rig, "deploy", lambda *a: [f"deployed {SHA}"])
-    assert deploy_rig.main(args, {deploy_rig.ENV: SHA}) == 0
-    assert capsys.readouterr().out == f"deployed {SHA}\n"
-    assert deploy_rig.main(args, {}) == 1
-    assert capsys.readouterr().err.startswith("deploy refused:")
+def test_the_deploy_file_is_the_step_grammar():
+    root = Path(__file__).parent.parent
+    lines = (root / ".deploy").read_text().splitlines()
+    assert lines == [
+        f"deploy-env TOOLKIT={TOOLKIT}",
+        "rig run ci/deploy_rig.py name",
+        f"rig activate ci/deploy_rig.py {TOOLKIT} build",
+        "rig run ci/deploy_rig.py readback",
+    ]
+    assert os.access(root / "ci" / "deploy_rig.py", os.X_OK)
 
 
 def wrapper(path, body):
@@ -274,9 +202,13 @@ def test_the_build_name_is_the_envelopes_12_hex_name_and_anything_else_is_refuse
             deploy_rig.build_name(bad)
 
 
-def test_a_failed_name_job_refuses_before_the_activation():
-    rig = Rig()
-    rig.name_exit = 1
-    with pytest.raises(deploy_rig.Refused, match="name exit 1"):
-        rig.deploy()
-    assert rig.requests == []
+def test_the_suite_refuses_a_tree_at_another_commit_than_the_landed_one():
+    with tempfile.TemporaryDirectory() as temp:
+        repo = Path(temp)
+        identity = ["-c", "user.name=t", "-c", "user.email=t@t"]
+        for args in (["init", "-q", "-b", "main"], [*identity, "commit", "-q", "--allow-empty", "-m", "c"]):
+            subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+        done = bash(deploy_rig.SUITE, SHA, cwd=repo, env={"BUILD": str(repo)})
+        assert done.returncode == 1
+        assert "not the landed" in done.stderr
+        assert "suite-sha:" in done.stdout
