@@ -164,7 +164,7 @@ Removed public functions: `store.claim`, `store.ledger_append`, `store.ledger`, 
 | `.unbake/inbox/done/<id>.json`, `.unbake/inbox/refused/<id>.json` | land.drain (rename) | same file moved |
 | `.unbake/ledger.jsonl` | store.log | ledger schema |
 | `.unbake/stages.jsonl` | effort | stage schema (the command's row carries `slot_wait_seconds` and `lock_wait_seconds`) |
-| `$XDG_RUNTIME_DIR/unbake-pool-2/waits.jsonl` | pool (`effort.waited` past `effort.WAIT_NOTE`) | one line per wait of 60 s or more, any tree of the host: `{at, pid, project, what: slots\|lock, seconds, detail}`; the newest half is kept past 1 MiB |
+| `$XDG_RUNTIME_DIR/unbake-pool-2/waits.jsonl` | abucache.stages (`stages.waited` past `stages.WAIT_NOTE`) | one line per wait of 60 s or more, any tree of the host: `{at, pid, project, what: slots\|lock, seconds, detail}`; the newest half is kept past 1 MiB |
 | `.unbake/check.json` | land.check_command, build.make_check, publish.build (`report.record`) | `{digest, exact, failing, commit?, counts?}`: the verdict of the tree whose digest it names |
 | `.unbake/extract.json` | repo.setup | `{version: digest(split yaml bytes, rom sha256)}` |
 | `asm/<v>/.unbake-extract`, `asm/<v>/.unbake-asm.json` | repo.extract_job | the extraction key (splat version, Makefile, yaml, symbol facts, ROM); `{path: [size, mtime_ns, sha1]}` of every file it wrote. An extraction again writes a fresh asm/<v>/ and gives each file equal to the last one its old mtime; with no top-level or nested-included file changed, `.extracted` keeps its time and only the objects including a changed file are removed (`build.drop_including`) |
