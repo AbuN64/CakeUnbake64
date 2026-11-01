@@ -135,6 +135,31 @@ def identifier(name: str, where: str) -> None:
         )
 
 
+def nested(text: str) -> tuple[str, list[str]]:
+    """symbol_addrs.txt without the data rows that name bytes another row already owns, and those rows' lines: a row
+    strictly inside a sized row's bytes (a literals pool, a data span), or a second name with no rom at the address
+    another row starts, is a label of that piece, not a piece of its own. Splat reads it as a user symbol that overlaps
+    the piece and finds no segment for it, so it goes where splat never reads (`aliases_path`): the tree and the link
+    keep the name. A code or label row stays, as does a row with a rom of its own."""
+    rows: list[tuple[int, int, int | None, int | None, str]] = []  # (line, vram, rom, size, kind) of each fact line
+    for number, line in enumerate(text.splitlines()):
+        found = _LINE.match(line)
+        if found:
+            attrs = dict(a.split(":", 1) for a in (found[7] or "").split() if ":" in a)
+            rom, size = (int(attrs[k], 0) if k in attrs else None for k in ("rom", "size"))
+            rows.append((number, int(found[4], 0), rom, size, attrs.get("type", "data")))
+    owners = [(vram, vram + size) for _, vram, _, size, kind in rows if size and kind not in ("func", "label")]
+    starts = {vram for _, vram, rom, _, _ in rows if rom is not None}
+    moved = {
+        number
+        for number, vram, rom, _, kind in rows
+        if kind not in ("func", "label")
+        and (any(low < vram < high for low, high in owners) or (rom is None and vram in starts))
+    }
+    lines = text.splitlines(keepends=True)
+    return "".join(line for n, line in enumerate(lines) if n not in moved), [lines[n] for n in sorted(moved)]
+
+
 def parse(text: str, where: str = "symbol_addrs.txt") -> dict[str, Symbol]:
     """name -> (vram, rom, size, type). A line without `type:` is data. A row named with no C identifier is refused,
     never dropped: every reader of the file reads the same rows."""

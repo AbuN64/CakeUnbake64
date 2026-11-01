@@ -1378,6 +1378,25 @@ def _mergecheck_plan(params: Json) -> Row:
     return {"action": "mergecheck", "targets": len(rows), "verdicts": dict(counts), "refused": refused}
 
 
+_SPLAT_LOST = "Unable to determine a segment for the following user-declared symbols"
+_SPLAT_NAME = re.compile(r"^\s+(\w+)\s*$")
+
+
+def _make_failure_lines(stdout: str, stderr: str) -> tuple[str, ...]:
+    """What a failed make says: the user-declared symbols splat could not place, the first 40 lines that are not
+    warnings (a compiler's own error needs no `error` in its words, make's `***`), then the last 20 lines. Splat
+    writes its error to stderr and the names, one per indented line, to stdout, so the two are read apart; a tail of
+    warnings alone would hide the error above it."""
+    lines = [line for line in (stdout + "\n" + stderr).splitlines() if line.strip()]
+    lost: list[str] = []
+    if any(_SPLAT_LOST in line for line in lines):
+        names = (m.group(1) for m in map(_SPLAT_NAME.match, lines) if m)
+        lost = list(dict.fromkeys(names))
+    named = [f"splat could not place user-declared symbol {name}" for name in lost]
+    failed = [line for line in lines if ": warning:" not in line and not (lost and _SPLAT_NAME.match(line))][:40]
+    return (*named, *failed, *(line for line in lines[-20:] if line not in failed))
+
+
 def _build_merged(
     config: Config, params: Json, paths: Sequence[str]
 ) -> dict[tuple[str, str], dict[str, list[tuple[int, int]]]]:
@@ -1392,9 +1411,9 @@ def _build_merged(
     names = sorted(set(targets.values()))
     done = process.run("make objects", [make, f"-j{jobs}", *names], root, tmp=process.scratch(root), timeout=3600)
     if done.exit != 0:
-        tail = [line for line in (done.stdout + done.stderr).decode(errors="replace").splitlines() if line.strip()]
         raise _refuse(
-            f"make of the merged objects exit {done.exit}: their sizes set the fill", missing=tuple(tail[-20:])
+            f"make of the merged objects exit {done.exit}: their sizes set the fill",
+            missing=_make_failure_lines(done.stdout.decode(errors="replace"), done.stderr.decode(errors="replace")),
         )
     return {key: merging.object_facts(root / name)[2] for key, name in targets.items() if (root / name).is_file()}
 
@@ -1425,6 +1444,26 @@ def _refuse_interior(
             "row at the tail cannot restore them",
             missing=(f"{version} {section} shortfall {linked - merged} B inside the span",),
         )
+
+
+def _demote_nested(config: Config, prepared: Sequence[tuple[str, list[str], str, Row]]) -> None:
+    """A merged object carries the pool and the data span its pieces held as one piece, so a user row inside it (or a
+    second name at its start) is a label of that piece: it moves from `symbol_addrs.txt`, which splat reads and finds
+    no segment for such a row, to `aliases.txt` (`symbols.nested`)."""
+    if not any(len(units) > 1 for _, units, _, _ in prepared):
+        return
+    root = config.project.root
+    for version in config.project.versions:
+        held = root / symbols.path(version)
+        if not held.is_file():
+            continue
+        kept, moved = symbols.nested(held.read_text())
+        if not moved:
+            continue
+        aliases = root / symbols.aliases_path(version)
+        have = aliases.read_text() if aliases.is_file() else ""
+        store.write(held, kept.encode())
+        store.write(aliases, (have + ("" if not have or have.endswith("\n") else "\n") + "".join(moved)).encode())
 
 
 def _regenerate_fills(
@@ -1603,6 +1642,7 @@ def merge(config: Config, params: Json) -> Row:
                     if carried != held:
                         store.write(settings, carried.encode())
                         rows_moved = True
+                _demote_nested(config, prepared)
                 project = configuration.load_project(
                     root, lambda path: (root / path).read_bytes(), lambda: sorted(tracked)
                 )

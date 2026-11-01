@@ -62,6 +62,20 @@ def test_declarations_that_disagree_are_reported_not_edited() -> None:
     assert "extern u32 D_1[4];" in out["text"] and "extern u16 D_1[4];" in out["text"]
 
 
+def test_a_guarded_declaration_against_an_unguarded_one_of_another_unit_is_a_conflict() -> None:
+    """GAME.CPP: a prototype under `#if !(EU)` in one unit and `struct Field *` unguarded in another meet in every
+    version that sets the guard, and the merged file fails to compile there."""
+    one = (
+        "#if !(defined(VERSION_EU) || defined(VERSION_EU_X))\nextern s32 Menu_CountLineChars(LayeredText *);\n#endif\n"
+    )
+    two = "extern s32 Menu_CountLineChars(struct Field *);\n"
+    out = merge.merge([("items.c", one), ("playeroption.c", two)], never)
+    assert [(c["kind"], c["name"]) for c in out["conflicts"]] == [("proto", "Menu_CountLineChars")]
+    assert "(guarded)" in out["conflicts"][0]["detail"]
+    alike = merge.merge([("items.c", one), ("playeroption.c", two.replace("struct Field", "LayeredText"))], never)
+    assert alike["conflicts"] == []
+
+
 def test_an_extern_of_unknown_size_matches_the_definition() -> None:
     out = merge.merge([("a.c", "extern u8 t[];\n"), ("b.c", "u8 t[3] = {1, 2, 3};\n")], never)
     assert out["conflicts"] == [] and "extern u8 t[];" not in out["text"]

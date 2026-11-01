@@ -115,3 +115,49 @@ def test_size_conflicts_name_a_symbol_with_two_sizes():
     )
     assert symbols.size_conflicts(sym, alias) == {"literals_f": [(4,), (0x20,)]}
     assert symbols.size_conflicts(sym) == {}
+
+
+GAME_ROWS = """\
+literals_Stage_PlaceStageOpponents = 0x800E1B70; // rom:0xE2770 size:0x14
+D_800E1B7C_us_rev1 = 0x800E1B7C; // rom:0xE277C
+literals_Player_FormatPlayerPartnerStatus = 0x800E2738; // rom:0xE3338 size:0x3C
+D_blob_94247f6784238752b222 = 0x800E2754; // rom:0xE3354
+k_playerMenuSpriteScaleConstants = 0x800E2770; // rom:0xE3370
+VideoModeIds = 0x800E2A4C; // rom:0xE364C size:0x60
+D_src_6b2060eb = 0x800E2A56; // rom:0xE3656
+g_playerReserveBounds_de = 0x800CE3E0; // rom:0xCEFE0
+gReactionReserveMaximum = 0x800CE3E0; // reaction reserve upper limit (g_playerReserveBounds_de[0])
+func_800E2A00 = 0x800E2A00; // type:func rom:0xE3600 size:0x30
+"""
+
+
+def test_nested_rows_inside_a_pool_or_data_span_leave_splat_s_file() -> None:
+    """The five user-declared symbols splat could not place after a merge: four sit inside a sized row's bytes (a
+    literals pool, a data span), one is a second name at an address another row starts."""
+    kept, moved = symbols.nested(GAME_ROWS)
+    assert set(symbols.parse("".join(moved))) == {
+        "D_800E1B7C_us_rev1",
+        "D_blob_94247f6784238752b222",
+        "k_playerMenuSpriteScaleConstants",
+        "D_src_6b2060eb",
+        "gReactionReserveMaximum",
+    }
+    assert set(symbols.parse(kept)) == {
+        "literals_Stage_PlaceStageOpponents",
+        "literals_Player_FormatPlayerPartnerStatus",
+        "VideoModeIds",
+        "g_playerReserveBounds_de",
+        "func_800E2A00",
+    }
+    assert symbols.nested(kept) == (kept, [])  # settled: a second pass moves nothing
+
+
+def test_nested_keeps_a_row_that_starts_a_piece() -> None:
+    """A row at the end of a sized row, a row of its own rom at a shared address, and a code row stay."""
+    text = (
+        "a = 0x80000100; // rom:0x100 size:0x10\n"
+        "b = 0x80000110; // rom:0x110\n"
+        "c = 0x80000100; // rom:0x100\n"
+        "d = 0x80000104; // type:func rom:0x104 size:4\n"
+    )
+    assert symbols.nested(text) == (text, [])

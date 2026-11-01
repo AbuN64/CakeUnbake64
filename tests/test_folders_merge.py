@@ -197,3 +197,59 @@ def test_split_carries_the_file_row_to_every_piece():
     assert 'file."src/A.c"' not in out and out.count("-mfp32") == 2
     assert "src/A_1.c" in out and "src/A_2.c" in out and "-O1" in out
     assert folders._split_rows(text, "src/A.c", ["src/A.c", "src/A_2.c"]).count("-mfp32") == 2
+
+
+def test_merge_moves_user_rows_inside_a_merged_pool_to_aliases(cfg, monkeypatch):
+    path, _, _, _, _ = prepared(cfg, monkeypatch)
+    root = cfg.project.root
+    version = cfg.project.versions[0]
+    rows = (
+        "literals_Pool = 0x80000100; // rom:0x100 size:0x10\n"
+        "user_inside = 0x80000104; // rom:0x104\n"
+        "user_second = 0x80000100; // second name\n"
+    )
+    (root / "versions" / version).mkdir(parents=True, exist_ok=True)
+    held = root / "versions" / version / "symbol_addrs.txt"
+    held.write_text(rows)
+    folders.merge(cfg, {"modules": path, "module": "src/group0.c"})
+    assert held.read_text() == "literals_Pool = 0x80000100; // rom:0x100 size:0x10\n"
+    assert (root / "versions" / version / "aliases.txt").read_text() == rows.split("\n", 1)[1]
+
+
+def test_make_failure_names_every_symbol_splat_could_not_place():
+    """The five GAME symbols: splat's error is on stderr, its names on stdout, below a compiler error that a tail of
+    warnings would hide (rig-20261101T122202Z)."""
+    names = [
+        "k_playerMenuSpriteScaleConstants",
+        "D_800E1B7C_us_rev1",
+        "D_blob_94247f6784238752b222",
+        "D_src_6b2060eb",
+        "gReactionReserveMaximum",
+    ]
+    stdout = "    " + "\n    ".join(names) + "\n\n\n    " + "\n    ".join(names) + "\n"
+    compiler = "GAME.CPP.i:100: `Foo' undeclared (first use in this function)"
+    warns = [
+        f"GAME.CPP.i:{i}: warning: passing arg 1 of `Menu_AdjustValue' from incompatible pointer type"
+        for i in range(30)
+    ]
+    stderr = (
+        "\n".join([warns[0], compiler, *warns[1:]])
+        + "\nmake: *** [Makefile:529: build/de/GAME.CPP.o] Error 33\n"
+        + "\nError: Unable to determine a segment for the following user-declared symbols.\n"
+        "  Try specifying the segment they belong to with 'segment:segment_name' in your symbol_addrs file.\n"
+        "  instead.\n"
+    )
+    lines = folders._make_failure_lines(stdout, stderr)
+    assert lines[:5] == tuple(f"splat could not place user-declared symbol {n}" for n in names)
+    assert lines[5:8] == (
+        compiler,
+        "make: *** [Makefile:529: build/de/GAME.CPP.o] Error 33",
+        "Error: Unable to determine a segment for the following user-declared symbols.",
+    )
+    assert "  instead." in lines
+    assert len(lines) == len(set(lines))
+
+
+def test_make_failure_without_errors_is_the_last_20_lines():
+    tail = tuple(f"GAME.CPP.i:{i}: warning: w" for i in range(10, 30))
+    assert folders._make_failure_lines("", "".join(f"GAME.CPP.i:{i}: warning: w\n" for i in range(30))) == tail
