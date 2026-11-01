@@ -83,17 +83,35 @@ def regenerate(cfg, monkeypatch, rom: bytes, seq: list[dict], built=None) -> dic
     return folders._regenerate_fills(cfg, {}, {version: seq}, [("M", ["a", "b"], "src/M.c", {})], built)
 
 
-def test_a_shortfall_after_the_links_padding_with_bytes_behind_it_refuses_instead_of_a_tail_row(
+def text_seq() -> list[dict]:
+    one = {"o": ".rodata", "k": "entry", "u": "a", "cls": "text", "n": 4, "parts": {"text": [(4, 4)]}}
+    two = {"o": ".rodata", "k": "entry", "u": "b", "cls": "text", "n": 4, "parts": {"text": [(4, 4)]}}
+    return [one, {"o": ".rodata", "k": "align", "a": 8}, two]
+
+
+def test_a_pad_the_merged_source_cannot_hold_with_bytes_behind_it_refuses_instead_of_a_tail_row(
     cfg, monkeypatch
 ) -> None:
-    """CHARACTER de .game_data: the link padded 4 B inside the span (a at 0, ALIGN(8), b at 8), the merged object packs
-    b at 4, and the ROM holds b's bytes (432a0000, a float) behind the padding: a row at the tail only repeats them
-    and `make check` differs 0x30 B before it. seq.c de/us-rev1 .game_data has the shape (merged 32 B, linked 36 B)."""
+    """The link padded 4 B inside the span (a at 0, ALIGN(8), b at 8), the merged object packs b at 4 and the ROM
+    holds b's bytes (432a0000, a float) behind the padding: a row at the tail only repeats them and `make check` differs
+    before it. Code has no data array to carry the pad, so the merge refuses before it writes the wrong row."""
     rom = bytearray(0x200)
     rom[0x108:0x10C] = bytes.fromhex("432a0000")
     with pytest.raises(Refusal, match="moves them") as raised:
-        regenerate(cfg, monkeypatch, bytes(rom), span_seq())
+        regenerate(cfg, monkeypatch, bytes(rom), text_seq())
     assert "4 B inside the span" in raised.value.findings[0].missing[0]
+    assert not (cfg.project.root / linkfill.path(cfg.project.versions[0])).exists()
+
+
+def test_a_pad_inside_the_span_with_bytes_behind_it_is_a_zero_array_so_nothing_is_refused_or_rewritten(
+    cfg, monkeypatch
+) -> None:
+    """CHARACTER de .game_data (PLAYER_G19 us-rev1 .game_data +0x2C): the link padded inside the span and the ROM holds
+    non-zero bytes behind it. The merged source holds the pad as a zero array, so the object spans what the link did,
+    the bytes stay where they were and no tail row is written."""
+    rom = bytearray(0x200)
+    rom[0x108:0x10C] = bytes.fromhex("432a0000")
+    assert regenerate(cfg, monkeypatch, bytes(rom), span_seq()) == {}
     assert not (cfg.project.root / linkfill.path(cfg.project.versions[0])).exists()
 
 

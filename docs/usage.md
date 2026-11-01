@@ -372,6 +372,10 @@ section by some version is labelled `us .game_data, us-rev1 .game_data_E1720`). 
 module-map row of each part (one module per part) without reading the link scripts. When one merged object is smaller than the span its pieces filled (the
 alignment between them), mergecheck reports `fill` and merge regenerates the linker fill rows of
 `versions/<v>/linker_fill.toml` for the difference; `lma` refuses only a merged object larger than that span.
+A pad the link script makes inside the span behind a piece of data or read-only data (`ALIGN`, `MAX(., offset)`) is no
+shortfall: merge emits it as a zero array after that unit's data (like the stale link bytes), so the module's bytes
+after the pad, zero or not, stay where the link put them. A pad behind code or bss has no array to carry it, and merge
+refuses when the ROM holds non-zero bytes after it.
 mergecheck and merge judge through one identity check and one destination rule (an existing file, a changed compiler,
 flags or omit, a unit that is no tracked source file); a unit's `[file]` rows move with it to the target, a library
 belongs to the destination's module, and `mergecheck --prove` adds the type conflicts `merge --prove` refuses.

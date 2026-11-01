@@ -229,11 +229,30 @@ def _linked_align(at: int, align: int) -> int:
     return min(align, at & -at) if at else align
 
 
+def _pad(
+    inside: bool,
+    size: int,
+    last: Row | None,
+    section: str,
+    classes: dict[str, list[tuple[int, int, int]]],
+    pads: list[tuple[str, str, str, int]] | None,
+) -> None:
+    """A pad of `size` bytes the link script makes behind `last` inside the span: the merged source holds it as a zero
+    array of the unit's data (`interior_fills`), one byte aligned, so the merged span counts it as a piece of that
+    class. Only a unit whose data is one class that holds storage can carry it."""
+    if not inside or size <= 0 or last is None or last["cls"] not in classwise.STORED:
+        return
+    classes[last["cls"]].append((size, 1, last.get("subalign") or 0))
+    if pads is not None:
+        pads.append((section, last["u"], last["cls"], size))
+
+
 def spans(
     seq: Sequence[Row],
     units: set[str],
     built: Mapping[str, Sequence[tuple[int, int]]] | None = None,
     holes: list[tuple[str, int]] | None = None,
+    pads: list[tuple[str, str, str, int]] | None = None,
 ) -> list[tuple[str, int, int, int]]:
     """Per output section holding entries of `units`: (section, bytes the linked entries span, bytes one merged object
     spans, offset in the section where the module starts). The linked span walks the section from the module's first
@@ -245,12 +264,16 @@ def spans(
     `built` holds the merged object's own sections (name -> (size, alignment) pieces, `object_facts`): a class it
     holds is measured on those pieces, so the in-object padding the model cannot see is part of the span. `holes`, when
     given, collects (section, offset in the section) for each place the link padded inside the span, the offset where
-    the padding ended: the module's bytes after it sit where the merged object, which packs tighter, cannot put them."""
+    the padding ended: the module's bytes after it sit where the merged object, which packs tighter, cannot put them.
+    A pad the link script makes inside the span (ALIGN, `MAX(., offset)`) behind a piece of data or read-only data is a
+    zero array of the merged source (`interior_fills`), so the merged span counts it; `pads`, when given, collects
+    (section, unit before, class, bytes) of each."""
     out: list[tuple[str, int, int, int]] = []
     for section in dict.fromkeys(e["o"] for e in seq if e["k"] == "entry" and e["u"] in units):
         rows = [(i, e) for i, e in enumerate(seq) if e["o"] == section]
         mine = [i for i, e in rows if e["k"] == "entry" and e["u"] in units]
         position, start, foreign = 0, 0, False
+        last: Row | None = None  # the module's last entry before the row in hand
         classes: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
         pin, pins = None, {}  # the `MAX(., offset)` before an entry, and per class the pin before its first piece
         for i, row in rows:
@@ -269,6 +292,7 @@ def spans(
                 before, position = position, _up(position, row["a"])
                 if holes is not None and i > mine[0] and position > before:
                     holes.append((section, position))
+                _pad(i > mine[0], position - before, last, section, classes, pads)
                 continue
             if row["k"] == "minimum":
                 before = position
@@ -276,7 +300,14 @@ def spans(
                 pin = None if foreign else row["offset"]
                 if holes is not None and i > mine[0] and position > before:
                     holes.append((section, position))
+                _pad(i > mine[0], position - before, last, section, classes, pads)
                 continue
+            if row["k"] == "fill":  # the stale bytes of an older link: the merged source holds them as an array too
+                position += len(row["data"])
+                _pad(i > mine[0], len(row["data"]), last, section, classes, None)
+                continue
+            if row["k"] == "entry" and row.get("n", 0) > 0:
+                last = row
             for cls in row.get("parts", {}):
                 for size, align in row["parts"][cls]:
                     at = _up(position, row.get("subalign") or align)
@@ -373,12 +404,17 @@ def class_orders(units: Sequence[str], seqs: Mapping[str, Sequence[Row]]) -> dic
 
 
 def interior_fills(units: Sequence[str], seqs: Mapping[str, Sequence[Row]]) -> list[Row]:
-    """The stale link bytes (`fill` rows of the link script) that lie between two entries of `units` in some version:
+    """The stale link bytes (`fill` rows of the link script) and the zero pads (ALIGN and `MAX(., offset)` of the link
+    script behind a piece of data) that lie between two entries of `units` in some version:
     a merged object keeps them only as data of its own. Per (unit before the bytes, class, bytes) one row
     {"after", "cls", "data", "versions"}; the class is the one the entry before them holds."""
     wanted = set(units)
     found: dict[tuple[str, str, bytes], list[str]] = {}
     for version, seq in seqs.items():
+        pads: list[tuple[str, str, str, int]] = []
+        spans(seq, wanted, None, None, pads)
+        for _, unit, cls, size in pads:
+            found.setdefault((unit, cls, bytes(size)), []).append(version)
         for i, row in enumerate(seq):
             if row["k"] != "fill":
                 continue

@@ -209,7 +209,7 @@ def test_a_unit_that_one_version_links_two_places_earlier_is_the_only_moved_unit
     ]
 
 
-def test_an_align_directive_the_merged_object_lacks_is_a_soft_fill() -> None:
+def test_an_align_directive_inside_the_span_is_a_zero_array_of_the_merged_source_not_a_fill() -> None:
     rows = [("a", "M"), ("b", "M")]
     seq = [
         with_parts(entry("a", "rodata", 4, ".rodata"), rodata=piece(4, 4)),
@@ -218,7 +218,10 @@ def test_an_align_directive_the_merged_object_lacks_is_a_soft_fill() -> None:
     ]
     out = run(rows, seq)["M"]
     assert out["hard"] == []
-    assert "fill: us .rodata merged 8 B against linked 12 B: the link fill of the 4 B is regenerated" in out["soft"]
+    assert not [s for s in out["soft"] if s.startswith("fill")]
+    assert mergecheck.interior_fills(["a", "b"], {"us": seq}) == [
+        {"after": "a", "cls": "rodata", "data": bytes(4), "versions": ["us"]}
+    ]
 
 
 def test_pieces_that_pack_the_same_merge() -> None:
@@ -237,7 +240,7 @@ def test_spans_count_align_directives_but_not_the_bytes_of_other_modules_between
         with_parts(entry("x", "rodata", 4, ".rodata"), rodata=piece(4, 4)),
         with_parts(entry("b", "rodata", 4, ".rodata"), rodata=piece(4, 4)),
     ]
-    assert mergecheck.spans(seq, {"a", "b"}) == [(".rodata", 12, 8, 0)]
+    assert mergecheck.spans(seq, {"a", "b"}) == [(".rodata", 12, 12, 0)]
 
 
 def test_units_are_ordered_by_where_their_code_is_linked_not_their_first_data() -> None:
@@ -314,8 +317,8 @@ def test_fact_scan_reuses_one_read_for_multiple_sections_of_same_object(tmp_path
 
 
 def test_original_linker_minimum_offsets_keep_internal_holes_in_real_data_slice():
-    # Six original US-rev1 table fragments: a 32-byte hole after the second piece is
-    # a linker constraint, not source padding that disappears safely in one object.
+    # Six original US-rev1 table fragments: a 32-byte hole after the second piece is a linker constraint, not source
+    # padding that disappears in one object: the merged source holds it as a zero array.
     offsets = [0x923C, 0x9248, 0x9274, 0x9280, 0x929C, 0x92A8]
     sizes = [12, 12, 12, 28, 12, 12]
     text = ".data_800C 0x800C6AB0 : AT(0xC76B0) SUBALIGN(1)\n{\n"
@@ -326,12 +329,14 @@ def test_original_linker_minimum_offsets_keep_internal_holes_in_real_data_slice(
             size = sizes[int(row["u"][1:])]
             row.update(n=size, cls="data", parts={"data": [(size, 4)]})
     rows = [(f"u{i}", "tables") for i in range(6)]
-    assert mergecheck.spans(seq, {u for u, _ in rows}) == [(".data_800C", 120, 88, 0x923C)]
+    assert mergecheck.spans(seq, {u for u, _ in rows}) == [(".data_800C", 120, 120, 0x923C)]
     out = run(rows, seq)["tables"]
     assert out["hard"] == []
-    assert (
-        "fill: us .data_800C merged 88 B against linked 120 B: the link fill of the 32 B is regenerated" in out["soft"]
-    )
+    assert not [s for s in out["soft"] if s.startswith("fill")]
+    # the 32 B hole after the second piece is a zero array of the merged source: the bytes after it stay in place
+    assert mergecheck.interior_fills([u for u, _ in rows], {"us": seq}) == [
+        {"after": "u1", "cls": "data", "data": bytes(32), "versions": ["us"]}
+    ]
 
 
 def test_merged_span_pads_pieces_to_their_own_alignment_under_subalign() -> None:
@@ -412,7 +417,7 @@ def test_named_sections_are_counted_once_and_conditional_align_uses_actual_defin
     seq = seqs["us"]
     assert [r["n"] for r in seq if r["k"] == "entry"] == [3, 4, 4]
     assert [r["symbol"] for r in seq if "symbol" in r] == ["yes"]
-    assert mergecheck.spans(seq, {"a", "b"}) == [(".rodata", 16, 12, 0)]
+    assert mergecheck.spans(seq, {"a", "b"}) == [(".rodata", 16, 16, 0)]
     assert read.call_count == 2
 
 
@@ -625,12 +630,12 @@ def test_a_gap_in_a_version_leaves_no_lma_finding_for_it() -> None:
     assert out["hard"] == ["gap: us rodata a .. b has 1 between: x"]
 
 
-def test_interior_fills_are_the_stale_link_bytes_between_two_units_of_the_module() -> None:
+def test_interior_fills_are_the_stale_link_bytes_and_zero_pads_between_two_units_of_the_module() -> None:
     link = (
         "  .rodata : {\n"
         "        src/a.CPP.o(.rodata .rdata);\n"
-        "        . = 0x29E8; BYTE(0x24); BYTE(0x63); BYTE(0x00);\n"
-        "        . = MAX(., 0x29F0);\n"
+        "        . = 0x4; BYTE(0x24); BYTE(0x63); BYTE(0x00);\n"
+        "        . = MAX(., 0x8);\n"
         "        src/b.CPP.o(.rodata .rdata);\n"
         "        . = 0x3000; BYTE(0x01);\n"
         "        src/other.CPP.o(.rodata .rdata);\n"
@@ -640,9 +645,15 @@ def test_interior_fills_are_the_stale_link_bytes_between_two_units_of_the_module
     for row in seq:
         if row["k"] == "entry":
             row["n"], row["cls"] = 4, "+".join(row["cls"])
+            row["parts"] = {"rodata": [(4, 4)]}
     assert [r["data"] for r in seq if r["k"] == "fill"] == [bytes([0x24, 0x63, 0]), bytes([1])]
     found = mergecheck.interior_fills(["src/a.CPP", "src/b.CPP"], {"de": seq})
-    assert found == [{"after": "src/a.CPP", "cls": "rodata", "data": bytes([0x24, 0x63, 0]), "versions": ["de"]}]
+    assert found == [
+        {"after": "src/a.CPP", "cls": "rodata", "data": bytes(1), "versions": ["de"]},
+        {"after": "src/a.CPP", "cls": "rodata", "data": bytes([0x24, 0x63, 0]), "versions": ["de"]},
+    ]
+    # the stale bytes and the pad behind them are both in the merged span: it fills the span the pieces linked in
+    assert [s[1:] for s in mergecheck.spans(seq, {"src/a.CPP", "src/b.CPP"})] == [(12, 12, 0)]
 
 
 def _cluster() -> tuple[list[tuple[str, str]], dict[str, list[dict[str, Any]]]]:
