@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from unbake import build, config, objcache
 
 
@@ -66,7 +68,7 @@ def test_a_compile_stores_its_object(tmp_path):
     assert a.build() == "INT A;-O2"
     assert a.runs == 1
     assert [kind for kind, _ in a.store.entries] == ["unit"]
-    assert a.store.counts == [("unit", False)]
+    assert a.store.counts == [("unit", False), ("store", True)]
 
 
 def test_the_same_input_in_another_tree_hits(tmp_path):
@@ -151,3 +153,53 @@ def test_every_recipe_probes_the_store_then_stores_what_its_program_made():
         assert f"'&&' $(PROGRAM_{key}) '&&' $(OBJSTORE) put " in text
         assert text.count(" get ") == text.count(" put ") == 1
         assert f"\nPROGRAM_{key} = " in text
+
+
+def test_a_store_counts_a_store_event_and_a_lookup_counts_through_abucaches_seam(tmp_path):
+    first, second = trees(tmp_path)
+    first.build()
+    second.build()
+    assert first.store.counts == [("unit", False), ("store", True), ("unit", True)]
+
+
+def test_the_tally_turns_abucaches_counts_into_stats_from_an_offset(tmp_path):
+    store = tmp_path / "store"
+    store.mkdir()
+    count = objcache._tally(store)
+    for kind, hit in [("unit", False), ("store", True), ("pool.spill", True)]:
+        count(kind, hit)
+    mark = objcache.stats(store)
+    assert mark == {"stores": 1, "hits": 0, "misses": 1, "offset": mark["offset"]}
+    for kind, hit in [("unit", True), ("unit", True), ("unit", False), ("store", True)]:
+        count(kind, hit)
+    assert objcache.stats(store, mark["offset"]) == {
+        "stores": 1,
+        "hits": 2,
+        "misses": 1,
+        "offset": objcache.stats(store)["offset"],
+    }
+
+
+def test_stats_of_a_store_never_used_is_zero_and_a_half_written_line_waits(tmp_path):
+    assert objcache.stats(tmp_path) == {"stores": 0, "hits": 0, "misses": 0, "offset": 0}
+    (tmp_path / "objcache.tally").write_bytes(b"store\nhi")
+    assert objcache.stats(tmp_path) == {"stores": 1, "hits": 0, "misses": 0, "offset": 6}
+
+
+def test_stats_prints_the_counts_the_measure_reads(tmp_path, capsys):
+    objcache._record(tmp_path, "store")
+    objcache._record(tmp_path, "hit")
+    assert objcache.main(["objcache", "stats", str(tmp_path)]) == 0
+    assert capsys.readouterr().out == "stores: 1\nhits: 1\nmisses: 0\noffset: 10\n"
+
+
+def test_main_reads_the_makefiles_word_order(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(objcache, "open_cache", lambda *args: seen.append(args) or "cache")
+    monkeypatch.setattr(objcache, "get", lambda *args: seen.append(args) or objcache.MISS)
+    argv = ["objcache", str(tmp_path), "99", "get", "a.o", "cc", "flags", "0x10", "prog", "x.s"]
+    assert objcache.main(argv) == objcache.MISS
+    assert seen[0][:2] == (tmp_path, 99)
+    assert seen[1] == ("cache", "a.o", "cc", "flags", "0x10", "prog", ["x.s"])
+    with pytest.raises(SystemExit):
+        objcache.main(["objcache", "get", str(tmp_path), "99", "a.o", "cc", "flags", "0x10", "prog"])
