@@ -228,7 +228,10 @@ def _linked_align(at: int, align: int) -> int:
 
 
 def spans(
-    seq: Sequence[Row], units: set[str], built: Mapping[str, Sequence[tuple[int, int]]] | None = None
+    seq: Sequence[Row],
+    units: set[str],
+    built: Mapping[str, Sequence[tuple[int, int]]] | None = None,
+    holes: list[tuple[str, int]] | None = None,
 ) -> list[tuple[str, int, int, int]]:
     """Per output section holding entries of `units`: (section, bytes the linked entries span, bytes one merged object
     spans, offset in the section where the module starts). The linked span walks the section from the module's first
@@ -238,12 +241,15 @@ def spans(
     the link kept for it (`_linked_align`), class after class as the link places the sections; a class the link pinned
     (`MAX(., offset)` right before its first piece) starts no earlier than that offset, as the merged object's does.
     `built` holds the merged object's own sections (name -> (size, alignment) pieces, `object_facts`): a class it
-    holds is measured on those pieces, so the in-object padding the model cannot see is part of the span."""
+    holds is measured on those pieces, so the in-object padding the model cannot see is part of the span. `holes`, when
+    given, collects (section, offset in the section) for each place the link padded inside the span, the offset where
+    the padding ended: the module's bytes after it sit where the merged object, which packs tighter, cannot put them."""
     out: list[tuple[str, int, int, int]] = []
     for section in dict.fromkeys(e["o"] for e in seq if e["k"] == "entry" and e["u"] in units):
         rows = [(i, e) for i, e in enumerate(seq) if e["o"] == section]
         mine = [i for i, e in rows if e["k"] == "entry" and e["u"] in units]
-        position, start, foreign, classes = 0, 0, False, defaultdict(list)
+        position, start, foreign = 0, 0, False
+        classes: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
         pin, pins = None, {}  # the `MAX(., offset)` before an entry, and per class the pin before its first piece
         for i, row in rows:
             if i > mine[-1]:
@@ -258,15 +264,22 @@ def spans(
                             position = _up(position, row.get("subalign") or align) + size
                 continue
             if row["k"] == "align":
-                position = _up(position, row["a"])
+                before, position = position, _up(position, row["a"])
+                if holes is not None and i > mine[0] and position > before:
+                    holes.append((section, position))
                 continue
             if row["k"] == "minimum":
+                before = position
                 position = position if foreign else max(position, row["offset"])
                 pin = None if foreign else row["offset"]
+                if holes is not None and i > mine[0] and position > before:
+                    holes.append((section, position))
                 continue
             for cls in row.get("parts", {}):
                 for size, align in row["parts"][cls]:
                     at = _up(position, row.get("subalign") or align)
+                    if holes is not None and i >= mine[0] and at > position and (i > mine[0] or classes):
+                        holes.append((section, at))
                     position = at + size
                     if i >= mine[0]:
                         if cls not in pins:

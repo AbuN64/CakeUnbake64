@@ -1398,6 +1398,34 @@ def _build_merged(
     return {key: merging.object_facts(root / name)[2] for key, name in targets.items() if (root / name).is_file()}
 
 
+def _refuse_interior(
+    version: str,
+    path: str,
+    section: str,
+    rom: bytes,
+    at: int,
+    start: int,
+    linked: int,
+    merged: int,
+    holes: Sequence[tuple[str, int]],
+) -> None:
+    """A merged object that is shorter than the pieces' span only stands in for them when the shortfall is the span's
+    tail: the fill row sits after the object's last byte. When the link padded inside the span and the ROM holds bytes
+    after that padding, the merged object puts them earlier than the ROM does, and a row at the tail only repeats them
+    (`make check` then differs where the first piece moved): the merge refuses before it writes a wrong row."""
+    ends = [h for s, h in holes if s == section and start < h < start + linked]
+    if merged >= linked or not ends:
+        return
+    first = min(ends)
+    if any(rom[at + first : at + start + linked]):
+        raise _refuse(
+            f"{version} {section} of {path}: the link padded the span at +0x{first - start:X} and the module's bytes "
+            f"after it are not zero, so the merged object ({merged} B against {linked} B linked) moves them: a fill "
+            "row at the tail cannot restore them",
+            missing=(f"{version} {section} shortfall {linked - merged} B inside the span",),
+        )
+
+
 def _regenerate_fills(
     config: Config,
     params: Json,
@@ -1415,19 +1443,22 @@ def _regenerate_fills(
     multi = [(units, path) for _, units, path, _ in prepared if len(units) > 1]
     for version in (v for v in project.versions if v in seqs and multi):
         cuts = {name: (start, vram) for name, start, _, vram in rommap.pieces(config, version)}
+        rom = configuration.rom(project, version).read_bytes()
         runs: list[tuple[str, str, int, int, int, int]] = []
         for units, merged_path in multi:
             own = None if built is None else built.get((version, merged_path))
-            for section, linked, merged, start in merging.spans(seqs[version], set(units), own):
+            holes: list[tuple[str, int]] = []
+            for section, linked, merged, start in merging.spans(seqs[version], set(units), own, holes):
                 if section.lstrip(".") in cuts:
                     at, vram = cuts[section.lstrip(".")]
+                    _refuse_interior(version, merged_path, section, rom, at, start, linked, merged, holes)
                     runs.append(
                         (merged_path, section, at + start, at + start + merged, at + start + linked, vram + start)
                     )
         if not runs:
             continue
         held = linkfill.read(project.root, version)
-        rows, dropped, written = linkfill.refill(held, runs, configuration.rom(project, version).read_bytes())
+        rows, dropped, written = linkfill.refill(held, runs, rom)
         target = project.root / linkfill.path(version)
         if rows:
             store.write(

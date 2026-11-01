@@ -69,21 +69,58 @@ def test_refill_turns_the_bytes_a_merged_object_leaves_short_into_a_row_and_drop
     assert zeros == [] and written == 0
 
 
+def tail_seq() -> list[dict]:
+    one = {"o": ".rodata", "k": "entry", "u": "a", "cls": "rodata", "n": 4, "parts": {"rodata": [(4, 4)]}}
+    two = {"o": ".rodata", "k": "entry", "u": "b", "cls": "rodata", "n": 4, "parts": {"rodata": [(4, 4)]}}
+    return [one, two]
+
+
+def regenerate(cfg, monkeypatch, rom: bytes, seq: list[dict], built=None) -> dict:
+    version = cfg.project.versions[0]
+    monkeypatch.setattr(folders.rommap, "pieces", Mock(return_value=(("rodata", 0x100, 0x200, 0x80000000),)))
+    monkeypatch.setattr(folders.configuration, "rom", Mock(return_value=Mock(read_bytes=lambda: rom)))
+    monkeypatch.setattr(folders.store, "write", lambda target, data: target.write_bytes(data))
+    return folders._regenerate_fills(cfg, {}, {version: seq}, [("M", ["a", "b"], "src/M.c", {})], built)
+
+
+def test_a_shortfall_after_the_links_padding_with_bytes_behind_it_refuses_instead_of_a_tail_row(
+    cfg, monkeypatch
+) -> None:
+    """CHARACTER de .game_data: the link padded 4 B inside the span (a at 0, ALIGN(8), b at 8), the merged object packs
+    b at 4, and the ROM holds b's bytes (432a0000, a float) behind the padding: a row at the tail only repeats them
+    and `make check` differs 0x30 B before it. seq.c de/us-rev1 .game_data has the shape (merged 32 B, linked 36 B)."""
+    rom = bytearray(0x200)
+    rom[0x108:0x10C] = bytes.fromhex("432a0000")
+    with pytest.raises(Refusal, match="moves them") as raised:
+        regenerate(cfg, monkeypatch, bytes(rom), span_seq())
+    assert "4 B inside the span" in raised.value.findings[0].missing[0]
+    assert not (cfg.project.root / linkfill.path(cfg.project.versions[0])).exists()
+
+
+def test_a_shortfall_after_the_links_padding_with_zeros_behind_it_writes_no_row(cfg, monkeypatch) -> None:
+    assert regenerate(cfg, monkeypatch, bytes(0x200), span_seq()) == {}
+
+
+def test_a_shortfall_with_no_padding_inside_the_span_keeps_its_tail_row(cfg, monkeypatch) -> None:
+    rom = bytearray(0x200)
+    rom[0x104:0x108] = bytes.fromhex("432a0000")
+    built = {(cfg.project.versions[0], "src/M.c"): {".rodata": [(4, 4)]}}
+    out = regenerate(cfg, monkeypatch, bytes(rom), tail_seq(), built)
+    assert out == {cfg.project.versions[0]: {"dropped": 0, "written": 1}}
+
+
 def test_merge_regenerates_the_fill_file_of_every_version(cfg, monkeypatch) -> None:
     root = cfg.project.root
     version = cfg.project.versions[0]
-    monkeypatch.setattr(folders.rommap, "pieces", Mock(return_value=(("rodata", 0x100, 0x200, 0x80000000),)))
+    built = {(version, "src/M.c"): {".rodata": [(4, 4)]}}
     rom = bytearray(0x200)
-    rom[0x108:0x10C] = b"\x00\x12\x00\x34"
-    monkeypatch.setattr(folders.configuration, "rom", Mock(return_value=Mock(read_bytes=lambda: bytes(rom))))
-    monkeypatch.setattr(folders.store, "write", lambda target, data: target.write_bytes(data))
-    out = folders._regenerate_fills(cfg, {}, {version: span_seq()}, [("M", ["a", "b"], "src/M.c", {})])
+    rom[0x104:0x108] = b"\x00\x12\x00\x34"
+    out = regenerate(cfg, monkeypatch, bytes(rom), tail_seq(), built)
     assert out == {version: {"dropped": 0, "written": 1}}
     rows = linkfill.read(root, version)
-    assert [(f.object, f.rom, f.address) for f in rows] == [("src/M.c", 0x108, 0x80000008)]
+    assert [(f.object, f.rom, f.address) for f in rows] == [("src/M.c", 0x104, 0x80000004)]
     # the next merge finds the rows it wrote inside the span of a merged object that now fills it
-    rom[0x108:0x10C] = bytes(4)
-    again = folders._regenerate_fills(cfg, {}, {version: span_seq()}, [("M", ["a", "b"], "src/M.c", {})])
+    again = regenerate(cfg, monkeypatch, bytes(0x200), tail_seq(), built)
     assert again == {version: {"dropped": 1, "written": 0}}
     assert not (root / linkfill.path(version)).exists()
 
