@@ -12,9 +12,11 @@ prints one line on stderr and exits 1; it calls no other tool of the close and n
   build      the activation (`activate`, BUILD is <toolkit>.<SHA>): a fresh venv `<toolkit>.<NAME>` is created and
              `pip install` installs unbake at the landed SHA into it, BUILD is linked to that venv, and the full test
              suite runs in the tree with BUILD's python and the tree's src first on the import path. A failing suite
-             exits non-zero and the live link stays; on exit 0 the close switches the live link to BUILD;
+             exits non-zero, the live link stays and the failed build's folder and link are removed at once; on exit 0
+             the close switches the live link to BUILD;
   readback   the live link resolves to BUILD and the installed commit of unbake equals the landed SHA. A mismatch
-             refuses (fix forward, no rollback).
+             refuses (fix forward, no rollback). After it holds, the deploy prunes: only the live and the previous
+             build stay (their links and folders); every other `<toolkit>.*` link or folder is removed.
 
   deploy-env TOOLKIT=/home/abu/venv-unbake
   rig run ci/deploy_rig.py name
@@ -24,6 +26,8 @@ prints one line on stderr and exits 1; it calls no other tool of the close and n
 import hashlib
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
 from collections.abc import Callable
@@ -98,6 +102,39 @@ def bash(script: str, *args: str, capture: bool = False) -> tuple[int, str]:
     return done.returncode, done.stdout or ""
 
 
+def force_remove(path: str) -> None:
+    """Remove a link (never followed) or a folder; a built tree is sealed read-only, so owner write returns first."""
+    if os.path.islink(path) or not os.path.isdir(path):
+        os.unlink(path)
+        return
+    for here, _dirs, _ in os.walk(path):
+        os.chmod(here, os.stat(here).st_mode | stat.S_IWUSR)
+    shutil.rmtree(path)
+
+
+def prune(toolkit: str) -> list[str]:
+    """Keep only the live and the previous build of TOOLKIT and remove the rest of its own litter: every
+    `<toolkit>.<x>` link or folder and every `<toolkit>-stage` / `<toolkit>-stage.<x>` (the scratch of builds before
+    the build linked itself). Kept are the live link, `<toolkit>.previous`, each link of their chains and the folder
+    they end at; a sibling toolkit that merely shares the prefix (`<toolkit>-w3`) is never touched. Returns the
+    removed names."""
+    home, base = os.path.split(toolkit)
+    keep = set()
+    for link in (toolkit, toolkit + ".previous"):
+        path = link
+        while os.path.islink(path):
+            keep.add(path)
+            path = os.path.normpath(os.path.join(os.path.dirname(path), os.readlink(path)))
+        keep.add(path)
+    removed = []
+    for entry in sorted(os.listdir(home)):
+        own = entry.startswith((base + ".", base + "-stage.")) or entry == base + "-stage"
+        if own and os.path.join(home, entry) not in keep:
+            force_remove(os.path.join(home, entry))
+            removed.append(entry)
+    return removed
+
+
 def last_line(text: str, default: object) -> str:
     return text.strip().splitlines()[-1] if text.strip() else str(default)
 
@@ -126,6 +163,7 @@ def step_name(sha: str, toolkit: str, run: Bash) -> None:
 def step_build(sha: str, toolkit: str, run: Bash) -> None:
     code, _ = run(BUILD + SUITE, sha, toolkit, name(sha), URL)
     if code:
+        prune(toolkit)  # live and previous are still the old ones: the failed build and its link go at once
         raise Refused(f"build exit {code}, links unchanged")
 
 
@@ -133,6 +171,8 @@ def step_readback(sha: str, toolkit: str, run: Bash) -> None:
     code, _ = run(READBACK, sha, toolkit, f"{toolkit}.{sha}")
     if code:
         raise Refused(f"readback exit {code}")
+    removed = prune(toolkit)  # the swap held: only the live and the previous build stay
+    sys.stdout.write(f"prune: removed {len(removed)}, kept the live and the previous build\n")
 
 
 STEPS = {"name": step_name, "build": step_build, "readback": step_readback}
