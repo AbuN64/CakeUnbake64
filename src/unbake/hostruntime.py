@@ -7,13 +7,13 @@ operator file and the runtime file follows them. Without `--out` the document go
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from unbake import config
 from unbake.contracts import Host
 
-RESERVE_MEMORY = 1 << 30  # bytes the memory admission leaves free for everything else on the host
 CACHE_KEEP_SECONDS = 14 * 86400  # a cache root without git history keeps its entries live this long
 STAGE_LOG_BYTES = 1 << 20
 SLOW_SECONDS = 60
@@ -30,13 +30,13 @@ def runtime_toml(host: Host) -> str:
         f"workers = {host.slots}\n"
         f"worker_memory = {host.memory_worker_bytes}\n"
         f"parent_memory = {host.memory_parent_bytes}\n"
-        f"reserve_memory = {RESERVE_MEMORY}\n\n"
+        f"reserve_memory = {host.memory_parent_bytes}\n\n"  # the parent's share is also kept free
         "[cache]\n"
-        f'dir = "{host.cache_dir}"\n'
+        f"dir = {json.dumps(str(host.cache_dir))}\n"
         f"bytes = {host.cache_max_bytes}\n"
         f"keep_seconds = {CACHE_KEEP_SECONDS}\n\n"
         f"[stages]\nlog_bytes = {STAGE_LOG_BYTES}\n\n"
-        f'[events]\nfeed = "{feed}"\nslow_seconds = {SLOW_SECONDS}\noverrun_percent = {OVERRUN_PERCENT}\n\n'
+        f"[events]\nfeed = {json.dumps(str(feed))}\nslow_seconds = {SLOW_SECONDS}\noverrun_percent = {OVERRUN_PERCENT}\n\n"
         "[capacities]\n"
     )
 
