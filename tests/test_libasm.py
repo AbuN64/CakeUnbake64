@@ -135,7 +135,7 @@ def test_renderer_uses_local_branch_labels_and_preserves_wide_registers():
     assert ".set gp=64" in libasm.render("f", [0xDFBF0000, 0x03E00008, 0], 0x80001000, {})
 
 
-def _boot_entry(tmp_path, marked):
+def _boot_entry(tmp_path, marked):  # marked: True for every version, or the versions whose assembly splat marks
     """sdk/boot/entry.s of the RageWars data slice: a LEAF unit outside every configured library, in the asm home."""
     cfg = fixture.config(
         tmp_path,
@@ -146,7 +146,8 @@ def _boot_entry(tmp_path, marked):
     for version in cfg.project.versions:
         path = cfg.project.root / symbols.asm_path(cfg, version, "f")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(("/* Handwritten function */\n" if marked else "") + "glabel f\n")
+        hand = marked is True or version in (marked or ())
+        path.write_text(("/* Handwritten function */\n" if hand else "") + "glabel f\n")
     return cfg
 
 
@@ -158,6 +159,16 @@ def test_handwritten_unit_in_the_asm_home_outside_every_library_earns_exact_cred
         list(cfg.project.versions), held, held.symbols, frozenset({"a", "b"}), {}, frozenset()
     )
     assert all(r.exact and r.kept == 16 for r in credits)
+
+
+def test_unit_splat_marks_in_one_version_only_earns_exact_credit_in_every_version(tmp_path):
+    """sdk/LIBSN.s: one routine for every version, but splat leaves de's copy unmarked."""
+    cfg = _boot_entry(tmp_path, marked={"b"})
+    held = tree.capture(cfg)
+    credits = report.build_credits(
+        list(cfg.project.versions), held, held.symbols, frozenset({"a", "b"}), {}, frozenset()
+    )
+    assert {r.version for r in credits} == {"a", "b"} and all(r.exact and r.kept == 16 for r in credits)
 
 
 def test_unmarked_unit_in_the_asm_home_outside_every_library_stays_without_credit(tmp_path):

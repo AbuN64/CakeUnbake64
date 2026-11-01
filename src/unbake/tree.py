@@ -1440,13 +1440,18 @@ def _duplicates(owned: Mapping[str, Mapping[str, Iterable[str]]], versions: Sequ
 
 def _hand_unit(config: Config, path: str, owns: Mapping[str, Iterable[str]]) -> bool:
     """Whether an assembly file outside every configured library is original hand assembly: it sits in a directory the
-    project marks as an asm home and every name it owns is marked handwritten by splat in the version that owns it
-    (sdk/boot/entry.s: it links byte-exact like a library unit, so it earns the same exact credit)."""
+    project marks as an asm home and every name it owns is marked handwritten by splat in some version that owns it
+    (sdk/boot/entry.s: it links byte-exact like a library unit, so it earns the same exact credit). One source holds
+    one routine for every version, and splat marks each version's copy by its own code: sdk/LIBSN.s is marked in four
+    versions and not in de. `cheat` reads the mark the same way (in some version)."""
     homes = tuple(configuration.cheat(config.project)["asm_home"])
     if not path.startswith(homes):
         return False
-    names = [(v, n) for v, held in owns.items() for n in held]
-    return bool(names) and all(symbols.handwritten(config, v, n) for v, n in names)
+    versions: dict[str, list[str]] = {}
+    for v, held in owns.items():
+        for n in held:
+            versions.setdefault(n, []).append(v)
+    return bool(versions) and all(any(symbols.handwritten(config, v, n) for v in vs) for n, vs in versions.items())
 
 
 def _section(fact: symbols.Symbol, kind: str | None) -> str:
