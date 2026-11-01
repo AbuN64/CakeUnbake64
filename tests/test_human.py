@@ -9,7 +9,7 @@ import pytest
 from abucache import stages
 
 from unbake import cli, compare, config, human
-from unbake.contracts import Finding, Origin, StageRecord
+from unbake.contracts import Finding, Origin
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +66,7 @@ def test_status_line_only_on_tty(monkeypatch, tty):
 
 def _records():
     keys = ("resources.memory_parent_bytes", "resources.memory_worker_bytes")
-    root = StageRecord(
+    root = stages.StageRecord(
         "inv",
         "root",
         None,

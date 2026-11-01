@@ -130,4 +130,4 @@ def bind(config: Config) -> None:
     )
 
 
-__all__ = ["Finding", "bind", "command", "sink", "yield_cpu"]
+__all__ = ["Finding", "bind", "command", "priority", "set_priority", "sink", "yield_cpu"]

@@ -18,7 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from abucache import memo, stages
+from abucache import memo, slots, stages
 from test_effort import _config
 
 from unbake import config as configuration
@@ -662,7 +662,7 @@ def test_a_long_finished_commands_lock_file_is_removed_once_and_never_opened_aga
 def test_each_group_of_a_gather_is_recorded_with_its_own_span_not_the_gathers(tmp_path, mocked_parallel, monkeypatch):
     """A one-job group beside a big one must not show the whole dispatch as its own wall."""
     recorded = []
-    monkeypatch.setattr(effort, "record_pool", lambda name, items, **kw: recorded.append((name, kw)))
+    monkeypatch.setattr(stages, "record_pool", lambda name, items, **kw: recorded.append((name, kw)))
     with effort.command("check", [], Path.cwd()):
         pool.gather(_config(tmp_path), [("small", _name, [1]), ("big", _square, list(range(80)))])
     spans = {name: (kw["start_ns"], kw["end_ns"]) for name, kw in recorded}
@@ -672,7 +672,7 @@ def test_each_group_of_a_gather_is_recorded_with_its_own_span_not_the_gathers(tm
 
 def test_a_warm_group_is_recorded_as_instant(tmp_path, mocked_parallel, monkeypatch):
     recorded = []
-    monkeypatch.setattr(effort, "record_pool", lambda name, items, **kw: recorded.append((name, kw)))
+    monkeypatch.setattr(stages, "record_pool", lambda name, items, **kw: recorded.append((name, kw)))
     with effort.command("check", [], Path.cwd()):
         pool.gather(_config(tmp_path), [("none", _name, []), ("big", _square, list(range(80)))])
     assert (
@@ -1916,15 +1916,13 @@ def test_a_build_over_its_share_gives_a_token_that_came_back_to_a_waiting_comman
 
 
 def test_a_wait_over_a_minute_is_one_line_in_the_hosts_wait_log_and_a_short_one_none(tmp_path, monkeypatch):
-    runtime = Path(os.environ["XDG_RUNTIME_DIR"])
-    monkeypatch.setattr(effort, "wait_hook", pool._note_wait)
     pool._acquire(4)  # the slot directory exists
     with effort.command("score", [], Path.cwd()):
         stages.waited(5.0, "slots", "held by pids 7")
         stages.waited(61.5, "slots", "held by pids 7, 8")
         stages.waited(70.0, "lock", "land.lock")
         stages.waited(2.0)
-    lines = [json.loads(line) for line in (runtime / pool._POOL / pool._WAITS).read_text().splitlines()]
+    lines = [json.loads(line) for line in slots.wait_log().read_text().splitlines()]
     assert [(r["what"], r["seconds"], r["detail"]) for r in lines] == [
         ("slots", 61.5, "held by pids 7, 8"),
         ("lock", 70.0, "land.lock"),
@@ -1933,17 +1931,6 @@ def test_a_wait_over_a_minute_is_one_line_in_the_hosts_wait_log_and_a_short_one_
     root = next(r for r in stages.closed() if r.kind == "command")
     assert (root.slot_wait_seconds, root.lock_wait_seconds) == (66.5, 72.0)
     assert human.summary(stages.closed())[1] == "wait 66.5s for slots, 72.0s for locks"
-    pool._release()
-
-
-def test_the_wait_log_keeps_its_newest_half_past_its_size(monkeypatch):
-    pool._acquire(2)
-    path = pool._dir[0] / pool._WAITS
-    path.write_text("".join(json.dumps({"n": n}) + "\n" for n in range(40)))
-    monkeypatch.setattr(pool, "_WAITS_KEEP", 200)
-    pool._note_wait("slots", 90.0, "x", "")
-    rows = [json.loads(line) for line in path.read_text().splitlines()]
-    assert rows[-1]["what"] == "slots" and rows[0]["n"] > 20 and all(isinstance(r, dict) for r in rows)
     pool._release()
 
 
@@ -1959,7 +1946,7 @@ def test_a_command_that_waits_for_slots_counts_the_seconds_it_blocked_not_the_wh
     for f in held:
         fcntl.flock(f, fcntl.LOCK_EX)
     seen = []
-    monkeypatch.setattr(pool.effort, "waited", lambda seconds, what="lock", detail="": seen.append((what, detail)))
+    monkeypatch.setattr(pool.stages, "waited", lambda seconds, what="lock", detail="": seen.append((what, detail)))
     pool._acquire(2)
     assert seen == [("slots", f"held by pids {peer}")]
 

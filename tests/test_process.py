@@ -263,7 +263,8 @@ def test_wait4_accounting_and_record_callback(tmp_path, monkeypatch):
     assert result.max_rss_bytes == 4096 * 1024
     record.assert_called_once()
     name, recorded, start = record.call_args.args
-    assert name == "accounting" and recorded is result
+    assert name == "accounting" and (recorded.argv, recorded.exit) == (result.argv, result.exit)
+    assert (recorded.cpu_seconds, recorded.wall_seconds) == (result.cpu_seconds, result.wall_seconds)
     assert before * 1e9 <= start <= after * 1e9
 
 

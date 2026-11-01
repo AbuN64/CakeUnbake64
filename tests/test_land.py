@@ -63,7 +63,7 @@ def test_the_request_compare_builds_passes_the_submission_schema(world, monkeypa
     from unbake import compare
 
     monkeypatch.setattr(land, "process", SimpleNamespace(git=lambda *a: SimpleNamespace(stdout=b"abc\n")))
-    monkeypatch.setattr(land.effort, "invocation", lambda: "unbake submit")
+    monkeypatch.setattr(land.stages, "invocation", lambda: "unbake submit")
     request = compare._request("func_80000010", world.root / "cand.c", None)
     intake = land._intake(world.config, request, [_proof(True), _proof(True)], None)
     entry = land._entered(world.config, request, b"s32 f(void) {}\n", (), "compare", intake)  # validates "submission"
@@ -76,7 +76,7 @@ def test_a_pre_provenance_inbox_entry_is_replaced_by_the_resubmission_not_refuse
     from unbake import compare
 
     monkeypatch.setattr(land, "process", SimpleNamespace(git=lambda *a: SimpleNamespace(stdout=b"abc\n")))
-    monkeypatch.setattr(land.effort, "invocation", lambda: "unbake submit")
+    monkeypatch.setattr(land.stages, "invocation", lambda: "unbake submit")
     request = compare._request("func_80000010", world.root / "cand.c", None)
     intake = land._intake(world.config, request, [_proof(True), _proof(True)], None)
     entry = land._entered(world.config, request, b"s32 f(void) {}\n", (), "compare", intake)
@@ -99,7 +99,7 @@ def test_drain_lands_only_the_named_entries_and_abandoned_ones_go_to_the_attic(w
     import time
 
     monkeypatch.setattr(land, "process", SimpleNamespace(git=lambda *a: SimpleNamespace(stdout=b"abc\n")))
-    monkeypatch.setattr(land.effort, "invocation", lambda: "unbake submit")
+    monkeypatch.setattr(land.stages, "invocation", lambda: "unbake submit")
     monkeypatch.setenv("RECIPE_SESSION", "LANE-A")
     from unbake import compare
 
@@ -125,7 +125,7 @@ def test_a_pre_provenance_entry_is_quarantined_by_a_drain_not_raised_for_every_c
     from unbake import compare
 
     monkeypatch.setattr(land, "process", SimpleNamespace(git=lambda *a: SimpleNamespace(stdout=b"abc\n")))
-    monkeypatch.setattr(land.effort, "invocation", lambda: "unbake submit")
+    monkeypatch.setattr(land.stages, "invocation", lambda: "unbake submit")
     request = compare._request("func_80000010", world.root / "cand.c", None)
     intake = land._intake(world.config, request, [_proof(True)], None)
     entry = land._entered(world.config, request, b"s32 f(void) {}\n", (), "compare", intake)
@@ -143,7 +143,7 @@ def test_a_landing_writes_only_under_the_exclusive_tree_lock(world, monkeypatch)
     from unbake import compare
 
     monkeypatch.setattr(land, "process", SimpleNamespace(git=lambda *a: SimpleNamespace(stdout=b"abc\n")))
-    monkeypatch.setattr(land.effort, "invocation", lambda: "unbake submit")
+    monkeypatch.setattr(land.stages, "invocation", lambda: "unbake submit")
     request = compare._request("func_80000010", world.root / "cand.c", None)
     intake = land._intake(world.config, request, [_proof(True)], None)
     entry = land._entered(world.config, request, b"s32 f(void) {}\n", (), "compare", intake)

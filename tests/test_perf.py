@@ -77,7 +77,7 @@ def _budgeted(cfg, *changes):
         with stages.stage("work"):
             pass
         base = next(r for r in stages.closed() if r.path[-1] == "work")
-        return [effort._budget(replace(base, **change), True) for change in changes]
+        return [stages._budget(replace(base, **change), True) for change in changes]
 
 
 def test_budget_flags_a_single_core_stage(cfg):
@@ -102,7 +102,7 @@ def test_budget_flags_a_stage_that_closes_twice(cfg):
 
 def test_two_slow_dispatches_of_different_work_are_not_repeated_but_the_same_dispatch_twice_is(cfg):
     def gather(span, *names):
-        effort._dispatched[span] = names
+        stages._dispatched[span] = names
         return {"path": ("land", "pool.map"), "span": span, "wall_seconds": 5.0, "cores": 3.0}
 
     keys = _budgeted(cfg, gather("a", "rescore.keys"), gather("b", "rescore.measure"), gather("c", "rescore.keys"))
@@ -111,7 +111,7 @@ def test_two_slow_dispatches_of_different_work_are_not_repeated_but_the_same_dis
 
 def test_a_gather_is_not_the_repeat_of_its_own_dispatch_record(cfg):
     # the dispatch record's path is the gather's path then its name: the gather's key once read the same
-    effort._dispatched["g"] = ("policy.unclean.keys",)
+    stages._dispatched["g"] = ("policy.unclean.keys",)
     pool = {"kind": "pool", "path": ("report", "pool.map", "policy.unclean.keys"), "wall_seconds": 5.0, "cores": 3.0}
     gather = {"path": ("report", "pool.map"), "span": "g", "wall_seconds": 5.0, "cores": 3.0}
     assert [[f.key for f in r.findings] for r in _budgeted(cfg, pool, gather)] == [[], []]
@@ -144,8 +144,8 @@ def test_budget_does_not_flag_a_stage_shipped_from_many_jobs_as_closed_twice(cfg
             pass
         base = next(r for r in stages.closed() if r.path[-1] == "work")
         slow = replace(base, wall_seconds=5.0, cores=3.0)
-        assert [effort._budget(slow, True, True).findings for _ in range(3)] == [(), (), ()]
-        assert not effort._seen
+        assert [stages._budget(slow, True, True).findings for _ in range(3)] == [(), (), ()]
+        assert not stages._seen
 
 
 @pytest.mark.parametrize(("held", "flagged"), [(6.8, False), (12.0, True)])
@@ -170,7 +170,7 @@ def test_a_pool_is_judged_against_the_slots_it_held_not_the_most_it_was_admitted
 @pytest.mark.parametrize("changed", [False, True])
 def test_sync_stand_in_recapture_has_its_own_stage_boundary(cfg, monkeypatch, changed):
     ticks = count(0, 5_000_000_000)
-    monkeypatch.setattr(effort.time, "perf_counter_ns", lambda: next(ticks))
+    monkeypatch.setattr(stages.time, "perf_counter_ns", lambda: next(ticks))
     overlays = []
     writes = {"src/unit.c": b"stand-in\n"} if changed else {}
 
