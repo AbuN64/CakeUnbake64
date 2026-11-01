@@ -2,7 +2,10 @@
 
 A name's candidates are the types it is declared with, the most declared first (a type spelled `void*` after the others
 of equal count, then the longer spelling last); a definition with a body or an initialiser decides alone. `rank` picks
-the next candidate when the one before it failed to keep an object identical. The edit of a declaration replaces the
+the next candidate when the one before it failed to keep an object identical. A file whose declaration changes from a
+scalar to a one-field struct of that scalar (or back) also has its reads of the name rewritten to the new type
+(`x` as `x.value`, `x.value` as `x`), by the one rule for every name of this shape.
+The edit of a declaration replaces the
 whole source statement that holds it (a multi-declarator statement keeps its other names) by the canonical declaration
 text, written from a declaration of the chosen type that is in the sources. Comments are blanked before any statement
 is cut, so offsets are those of the original text."""
@@ -19,6 +22,7 @@ from unbake.typecensus import Norm, decimal_bounds, split_top, tkey, ws
 EXHAUSTED = "no further candidate type"  # the plan of a rank past the last candidate
 Site = tuple[str, str, int]  # (kind, type key, declarators) of one declaration by its loc "file:line"
 Edit = tuple[str, int, int]  # (file, start, end) of the source statement to replace
+Read = tuple[str, str, str]  # (file, "into" | "out", field): its reads of the name become `name.field` or `name`
 
 
 @dataclass(frozen=True)
@@ -29,6 +33,8 @@ class Plan:
     ctext: str  # the canonical declaration, spelled for a source
     edits: tuple[Edit, ...]
     files: frozenset[str]  # every file the plan reads or writes
+    reads: tuple[Read, ...] = ()
+    keep: tuple[Edit, ...] = ()  # the declarations of the name in a file of `reads`: not reads
 
 
 @dataclass
@@ -162,6 +168,39 @@ def _spell(text: str, norm: Norm) -> str:
     return re.sub(r"\[[^\]]+\]", "[]", spelled, count=1) if "(" not in spelled else spelled
 
 
+_BOX = re.compile(r"^(?:struct|union)\s*\w*\s*\{\s*([^;{}]+?)\s*\b(\w+)\s*;\s*\}$")
+_PRIM = re.compile(r"^(?:unsigned |signed )?(?:char|short|int|long|long long|float|double)$")
+
+
+def _shape(decl: str, name: str, norm: Norm) -> tuple[str, str, str] | None:
+    """("scalar", type, "") for a plain variable of a primitive type, ("array", element type, "") for an unsized array
+    of one, ("box", field type, field) for a one-field struct variable, ("record", type, "") for any other type."""
+    m = re.match(r"^(.*?)\s*\b" + re.escape(name) + r"\s*(\[\s*\])?$", ws(decl))
+    base = m[1].strip() if m else ""
+    if not m or not base:
+        return None
+    if box := _BOX.match(base):
+        return ("box", norm.prim(box[1]), box[2]) if not m[2] else None
+    if re.search(r"[{}\[\]()*]", base):
+        return None
+    kind = norm.prim(base)
+    if _PRIM.match(kind):
+        return ("array" if m[2] else "scalar", kind, "")
+    return None if m[2] else ("record", kind, "")
+
+
+def _direction(canon: tuple[str, str, str] | None, was: tuple[str, str, str] | None) -> tuple[str, str] | None:
+    """How reads written for the type `was` are written for `canon`: one is the one-field struct of the other, or
+    `canon` is a record that `was` (a primitive or an array of one) views by its address."""
+    if not canon or not was:
+        return None
+    if canon[0] == "record" and was[0] in ("scalar", "array"):
+        return ("view" if was[0] == "scalar" else "views", was[1])
+    if canon[1] != was[1] or canon[0] == was[0] or "record" in (canon[0], was[0]) or "array" in (canon[0], was[0]):
+        return None
+    return ("into", canon[2]) if canon[0] == "box" else ("out", was[2])
+
+
 def plan(name: str, sites: Mapping[str, Site], rank: int, src: Sources, norm: Norm) -> Plan | str:
     """The plan of `name` at candidate `rank`, or the reason it has none (a string)."""
     order = candidates(sites)
@@ -188,6 +227,8 @@ def plan(name: str, sites: Mapping[str, Site], rank: int, src: Sources, norm: No
     if not cloc:
         return "no source text for the canonical declaration"
     edits: list[Edit] = []
+    how: dict[str, set[tuple[str, str] | None]] = defaultdict(set)
+    shape = _shape(ctext, name, norm)
     for loc, (kind, key, _) in sorted(sites.items()):
         if key == canon:
             continue
@@ -198,7 +239,53 @@ def plan(name: str, sites: Mapping[str, Site], rank: int, src: Sources, norm: No
         if not span:
             return f"no source statement at {loc}"
         edits.append((file, *span))
-    return Plan(name, canon, why, ctext, tuple(edits), frozenset({e[0] for e in edits} | {cloc.rsplit(":", 1)[0]}))
+        was = _decl_text(src.text(file)[1][span[0] : span[1]], name)
+        how[file].add(_direction(shape, _shape(was, name, norm)) if was else None)
+    reads = tuple(
+        (file, way[0], way[1]) for file, ways in sorted(how.items()) if len(ways) == 1 and (way := next(iter(ways)))
+    )
+    keep = tuple(
+        (file, *span)
+        for loc in sorted(sites)
+        for file in [loc.rsplit(":", 1)[0]]
+        if any(file == r[0] for r in reads) and (span := _span(src, file, int(loc.rsplit(":", 1)[1]), name))
+    )
+    files = frozenset({e[0] for e in edits} | {cloc.rsplit(":", 1)[0]})
+    return Plan(name, canon, why, ctext, tuple(edits), files, reads, keep)
+
+
+_LITERAL = re.compile(r"\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'")
+
+
+def _reads(b: str, path: str, found: Plan) -> list[tuple[int, int, str]]:
+    """The reads of the plan's name in `path` (comments blanked in `b`) with their new spelling: not those in a string,
+    a declaration of the name, or a member of that name."""
+    word = re.escape(found.name)
+    out: list[tuple[int, int, str]] = []
+    for file, way, member in found.reads:
+        if file != path:
+            continue
+        pattern = (
+            rf"(?<![\w.])(?<!->){word}\b(?!\s*\.\s*{member}\b)"
+            if way == "into"
+            else rf"(?<![\w.])(?<!->){word}\s*\.\s*{member}\b"
+            if way == "out"
+            else rf"(?<![\w.])(?<!->){word}\b"
+        )
+        spelled = {
+            "into": f"{found.name}.{member}",
+            "out": found.name,
+            "view": f"(*({member} *)&{found.name})",
+            "views": f"(({member} *)&{found.name})",
+        }[way]
+        fixed = [m.span() for m in _LITERAL.finditer(b)]
+        fixed += [(s, e) for f, s, e in (*found.keep, *found.edits) if f == file]
+        out += [
+            (m.start(), m.end(), spelled)
+            for m in re.finditer(pattern, b)
+            if not any(s < m.end() and m.start() < e for s, e in fixed)
+        ]
+    return out
 
 
 def render(path: str, plans: Iterable[Plan], src: Sources) -> str:
@@ -209,7 +296,13 @@ def render(path: str, plans: Iterable[Plan], src: Sources) -> str:
         for file, s, e in p.edits:
             if file == path:
                 spans[(s, e)].append(p)
-    for (s, e), held in sorted(spans.items(), reverse=True):
+    ops: list[tuple[int, int, list[Plan] | str]] = [(s, e, held) for (s, e), held in spans.items()]
+    for p in plans:
+        ops += _reads(b, path, p)
+    for s, e, held in sorted(ops, key=lambda o: (o[0], o[1]), reverse=True):
+        if isinstance(held, str):
+            t, b = t[:s] + held + t[e:], b[:s] + held + b[e:]
+            continue
         had_extern = bool(re.match(r"\s*extern\b", b[s:e]))
         parts = split_top(re.sub(r"^\s*(extern\s+)?", "", b[s:e].rstrip().rstrip(";"), count=1))
         lead = t[:s].rsplit("\n", 1)[-1]

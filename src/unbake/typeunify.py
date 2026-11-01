@@ -199,8 +199,11 @@ def _sha(path: Path) -> str | None:
     return hashlib.sha1(path.read_bytes()).hexdigest() if path.is_file() else None
 
 
-def rebuild(root: Path, seams: Seams, units: Iterable[Unit]) -> dict[Unit, str | None]:
-    """Delete the objects of `units`, make them, and answer unit -> object hash, None for a unit whose build failed.
+def rebuild(
+    root: Path, seams: Seams, units: Iterable[Unit], errors: dict[str, str] | None = None
+) -> dict[Unit, str | None]:
+    """Delete the objects of `units`, make them, and answer unit -> object hash, None for a unit whose build failed
+    (`errors` takes the first compiler error of each such object).
     An object make neither built nor named in a failure (the build was cut short) is made again, the rest being done,
     for as long as a round makes one more. A build that did not run is a Refusal (exit naming no unit, a round that
     made no object); a quiet make with an empty log that made its objects ran."""
@@ -217,6 +220,10 @@ def rebuild(root: Path, seams: Seams, units: Iterable[Unit]) -> dict[Unit, str |
         if code != 0 and not failed:
             raise Refusal(Finding("unify.build", f"make exited {code} and named no unit that failed: it did not build"))
         named |= failed
+        if errors is not None:
+            for path in failed:
+                first = re.search(rf"^{re.escape(path[:-2])}\.i:\d+: (?!warning)(.*)$", log, re.M)
+                errors[path] = first[1] if first else "no compiler error in the log"
         absent = [p for p in pending if p not in named and not (root / p).is_file()]
         if len(absent) == len(pending):
             raise Refusal(
@@ -278,6 +285,7 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
     failed: dict[str, dict[str, str]] = defaultdict(dict)
     spent: dict[str, float] = defaultdict(float)
     tried: set[Unit] = set()
+    errors: dict[str, str] = {}
     pending, rounds, built, rebuilt = list(todo), 0, 0, 0
     while pending:
         rounds += 1
@@ -302,13 +310,14 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
             tried |= span
             rebuilt += len(span)
             with stages.stage("unify.rebuild"):
-                made = rebuild(root, seams, span)
+                made = rebuild(root, seams, span, errors)
             for name in group:
                 bad = differing(units_of[name], made, base)
                 spent[name] += (time.monotonic() - started) / len(group)
                 if bad:
                     why = "does not build" if made[bad[0]] is None else "object differs"
-                    failed[name][plans[name].canon] = f"{bad[0][0]} {bad[0][1]}: {why}"
+                    cause = f" ({errors[target(bad[0])][:160]})" if target(bad[0]) in errors else ""
+                    failed[name][plans[name].canon] = f"{bad[0][0]} {bad[0][1]}: {why}{cause}"
                     rank[name] += 1
                     pending.append(name)
                 else:

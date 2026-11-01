@@ -50,8 +50,8 @@ class World:
                 out = self.root / t
                 out.parent.mkdir(parents=True, exist_ok=True)
                 out.write_text(
-                    re.sub(r"extern[^\n]*\n", "", (self.root / unit).read_text()) + version
-                )  # no declarations
+                    re.sub(r"extern[^\n]*\n", "", (self.root / unit).read_text()).replace(".value", "") + version
+                )  # no declarations; a one-field struct reads as its field
         return code, log
 
 
@@ -188,9 +188,7 @@ def test_a_name_no_type_satisfies_is_reported_per_type_and_left_alone(tmp_path: 
     seams = Seams(world.found, world.read, late)
     result = typeunify.run(tmp_path, seams, ["g"])
     assert set(result["unresolved"]["g"]) == {"long", "int"}
-    assert all(
-        w.endswith("does not build") and w.startswith(("us ", "de ")) for w in result["unresolved"]["g"].values()
-    )
+    assert all("does not build" in w and w.startswith(("us ", "de ")) for w in result["unresolved"]["g"].values())
     assert {p: (tmp_path / p).read_text() for p in before} == before
 
 
@@ -446,25 +444,58 @@ def test_a_quiet_make_that_made_its_objects_ran(tmp_path: Path) -> None:
 
 def test_an_anonymous_struct_extern_is_a_candidate_with_a_plan(tmp_path: Path) -> None:
     """g_controllerPakPreviewProfileFlags: two externs spell `u8`, one `struct { u8 value; }` that reads `.value`.
-    The most declared type goes first; when it fails to build the anonymous struct has a plan, not a refusal."""
+    The most declared type goes first and its unit that read `.value` now reads the scalar; the anonymous struct, the
+    next candidate, has a plan too and the reading unit of the scalar reads `.value`."""
     files = {
         "include/h.H": "extern unsigned char g_flags;\n",
         "src/a.CPP": "extern unsigned char g_flags;\nint f(void) { return g_flags; }\n",
         "src/b.CPP": "extern struct { unsigned char value; } g_flags;\nint k(void) { return g_flags.value; }\n",
     }
-    world = World(tmp_path, files, ["src/a.CPP", "src/b.CPP"], fail=["unsigned char g_flags;\nint k"])
+    world = World(tmp_path, files, ["src/a.CPP", "src/b.CPP"])
     census = typeunify.collect(world.found(), world.read)
     src = typeplan.Sources(lambda p: (tmp_path / p).read_text())
     sites = typeplan.sites_of(census.per, "g_flags")
     first = typeplan.plan("g_flags", sites, 0, src, census.norm)
     second = typeplan.plan("g_flags", sites, 1, src, census.norm)
     assert isinstance(first, typeplan.Plan) and first.ctext == "unsigned char g_flags"
+    assert first.reads == (("src/b.CPP", "out", "value"),)
+    assert (
+        typeplan.render("src/b.CPP", [first], src) == "extern unsigned char g_flags;\nint k(void) { return g_flags; }\n"
+    )
     assert isinstance(second, typeplan.Plan) and second.ctext == "struct { unsigned char value; } g_flags"
     expected = "extern struct { unsigned char value; } g_flags;\n"
     assert typeplan.render("include/h.H", [second], src) == expected
+    assert typeplan.render("src/a.CPP", [second], src) == expected + "int f(void) { return g_flags.value; }\n"
     result = typeunify.run(tmp_path, world.seams, ["g_flags"], say=lambda _text: None)
-    assert result["unified"]["g_flags"]["type"] == second.canon
-    assert (tmp_path / "src/a.CPP").read_text().startswith(expected)
+    assert result["unified"]["g_flags"]["type"] == first.canon
+    assert (tmp_path / "src/b.CPP").read_text().endswith("int k(void) { return g_flags; }\n")
+
+
+def test_reads_of_a_scalar_become_reads_of_the_definitions_one_field_struct(tmp_path: Path) -> None:
+    """g_pakControllerRecord: `struct { u16 value; }` is defined, the reading unit's `extern u16` reads it as a scalar.
+    Only the reads change: not a string, a member of that name, the declaration, or a comment."""
+    files = {
+        "src/a.CPP": "struct { unsigned short value; } g_rec = { 1 };\n",
+        "src/b.CPP": (
+            "extern unsigned short g_rec;\n"
+            'int k(void) { /* g_rec */ return g_rec + s.g_rec + p->g_rec + sizeof("g_rec") + g_rec; }\n'
+        ),
+    }
+    got, src = _plan_of(tmp_path, files, "g_rec")
+    assert isinstance(got, typeplan.Plan) and got.reads == (("src/b.CPP", "into", "value"),)
+    assert typeplan.render("src/b.CPP", [got], src) == (
+        "extern struct { unsigned short value; } g_rec;\n"
+        'int k(void) { /* g_rec */ return g_rec.value + s.g_rec + p->g_rec + sizeof("g_rec") + g_rec.value; }\n'
+    )
+
+
+def test_a_type_that_is_not_the_one_field_struct_of_the_other_rewrites_no_reads(tmp_path: Path) -> None:
+    files = {
+        "src/a.CPP": "struct { unsigned short value; } g_rec = { 1 };\n",
+        "src/b.CPP": "extern unsigned char g_rec;\nint k(void) { return g_rec; }\n",
+    }
+    got, _ = _plan_of(tmp_path, files, "g_rec")
+    assert isinstance(got, typeplan.Plan) and got.reads == ()
 
 
 def test_an_anonymous_struct_definition_is_the_type_of_every_extern(tmp_path: Path) -> None:
@@ -477,6 +508,24 @@ def test_an_anonymous_struct_definition_is_the_type_of_every_extern(tmp_path: Pa
     assert isinstance(got, typeplan.Plan) and got.why == "definition"
     assert got.ctext == "struct { unsigned short value; } g_rec"
     assert typeplan.render("include/h.H", [got], src) == "extern struct { unsigned short value; } g_rec;\n"
+
+
+def test_reads_of_a_primitive_or_its_array_view_the_definitions_record_by_address(tmp_path: Path) -> None:
+    """g_playerViewRenderContext: `Shared_MenuData` is defined; `char` and `u8[]` externs read its bytes by address."""
+    files = {
+        "src/a.CPP": "struct Menu { int a; int b; };\nstruct Menu g_ctx;\n",
+        "src/b.CPP": "extern unsigned char g_ctx[];\nint k(void) { return g_ctx[4]; }\n",
+        "src/c.CPP": "extern char g_ctx;\nchar *k(void) { return &g_ctx; }\n",
+    }
+    got, src = _plan_of(tmp_path, files, "g_ctx")
+    assert isinstance(got, typeplan.Plan) and got.ctext == "struct Menu g_ctx"
+    assert got.reads == (("src/b.CPP", "views", "unsigned char"), ("src/c.CPP", "view", "char"))
+    assert typeplan.render("src/b.CPP", [got], src) == (
+        "extern struct Menu g_ctx;\nint k(void) { return ((unsigned char *)&g_ctx)[4]; }\n"
+    )
+    assert typeplan.render("src/c.CPP", [got], src) == (
+        "extern struct Menu g_ctx;\nchar *k(void) { return &(*(char *)&g_ctx); }\n"
+    )
 
 
 def _plan_of(tmp_path: Path, files: dict[str, str], name: str) -> tuple[typeplan.Plan | str, typeplan.Sources]:
@@ -522,3 +571,18 @@ def test_a_function_definition_is_the_type_of_the_proto_read_elsewhere(tmp_path:
     got, _src = _plan_of(tmp_path, files, "SoundElement_Play")
     assert isinstance(got, typeplan.Plan) and got.why == "definition", got
     assert got.ctext == "void SoundElement_Play(void *e, int x, int y)"
+
+
+def test_a_units_own_extern_of_a_function_is_edited_with_the_header_declaration(tmp_path: Path) -> None:
+    """TIMER_FORMATPREVIEWDOTTEDTRIPLE.CPP Menu_CountLineChars: the header and the unit's own extern say
+    `struct Field *`, the definition says `struct LayeredText *`; both declarations take the definition's type."""
+    files = {
+        "include/h.H": "typedef int s32;\nextern s32 Menu_CountLineChars(struct Field *);\n",
+        "src/a.CPP": "s32 Menu_CountLineChars(struct LayeredText *t) { return 0; }\n",
+        "src/b.CPP": "extern s32 Menu_CountLineChars(struct Field *);\nvoid k(void) { Menu_CountLineChars(0); }\n",
+    }
+    got, src = _plan_of(tmp_path, files, "Menu_CountLineChars")
+    assert isinstance(got, typeplan.Plan) and got.why == "definition", got
+    assert {e[0] for e in got.edits} == {"include/h.H", "src/b.CPP"}
+    want = "extern s32 Menu_CountLineChars(struct LayeredText *t);\n"
+    assert typeplan.render("src/b.CPP", [got], src).startswith(want)
