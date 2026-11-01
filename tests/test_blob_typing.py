@@ -6,7 +6,7 @@ from types import SimpleNamespace as N
 
 import pytest
 
-from unbake import blobs, policy, report
+from unbake import blobs, policy
 
 
 def _row(kind="leftover", state="decoded", rom=None, **extra):
@@ -52,13 +52,6 @@ def test_a_draft_needs_a_leftover_row_a_content_type_and_evidence(extra, kind, r
     del row["rom"]
     found = blobs.check(N(), {"blob": {"r": row}}, "blobs.toml")
     assert bool(found) is refused
-
-
-def test_the_report_line_states_rows_and_bytes_in_the_same_words():
-    held = {"blob_states": blobs.states({"blob": {"a": _row()}}, "v"), "functions_matched": 5, "functions_fuzzy": 2}
-    assert "untyped 1 (16 bytes)" in report._states_line("blob rows", held)
-    held.update(functions_total=9)
-    assert report._functions_line("fn rows", held) == "fn rows exact 5, fuzzy 2, none 2"
 
 
 def _blob_text(rows):

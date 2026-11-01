@@ -731,20 +731,6 @@ def _blobs_line(label: str, held: Json, cells: int) -> str:
     return _bar(label, held["blobs_decoded"], held["blobs_total"], held["blobs_total"], cells)
 
 
-def _states_line(label: str, held: Json) -> str:
-    """The README line of the blob rows by typing: rows and bytes in each of exact, fuzzy and untyped."""
-    return f"{label} " + ", ".join(
-        f"{state} {held['blob_states'][state]['rows']:,} ({held['blob_states'][state]['bytes']:,} bytes)"
-        for state in blobs.STATES
-    )
-
-
-def _functions_line(label: str, held: Json) -> str:
-    """The README line of the functions in the same words: exact (matched), fuzzy (a measured draft), none."""
-    exact, draft = held["functions_matched"], held["functions_fuzzy"]
-    return f"{label} exact {exact:,}, fuzzy {draft:,}, none {held['functions_total'] - exact - draft:,}"
-
-
 def _linker_fill(bucket: Json, counted: bool) -> str:
     """The README tail of a bar row: the linker's alignment fill, its own class beside the bar and never part of it."""
     if not counted:
@@ -812,8 +798,6 @@ def readme(text: str, config: Any, report: Json) -> str:
             rows = [_line(k.ljust(9), versions[v], cells, k) for k in ("code", "data", "functions")]
             if "rom_size" in versions[v]:
                 rows.append(_blobs_line("blobs".ljust(9), versions[v], cells))
-                rows.append(_functions_line("fn rows".ljust(9), versions[v]))
-                rows.append(_states_line("blob rows".ljust(9), versions[v]))
             blocks.append(header + "\n|---|\n| <pre><code>" + "</code><br><code>".join(rows) + "</code></pre> |")
         text = text[: text.index(begin) + len(begin)] + "\n" + "\n\n".join(blocks) + "\n" + text[text.index(end) :]
         first, last = settings["dependencies_begin"], settings["dependencies_end"]

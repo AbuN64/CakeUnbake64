@@ -39,8 +39,8 @@ Every blob row is in one of three states, the words a function's credit uses. **
 rebuilds the bytes (any row whose type is not `leftover`, except an `identified` one). **fuzzy**: a typed draft, not yet
 rebuilt from source: an `identified` row, or a `leftover` row that carries `draft = "<content type>"` and
 `draft_evidence = "<why, e.g. same type as its source in eu>"`. **untyped**: a bare `leftover`. `progress.json` carries
-rows and bytes per version in each state (`partition.blob.states`) beside `functions.fuzzy`; the README states them as
-`blob rows` and `fn rows`. `audit.untyped_row` refuses a change that raises the untyped row count over BASE;
+rows and bytes per version in each state (`partition.blob.states`) beside `functions.fuzzy`; the README box keeps
+only the four bar rows, so the counts are never read from it. `audit.untyped_row` refuses a change that raises the untyped row count over BASE;
 `audit.untyped_window` warns on the untyped rows (old ones included) that sit in a window the change touched.
 
 ## ROM partition
