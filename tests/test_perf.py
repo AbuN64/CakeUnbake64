@@ -83,7 +83,7 @@ def _budgeted(cfg, *changes):
 def test_budget_flags_a_single_core_stage(cfg):
     (record,) = _budgeted(cfg, {"wall_seconds": 5.0, "cores": 0.5})
     assert [f["key"] for f in record.findings] == ["budget.single_core"]
-    assert not record.findings[0].blocking
+    assert not record.findings[0]["blocking"]
 
 
 def test_budget_flags_an_underused_pool_and_a_warm_dispatch(cfg):

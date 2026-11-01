@@ -9,7 +9,7 @@ import pytest
 from abucache import stages
 
 from unbake import cli, compare, config, human
-from unbake.contracts import Finding, Origin
+from unbake.contracts import Finding
 
 
 @pytest.fixture(autouse=True)
@@ -86,7 +86,7 @@ def _records():
         3,
         2_000_000,
         3_000_000,
-        {key: Origin(key, "/host.toml", "0" * 64) for key in keys},
+        dict.fromkeys(keys, "/host.toml"),
         dict(zip(keys, (100_000_000, 200_000_000), strict=True)),
         {"view": (1, 2), "object": (3, 4)},
     )
