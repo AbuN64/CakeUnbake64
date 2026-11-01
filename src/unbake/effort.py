@@ -96,7 +96,7 @@ def closed() -> tuple[StageRecord, ...]:
     return tuple(_closed)
 
 
-NICE = 15  # the niceness of every command but the ship lock holder (`unbake --priority`); UNBAKE_NICE overrides, 0 keeps
+NICE = 15  # the niceness of every command but the `--priority` holder; UNBAKE_NICE overrides, 0 keeps
 priority = False  # this command is the job every tree waits on (the ship/land lock holder): `unbake --priority`
 
 

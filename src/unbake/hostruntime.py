@@ -36,7 +36,8 @@ def runtime_toml(host: Host) -> str:
         f"bytes = {host.cache_max_bytes}\n"
         f"keep_seconds = {CACHE_KEEP_SECONDS}\n\n"
         f"[stages]\nlog_bytes = {STAGE_LOG_BYTES}\n\n"
-        f"[events]\nfeed = {json.dumps(str(feed))}\nslow_seconds = {SLOW_SECONDS}\noverrun_percent = {OVERRUN_PERCENT}\n\n"
+        f"[events]\nfeed = {json.dumps(str(feed))}\n"
+        f"slow_seconds = {SLOW_SECONDS}\noverrun_percent = {OVERRUN_PERCENT}\n\n"
         "[capacities]\n"
     )
 
