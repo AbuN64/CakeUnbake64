@@ -7,14 +7,15 @@ from dataclasses import replace
 
 import pytest
 
-from unbake import cli, compare, config, effort, human
+from abucache import stages
+from unbake import cli, compare, config, human
 from unbake.contracts import Finding, Origin, StageRecord
 
 
 @pytest.fixture(autouse=True)
 def _state(monkeypatch):
-    monkeypatch.setattr(effort, "_listeners", [])
-    monkeypatch.setattr(effort, "closed", lambda: ())
+    monkeypatch.setattr(stages, "_listeners", [])
+    monkeypatch.setattr(stages, "closed", lambda: ())
     monkeypatch.setattr(human, "_stream", None)
     monkeypatch.setattr(human, "_tty", False)
     monkeypatch.setattr(human, "_live", False)
@@ -52,11 +53,11 @@ def test_status_line_only_on_tty(monkeypatch, tty):
     stream = io.StringIO()
     monkeypatch.setattr(human.shutil, "get_terminal_size", lambda: os.terminal_size((12, 20)))
     human.attach(stream, tty)
-    effort._notify("open", {"path": ["check", "longstage"]})
-    effort.progress("units", 2, 4)
+    stages._notify("open", {"path": ["check", "longstage"]})
+    stages.progress("units", 2, 4)
     done = {"status": "ok", "cores": 0, "jobs": 0}
-    effort._notify("close", {"path": ["check", "longstage"], "wall": 1, **done})
-    effort._notify("close", {"path": ["check"], "wall": 2, **done})
+    stages._notify("close", {"path": ["check", "longstage"], "wall": 1, **done})
+    stages._notify("close", {"path": ["check"], "wall": 2, **done})
     done = "check > longstage 1.0s 0.00 cores 0 jobs\ncheck 2.0s 0.00 cores 0 jobs\n"
     live = "\r\x1b[Kcheck > lon\r\x1b[Kunits 2/4\r\x1b[K"
     assert stream.getvalue() == "check > longstage started\n" + (live if tty else "") + done
@@ -129,8 +130,8 @@ def test_summary_last_root_and_ten_slowest():
 def test_finish_clears_and_orders_findings(monkeypatch):
     stream = io.StringIO()
     human.attach(stream, True)
-    effort.progress("units", 1, 2)
-    monkeypatch.setattr(effort, "closed", _records)
+    stages.progress("units", 1, 2)
+    monkeypatch.setattr(stages, "closed", _records)
     human.finish("check", None, [Finding("effort.log", "debt", blocking=False), Finding("effort.log", "block")])
     text = stream.getvalue()
     assert text.startswith(
@@ -182,7 +183,7 @@ def test_written_files_print_the_exact_add_and_one_line_commit() -> None:
 def test_start_lines(path, expected, printed):
     stream = io.StringIO()
     human.attach(stream, False)
-    effort._notify("open", {"path": path, "expected": expected})
+    stages._notify("open", {"path": path, "expected": expected})
     assert bool(stream.getvalue()) is printed
     assert "\x1b" not in stream.getvalue()
 
@@ -190,7 +191,7 @@ def test_start_lines(path, expected, printed):
 def test_a_said_line_reaches_the_person_as_one_line():
     stream = io.StringIO()
     human.attach(stream, False)
-    effort.say("unbake: waiting for pids 7 to finish")
+    stages.say("unbake: waiting for pids 7 to finish")
     assert stream.getvalue() == "unbake: waiting for pids 7 to finish\n"
 
 

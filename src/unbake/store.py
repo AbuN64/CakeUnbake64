@@ -23,10 +23,10 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from abucache import memo
+from abucache import memo, stages
 from abucache.store import CacheFull, ContentCache, absorb_touched, everything, open_cache
 
-from unbake import effort, process
+from unbake import process
 from unbake.contracts import Config, Finding, Host, Json, Refusal, pickled, sha256
 
 _JOURNALS: list[dict[Path, bytes | None]] = []
@@ -242,7 +242,7 @@ def content_directory(host: Host) -> Path:
 def content(config: Config, named: bool = False) -> Packed:
     """The host content cache beside cache.dir, in a folder named for the entry format: older installs never read it.
     `named`: the caller's keys name its code (pool jobs), so they are kept as given."""
-    return Packed(open_cache(content_directory(config.host), config.host.cache_max_bytes, effort.count), named)
+    return Packed(open_cache(content_directory(config.host), config.host.cache_max_bytes, stages.count), named)
 
 
 _CLOCK: Callable[[], float] = time.monotonic  # replaced by tests so a deadline passes without waiting
@@ -287,7 +287,7 @@ def _blocked(fd: int, flags: int, path: Path, wait_s: float | None) -> bool:
                 return False
             if first or now - last >= BEAT:
                 first, last = False, now
-                effort.say(f"waiting for lock {path.name} held by {_holders(path) or 'unknown'} ({now - began:.0f}s)")
+                stages.say(f"waiting for lock {path.name} held by {_holders(path) or 'unknown'} ({now - began:.0f}s)")
             _PAUSE(_POLL_S)
 
 
@@ -306,9 +306,9 @@ def _flock(path: Path, flags: int, *, wait: bool = True, wait_s: float | None = 
                 yield None
                 return
             start = time.perf_counter()
-            with effort.stage("store.wait_lock"):  # a blocked command shows what it waited on, never a silent gap
+            with stages.stage("store.wait_lock"):  # a blocked command shows what it waited on, never a silent gap
                 taken = _blocked(fd, flags, path, wait_s)
-            effort.waited(time.perf_counter() - start, "lock", path.name)
+            stages.waited(time.perf_counter() - start, "lock", path.name)
             if not taken:
                 yield None
                 return
@@ -423,7 +423,7 @@ def log(config: Config, kind: str, body: Json) -> None:
         {
             "schema": 2,
             "kind": kind,
-            "invocation": effort.invocation(),
+            "invocation": stages.invocation(),
             "time": datetime.now(UTC).isoformat(timespec="seconds"),
             "body": body,
         },
@@ -449,7 +449,7 @@ def exclusive(config: Config, name: str, *, wait: bool, wait_s: float | None = N
         fd = stack.enter_context(_flock(root / f"{name}.lock", fcntl.LOCK_EX, wait=wait, wait_s=left))
         if fd is not None:
             os.ftruncate(fd, 0)
-            os.write(fd, f"{os.getpid()} {effort.invocation()}\n".encode())
+            os.write(fd, f"{os.getpid()} {stages.invocation()}\n".encode())
         yield fd is not None
 
 

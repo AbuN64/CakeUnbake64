@@ -11,10 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from abucache import memo
+from abucache import memo, stages
 
 from unbake import config as configuration
-from unbake import effort, store, symbols
+from unbake import store, symbols
 from unbake.contracts import Config, Finding, Refusal, Version, code_identity, digest, sha256
 
 _WORD = 0xFFFFFFFF
@@ -161,7 +161,7 @@ def asm_files(root: Path, version: str) -> list[Path]:
 
 def asm_path(config: Config, version: str, name: str) -> Path:
     """The asm file splat writes for one function: asm/<v>/nonmatchings/<segment>/<name>.s."""
-    with effort.stage("versions.asm_path"):
+    with stages.stage("versions.asm_path"):
         rows = {r.name: r for r in symbol_addrs(config, version)}
         row = rows.get(name)
         if row is None:
@@ -201,7 +201,7 @@ def symbols_ld(config: Config, version: str, overlays: Mapping[str, bytes | None
     """The scoring symbol script of one version (PROVIDE per symbol), kept in the cache only, keyed by the fact files:
     every fact of symbol_addrs.txt and of aliases.txt (the names the former does not list), as the whole-ROM link
     provides them; a fact file in `overlays` stands in for the one on disk."""
-    with effort.stage("versions.symbols_ld"):
+    with stages.stage("versions.symbols_ld"):
         data = _fact_bytes(config, symbol_file(version), overlays, True)
         aliases = _fact_bytes(config, symbols.aliases_path(version), overlays, False)
         earlier = _fact_bytes(config, symbols.earlier_path(version), overlays, False)
@@ -228,7 +228,7 @@ def read(
     only: Collection[str] | None = None,
     reuse: Mapping[str, Version] | None = None,
 ) -> dict[str, Version]:
-    with effort.stage("versions.read"):
+    with stages.stage("versions.read"):
         wanted = [v for v in config.project.versions if only is None or v in only]
         out: dict[str, Version] = {}
         for vid in wanted:
@@ -311,7 +311,7 @@ def rom_bytes(version: Version, start: int, end: int) -> bytes:
 
 def undefined(obj: Path) -> tuple[str, ...]:
     """The global and weak names an object leaves undefined, read straight from its big-endian ELF32 symbol table."""
-    with effort.stage("versions.undefined"):
+    with stages.stage("versions.undefined"):
         data = obj.read_bytes()
         if data[:6] != b"\x7fELF\x01\x02":
             raise Refusal(
@@ -351,7 +351,7 @@ def resolve(version: Version, names: Sequence[str], unit: str) -> tuple[Finding,
 def defined(obj: Path) -> tuple[dict[str, tuple[str, int, int]], dict[str, int]]:
     """(name -> (section name, value, size) of every symbol an ELF32 big-endian object defines, section name -> its
     total size), read from the section and symbol tables."""
-    with effort.stage("versions.defined"):
+    with stages.stage("versions.defined"):
         data = obj.read_bytes()
         if data[:6] != b"\x7fELF\x01\x02":
             raise Refusal(

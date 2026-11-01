@@ -54,12 +54,12 @@ from types import SimpleNamespace
 from typing import Any
 
 import tomlkit
-from abucache import memo
+from abucache import memo, stages
 from elftools.elf.elffile import ELFFile
 
 from unbake import collapse as collapsing
 from unbake import config as configuration
-from unbake import effort, guards, hoist, linkfill, objectplan, process, repo, store, symbols
+from unbake import guards, hoist, linkfill, objectplan, process, repo, store, symbols
 from unbake import merge as unitmerge
 from unbake import mergecheck as merging
 from unbake import pads as padding
@@ -257,7 +257,7 @@ def _tracked(config: Config) -> list[str]:
 
 def plan(config: Config, params: Json) -> Row:
     """Write the plan and the map for a rules file; moves nothing."""
-    with effort.stage("layout.plan"):
+    with stages.stage("layout.plan"):
         path, mapped = params.get("rules"), params.get("map")
         if not path and not mapped:
             raise _refuse("plan needs --rules FILE or --map FILE")
@@ -579,7 +579,7 @@ def _module_writes(config: Config, mapping: Mapping[str, str]) -> dict[str, str]
 def apply(config: Config, params: Json) -> Row:
     """Carry out a plan on the working tree: config.toml rewritten and loaded again first (so a mistake refuses before
     any file moves), then the files, then sync."""
-    with effort.stage("layout.apply"):
+    with stages.stage("layout.apply"):
         root = config.project.root
         document = _read_plan(config, params)
         mapping: dict[str, str] = document["moves"]
@@ -678,7 +678,7 @@ def literals(config: Config, params: Json) -> Row:
     `literals_<function>` row, a split of a data row that runs over one): a table of a function the tree compiles is
     that function's file's read-only data, and these rows are how a project says so. Stops when sync passes or a
     finding is of any other kind."""
-    with effort.stage("layout.literals"):
+    with stages.stage("layout.literals"):
         root = config.project.root
         added: list[str] = []
         for _ in range(_PASSES):
@@ -734,7 +734,7 @@ def carry_patch(patch: str, rules: Sequence[Mapping[str, Any]], mapping: Mapping
 def carry(config: Config, params: Json) -> Row:
     """Untracked files that a plan moves go to their new places now; the uncommitted edits of tracked files are written
     as a patch with the new paths. The tracked files themselves are not touched."""
-    with effort.stage("layout.carry"):
+    with stages.stage("layout.carry"):
         root = config.project.root
         document = _read_plan(config, params)
         rules, mapping = document["rules"], document["moves"]
@@ -771,7 +771,7 @@ def _contents(path: Path) -> dict[str, bytes]:
 def verify(config: Config, params: Json) -> Row:
     """Objects built before the move against objects built after it, through the plan's map: every section the same.
     `old` is a directory holding the earlier `build/` tree and the earlier link script."""
-    with effort.stage("layout.verify"):
+    with stages.stage("layout.verify"):
         root = config.project.root
         old = params.get("old")
         if not old:
@@ -899,7 +899,7 @@ def prove(config: Config, params: Json) -> Row:
     """The ROMs of every version, built and compared once: `make check` on the moved tree, refused when any ROM differs
     or the build fails. A ROM that differs is named by version, module (a merged unit of `owners`), symbol and first
     differing offset, so the module that moves is not left to a bisection."""
-    with effort.stage("layout.prove"):
+    with stages.stage("layout.prove"):
         root = config.project.root
         jobs = int(params.get("jobs") or 4)
         make = process.tool(config, "make")
@@ -914,7 +914,7 @@ def prove(config: Config, params: Json) -> Row:
 
 def reorg(config: Config, params: Json) -> Row:
     """The one-command form: plan from the map (and rules), apply it with includes respelled, prove the ROMs once."""
-    with effort.stage("layout.reorg"):
+    with stages.stage("layout.reorg"):
         planned = plan(config, params)
         applied = apply(config, params)
         out: Row = {
@@ -1153,7 +1153,7 @@ def _verdicts(config: Config, params: Json) -> tuple[list[Row], list[tuple[str, 
 
 def header(config: Config, params: Json) -> Row:
     """One header per source file: hoist the exports of `--file` into its header and let its users include it."""
-    with effort.stage("layout.header"):
+    with stages.stage("layout.header"):
         target = params.get("file")
         if params.get("map") or (target and configuration.is_header(str(target))):
             return _header_guards(config, params)
@@ -1236,7 +1236,7 @@ def collapse(config: Config, params: Json) -> Row:
     """Each source file's address-only duplicate version branches become one definition (see `unbake.collapse`); the
     names a version spelled differently go to its aliases.txt as second names of the same address. Held groups are
     returned with the reason; nothing is touched for them."""
-    with effort.stage("layout.collapse"):
+    with stages.stage("layout.collapse"):
         root = config.project.root
         versions = list(config.project.versions)
         only = params.get("file")
@@ -1293,7 +1293,7 @@ def pads(config: Config, params: Json) -> Row:
     """Each source file's version-gated all-zero data blocks whose names are symbol rows are removed: the layout places
     the file's data at the ROM offset of its first remaining name, so the gap keeps the zeros (see `unbake.pads`).
     Held blocks are returned with the reason; nothing is touched for them."""
-    with effort.stage("layout.pads"):
+    with stages.stage("layout.pads"):
         root = config.project.root
         versions = list(config.project.versions)
         only = params.get("file")
@@ -1351,7 +1351,7 @@ def pads(config: Config, params: Json) -> Row:
 def mergecheck(config: Config, params: Json) -> Row:
     """Which modules of a module map may become one source file and which must stay separate files, from the link
     order and the built objects of every version (`ld` and `obj` are patterns over {version} and {unit})."""
-    with effort.stage("layout.mergecheck"):
+    with stages.stage("layout.mergecheck"):
         if params.get("plan"):
             return _mergecheck_plan(params)
         modules = _verdicts(config, params)[0]
@@ -1542,7 +1542,7 @@ def merge(config: Config, params: Json) -> Row:
     --module restricts the map to one module; otherwise the map is the exact selection. Every hard refusal is
     reported before mutation. A name declared with different types is a hard refusal of its module, as in mergecheck.
     """
-    with effort.stage("layout.merge"):
+    with stages.stage("layout.merge"):
         verdicts, rows, seqs = _verdicts(config, {**params, "prove": None})
         grouped: dict[str, list[str]] = {}
         seen: set[str] = set()
@@ -1712,7 +1712,7 @@ def split(config: Config, params: Json) -> Row:
     (the --modules file and the configured module_map) become one row per piece. A symbol the table does not name goes
     to the target that holds most of the unit; a static symbol another piece uses loses `static`; both are reported.
     --prove builds and compares every ROM once."""
-    with effort.stage("layout.split"):
+    with stages.stage("layout.split"):
         if not params.get("file") or not params.get("assign"):
             raise _refuse("split needs --file U (a tracked source file) and --assign ASSIGN.tsv")
         root = config.project.root

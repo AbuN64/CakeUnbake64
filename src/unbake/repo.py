@@ -20,14 +20,13 @@ from typing import Any
 
 import rabbitizer
 import yaml
-from abucache import memo
+from abucache import memo, stages
 
 from unbake import (
     adapters,
     api,
     build,
     ci,
-    effort,
     journal,
     libasm,
     linkfill,
@@ -61,7 +60,7 @@ def _windows(data: bytes, row: Json) -> set[tuple[int, ...]]:
 
 
 def validate_roms(roms: Mapping[str, Path], names_from: str) -> Json:
-    with effort.stage("repo.validate_roms"):
+    with stages.stage("repo.validate_roms"):
         rules = configuration.load_resource("rom.toml")
         data: dict[str, bytes] = {}
         result: dict[str, dict[str, Any]] = {}
@@ -178,7 +177,7 @@ def _toml_rows(rows: Iterable[Json]) -> str:
 
 
 def init(params: Json) -> Json:
-    with effort.stage("repo.init"):
+    with stages.stage("repo.init"):
         root, roms = Path(params["dir"]).absolute(), {}
         if root.exists() and (not root.is_dir() or any(root.iterdir())):
             raise Refusal(Finding("init.request", f"{root} is not an empty directory", path=str(root)))
@@ -791,7 +790,7 @@ def sync(config: Config, params: Json, refresh: bool = False) -> Json:
         return result
     hold = report.publish_hold(config, current)
     if hold and hold.key == "sync.unchecked" and refresh and not params.get("check"):
-        with effort.stage("repo.sync.check"):
+        with stages.stage("repo.sync.check"):
             build.make_check(config, current)
         hold = report.publish_hold(config, current)
     if hold:
@@ -966,13 +965,13 @@ def _swallowed_tables(config: Config, current: Any) -> list[Finding]:
 
 def _sync(config: Config, params: Json) -> tuple[Json, Any]:
     """`sync`, and the tree it left (the one capture a setup shares with the report that follows)."""
-    with effort.stage("repo.sync"):
+    with stages.stage("repo.sync"):
         root = config.project.root
         current = tree.capture(config)
         assembly = libasm.plan(config, current)
         if assembly:
             current = tree.capture(config, assembly)
-        with effort.stage("repo.stand_ins"):
+        with stages.stage("repo.stand_ins"):
             written = stand_ins(config, current)
             if added := _added_stand_ins(root, written):
                 raise Refusal(
@@ -1021,7 +1020,7 @@ def _sync(config: Config, params: Json) -> tuple[Json, Any]:
                 if path == "Makefile":  # a rule make cannot see changing: its objects go before the next build
                     build.drop_reflagged(config, value)
                 store.write(root / path, value)
-        effort.count("sync", not changed)
+        stages.count("sync", not changed)
         return {"written": sorted(changed), "stand_ins": {p: [] for p in sorted(appended)}}, current
 
 
@@ -1511,7 +1510,7 @@ def _restore_extraction(config: Config, v: str, key: str) -> bool:
         blob = store.get(config, _SPLIT_KIND, f"extract-v1:{key}", named=True)
     except (OSError, Refusal, AttributeError):
         return False
-    effort.count("split-cache", blob is not None)
+    stages.count("split-cache", blob is not None)
     if blob is None:
         return False
     root = config.project.root
@@ -1589,7 +1588,7 @@ def _keep_unchanged(config: Config, v: str, before: Mapping[str, list[Any]] | No
             return f"whole version rebuilds: {len(top)} top-level files changed, e.g. {', '.join(top[:3])}"
         return "whole version rebuilds: the last extraction recorded no mark"
     reach = _including(names, includes)
-    effort.count("extract-reach", len(reach) <= len(names))
+    stages.count("extract-reach", len(reach) <= len(names))
     os.utime(root / mark, ns=(before[mark][1], before[mark][1]))
     build.drop_including(config, v, reach)
     return f"{len(names)} files changed, {len(reach)} reached by their includers"
@@ -1660,7 +1659,7 @@ def _state(config: Config) -> str:
 def _extract(config: Config, versions: Sequence[str]) -> list[str]:
     ran = pool.map(config, "repo.extract", extract_job, [(config, v) for v in versions])
     for did in ran:
-        effort.count("extract", not did)
+        stages.count("extract", not did)
     return [v for v, did in zip(versions, ran, strict=True) if did]
 
 
@@ -1685,7 +1684,7 @@ def setup(config: Config, params: Json) -> Json:
 
 def _setup(config: Config, params: Json) -> Json:
     wait_s = config.host.move_wait_s
-    with effort.stage("repo.setup"), store.exclusive(config, "structure", wait=True, wait_s=wait_s) as held:
+    with stages.stage("repo.setup"), store.exclusive(config, "structure", wait=True, wait_s=wait_s) as held:
         adapters.check_abucache()
         if not held:
             raise Refusal(Finding("setup.busy", configuration.sentence("setup.busy")))
@@ -1698,15 +1697,15 @@ def _setup(config: Config, params: Json) -> Json:
         kept = json.loads(done.read_bytes()) if done.exists() else None
         build_too = not params.get("no_make")
         if kept and kept["state"] == _state(config) and (kept["result"].get("make") or not build_too):
-            effort.count("setup", True)
+            stages.count("setup", True)
             return {**kept["result"], "extracted": [], "files": [], "message": "setup"}
-        effort.count("setup", False)
-        with effort.stage("repo.setup.toolchains"):
+        stages.count("setup", False)
+        with stages.stage("repo.setup.toolchains"):
             toolchains = sorted(
                 {project.toolchain, *(row.toolchain for row in project.files.values() if row.toolchain)}
             )
             build.install_toolchains(config, toolchains)
-        with effort.stage("repo.setup.extract"):
+        with stages.stage("repo.setup.extract"):
             why = {v: w for v in _extractable(config) if (w := _extract_why(config, v))}
             extracted = _extract(config, _extractable(config))
         synced, current = _sync(config, {"check": False})
@@ -1717,7 +1716,7 @@ def _setup(config: Config, params: Json) -> Json:
             extracted = sorted({*extracted, *_extract(config, again)})
         make = None  # --no-make: the caller builds and records the verdict itself (decomp land's check gate)
         if build_too:
-            with effort.stage("repo.setup.make"):
+            with stages.stage("repo.setup.make"):
                 make = build.make_check(config, current)
             report.progress(config, current)
         result = {

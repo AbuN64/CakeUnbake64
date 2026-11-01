@@ -1,103 +1,48 @@
-"""Invocation spans, exclusive parent work, and worker/native accounting."""
+"""unbake's seat on the one timing path (abucache.stages): the command's niceness, its hold beat and the binding of the
+host config to the stage tree. The tree itself (spans, records, counters, pool folds, the stage log) is abucache's."""
 
 from __future__ import annotations
 
-import json
 import os
 import resource
 import threading
 import time
-import traceback
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from contextvars import ContextVar
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import psutil
-from abucache import memo, stages
+from abucache import stages
 
-from unbake.contracts import Config, Finding, Json, NativeResult, Origin, Refusal, Span, StageRecord
+from unbake.contracts import Config, Finding, Json, Refusal
 
 __plumbing__ = True  # contracts.code_identity names this code and never follows it: it shapes no result
 
-_stack: ContextVar[tuple[_Open, ...]] = ContextVar("effort_stack", default=())
-_closed: list[StageRecord] = []
-_counters: dict[str, list[int]] = {}
-_config: Config | None = None
-_sink: Path | None = None
-_buffer: list[StageRecord] = []
-_invocation = ""
-_dispatched: dict[str, tuple[str, ...]] = {}  # gather stage span -> the dispatches it ran
-_seen: set[tuple[str, ...]] = set()  # slow stage paths already closed in this command
-_listeners: list[Callable[[str, Json], None]] = []
-_waits: dict[str, float] = {}  # this command's seconds waiting, by what it waited for: "slots" or "lock"
-wait_hook: Callable[[str, float, str, str], None] | None = (
-    None  # (what, seconds, detail, project root): the host's wait log, set by pool
-)
-_walls: dict[str, float] = {}  # the previous command's wall seconds by stage path, for "expected" on start lines
-LOG_BYTES = 64 << 20  # the stage log keeps its newest half once it grows past this
-WAIT_NOTE = 60.0  # a wait this long (seconds) is also written, one line, to the host's wait log by `wait_hook`
-WALL_DEPTH = 3  # stages this shallow report live progress and are remembered in .unbake/walls.json
-
-
-def expected(path: Sequence[str]) -> float | None:
-    """How long the previous command spent in this stage path, None when it never ran or was never recorded."""
-    return _walls.get(" > ".join(path))
-
-
-def _load_walls(path: Path) -> dict[str, float]:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return {k: float(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
-
-
-def _save_walls() -> None:
-    """Keep this command's shallow stage walls beside the stage log: a few lines, not a scan of the log."""
-    if _sink is None:
-        return
-    walls = {" > ".join(r.path): r.wall_seconds for r in _closed if len(r.path) <= WALL_DEPTH and r.kind != "own"}
-    path = _sink.with_name("walls.json")
-    try:
-        part = path.with_name(f".{uuid4().hex}.part")
-        part.write_text(json.dumps({**_load_walls(path), **walls}, sort_keys=True), encoding="utf-8")
-        part.replace(path)
-    except OSError:
-        _log_failure()
-
-
-def listen(callback: Callable[[str, Json], None]) -> None:
-    _listeners.append(callback)
-
-
-def _notify(event: str, body: Json) -> None:
-    for callback in tuple(_listeners):
-        try:
-            callback(event, body)
-        except Exception as exc:
-            if _stack.get():
-                _stack.get()[-1].findings.append(Finding("effort.log", reason=f"Listener: {exc}", blocking=False))
-
-
-def say(text: str) -> None:
-    """One line for the person watching the command now (stderr), outside any stage's totals."""
-    _notify("say", {"text": text})
-
-
-def progress(name: str, done: int, total: int) -> None:
-    _notify("progress", {"name": name, "done": done, "total": total})
-
-
-def closed() -> tuple[StageRecord, ...]:
-    return tuple(_closed)
-
-
 NICE = 15  # the niceness of every command but the `--priority` holder; UNBAKE_NICE overrides, 0 keeps
 priority = False  # this command is the job every tree waits on (the ship/land lock holder): `unbake --priority`
+HOLD_BEAT = 300.0  # a command still running after this many seconds names its stage and CPU, then again every beat
+_live: list[tuple[str, ...]] = []  # the paths of the stages open now (outermost first), for the hold beat
+
+
+def _finding(found: Any) -> dict[str, Any]:
+    return found if isinstance(found, dict) else asdict(found)
+
+
+stages.finding_to_dict = _finding
+stages.register_refusal(Refusal)
+
+
+def _track(event: str, body: Json) -> None:
+    path = tuple(body.get("path", ()))
+    if event == "open":
+        _live.append(path)
+    elif event == "close" and path in _live:
+        _live.remove(path)
+
+
+stages.listen(_track)
 
 
 def set_priority(on: bool) -> None:
@@ -119,10 +64,6 @@ def yield_cpu() -> int:
         return -1
 
 
-HOLD_BEAT = 300.0  # a command still running after this many seconds names its stage and CPU, then again every beat
-_live: list[tuple[str, ...]] = []  # the paths of the stages open now (outermost first), for the hold beat
-
-
 def _tree_cpu() -> float:
     """CPU seconds of this process, its finished children and everything still running below it."""
     try:
@@ -135,7 +76,8 @@ def _tree_cpu() -> float:
                 continue
         return total
     except psutil.Error:
-        return _cpu()
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        return usage.ru_utime + usage.ru_stime
 
 
 @contextmanager
@@ -147,7 +89,9 @@ def _hold_beat(name: str, beat: float) -> Iterator[None]:
     def run() -> None:
         while not stop.wait(beat):
             at = " > ".join(_live[-1]) if _live else name
-            say(f"hold: {name} runs {time.perf_counter() - began:.0f} s, {_tree_cpu() - cpu0:.0f} CPU-s, now in {at}")
+            stages.say(
+                f"hold: {name} runs {time.perf_counter() - began:.0f} s, {_tree_cpu() - cpu0:.0f} CPU-s, now in {at}"
+            )
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
@@ -157,526 +101,33 @@ def _hold_beat(name: str, beat: float) -> Iterator[None]:
         stop.set()
 
 
-def _cpu() -> float:
-    usage = resource.getrusage(resource.RUSAGE_SELF)
-    return usage.ru_utime + usage.ru_stime
-
-
-class _Open:
-    def __init__(self, name: str, kind: str, parent: _Open | None = None):
-        self.span, self.parent = uuid4().hex, parent.span if parent else None
-        self.path: tuple[str, ...] = (parent.path if parent else ()) + (name,)
-        self.kind = kind
-        self.start, self.cpu = time.perf_counter_ns(), _cpu()
-        self.rss = psutil.Process(os.getpid()).memory_info().rss if kind in ("command", "pool") else 0
-        self.cache, self.items, self.wait = counters(), 0, 0.0
-        self.findings: list[Finding] = []
-        self.children: list[StageRecord] = []
-        self.remote_cache: dict[str, tuple[int, int]] = {}
-
-    def add(self, *, items: int = 0, findings: Sequence[Finding] = ()) -> None:
-        self.items += items
-        self.findings.extend(findings)
-
-
-def waited(seconds: float, what: str = "lock", detail: str = "") -> None:
-    """Counts `seconds` this command blocked on `what` ("lock" or "slots"): into the innermost stage, into the
-    command's total, and, past `WAIT_NOTE`, into the host's wait log with `detail` (who held it)."""
-    if _stack.get():
-        _stack.get()[-1].wait += seconds
-    _waits[what] = _waits.get(what, 0.0) + seconds
-    if seconds >= WAIT_NOTE and wait_hook is not None:
-        wait_hook(what, seconds, detail, str(_config.project.root) if _config else "")
-
-
-def _limits() -> dict[str, Any]:
-    keys = ("resources.memory_parent_bytes", "resources.memory_worker_bytes")
-    return (
-        {
-            "memory_limits": {k: _config.host.origins[k] for k in keys},
-            "memory_limit_values": dict(
-                zip(keys, (_config.host.memory_parent_bytes, _config.host.memory_worker_bytes), strict=True)
-            ),
-        }
-        if _config
-        else {}
-    )
-
-
-def _record(
-    opened: _Open, wall: float, parent: float = 0, worker: float = 0, native: float = 0, **values: Any
-) -> StageRecord:
-    cores = (parent + worker + native) / wall if wall else 0
-    execution = "parallel" if _config and cores >= _config.host.serial_cores else "serial"
-    values.setdefault("wait_seconds", opened.wait)
-    return StageRecord(
-        _invocation,
-        opened.span,
-        opened.parent,
-        opened.path,
-        opened.kind,
-        "ok",
-        execution,
-        opened.start,
-        wall,
-        parent,
-        worker,
-        native,
-        cores,
-        values.pop("items", opened.items),
-        values.pop("jobs", 0),
-        values.pop("workers_used", 0),
-        values.pop("workers_admitted", 0),
-        values.pop("parent_rss_peak_bytes", 0),
-        values.pop("worker_rss_peak_bytes", 0),
-        **(_limits() if opened.parent is None else {}),
-        **values,
-    )
-
-
-def _budget(record: StageRecord, leaf: bool, shipped: bool = False) -> StageRecord:
-    """The watchdog: a stage that breaks a [budgets] rule carries a non-blocking budget.* finding naming it."""
-    if not _config or record.kind not in ("stage", "own", "pool"):
-        return record
-    host, found, cores, pool = _config.host, [], f"{record.cores:.2f} cores", record.kind == "pool"
-    slow = record.wall_seconds >= host.serial_seconds
-    alone = record.wall_seconds / record.spans >= host.serial_seconds  # a folded record is many short spans
-    hits, misses = (sum(v[i] for v in record.cache.values()) for i in (0, 1))
-    if leaf and alone and record.cores < host.serial_cores:
-        found.append(("single_core", "serial_seconds", f"ran {record.wall_seconds:.1f}s at {cores}"))
-    # a pool is judged against the slots it held on average: a share the other commands of the host took back
-    # between rebalances is theirs, not idle workers (the most it was ever admitted overstates it)
-    held = record.slot_seconds / record.wall_seconds if record.slot_seconds and record.wall_seconds else None
-    share = record.workers_admitted if held is None else held
-    if pool and share and record.jobs >= host.pool_fanout * share and record.cores < host.pool_fill * share:
-        found.append(
-            (
-                "pool_underused",
-                "pool_fill",
-                f"kept {cores} of {share:.2f} slots held busy (at most {record.workers_admitted} admitted)",
-            )
-        )
-    if pool and record.workers_admitted and record.jobs and hits and not misses:  # inline jobs dispatch nothing
-        found.append(("warm_dispatch", "pool_fill", f"dispatched {record.jobs} jobs with every cache lookup warm"))
-    # a job's stage repeats once per job by design; a dispatch repeats when a later phase needs the earlier results
-    if slow and record.kind != "own" and not shipped:
-        # a gather is the same stage only when it ran the same dispatches: a later phase needs the earlier results
-        # the kind keeps a gather's key (its path, then the names of its dispatches) apart from the key of the
-        # dispatch record itself, whose path is the gather's path then the same name
-        key = (record.kind, *record.path, *_dispatched.get(record.span, ()))
-        if key in _seen:
-            found.append(("repeated", "serial_seconds", "closed twice in one command"))
-        _seen.add(key)
-    return replace(
-        record,
-        findings=(
-            *record.findings,
-            *(
-                Finding(
-                    f"budget.{key}",
-                    reason=f"{' > '.join(record.path)} {why}",
-                    blocking=False,
-                    origin=host.origins[f"budgets.{name}"],
-                )
-                for key, name, why in found
-            ),
-        ),
-    )
-
-
-def _log_failure() -> Finding:
-    finding = Finding("effort.log", reason="Stage log could not be written.", blocking=False)
-    if _stack.get():
-        _stack.get()[0].findings.append(finding)
-    return finding
-
-
-REASON_CHARS = 2000  # a finding's reason in the stage log; a compile error quoting whole headers is 100 KB per unit
-
-
-def _logged(record: StageRecord) -> Json:
-    """The stage-log row of a record: each finding's reason and missing lines cut to their head (the command's result
-    keeps them whole)."""
-
-    def cut(text: str) -> str:
-        return text if len(text) <= REASON_CHARS else text[:REASON_CHARS] + f" ... ({len(text)} chars)"
-
-    row = asdict(record)
-    for finding in row["findings"]:
-        finding["reason"] = cut(finding["reason"])
-        finding["missing"] = [cut(m) for m in finding.get("missing", ())]
-    return row
-
-
-def _emit(record: StageRecord, leaf: bool = False, shipped: bool = False) -> StageRecord:
-    record = _budget(record, leaf, shipped)
-    if _sink and (
-        record.parent is None
-        or record.kind == "pool"
-        or record.findings
-        or (_config is not None and record.wall_seconds >= _config.host.serial_seconds / 4)
-    ):
-        try:
-            with _sink.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(_logged(record)) + "\n")
-        except OSError:
-            finding = _log_failure()
-            if record.parent is None:
-                record = replace(record, findings=(*record.findings, finding))
-            _buffer.append(record)
-    elif not _sink:
-        _buffer.append(record)
-    _closed.append(record)
-    return record
-
-
-def _close(opened: _Open, status: str) -> StageRecord:
-    end = time.perf_counter_ns()
-    children = opened.children
-    wall = max(0, end - opened.start) / 1e9
-    parent = max(0, _cpu() - opened.cpu)
-    own_cpu = max(0, parent - sum(c.parent_cpu_seconds for c in children))
-    cache = {
-        k: (v[0] - opened.cache.get(k, (0, 0))[0], v[1] - opened.cache.get(k, (0, 0))[1]) for k, v in counters().items()
-    }
-    _merge_cache(cache, opened.remote_cache)
-    record = _record(
-        opened,
-        wall,
-        parent,
-        sum(c.worker_cpu_seconds for c in children),
-        sum(c.native_cpu_seconds for c in children),
-        cache=cache,
-        items=opened.items + sum(c.items for c in children if c.kind == "pool"),
-        jobs=sum(c.jobs for c in children),
-        workers_used=max((c.workers_used for c in children), default=0),
-        workers_admitted=max((c.workers_admitted for c in children), default=0),
-        parent_rss_peak_bytes=max(
-            opened.rss,
-            psutil.Process(os.getpid()).memory_info().rss,
-            resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
-        ),
-        worker_rss_peak_bytes=max((c.worker_rss_peak_bytes for c in children), default=0),
-        **(
-            {"slot_wait_seconds": _waits.get("slots", 0.0), "lock_wait_seconds": _waits.get("lock", 0.0)}
-            if opened.kind == "command"
-            else {}
-        ),
-    )
-    if children:
-        covered, cursor = 0, opened.start
-        for start, stop in sorted(
-            (max(opened.start, c.start_ns), min(end, c.start_ns + int(c.wall_seconds * 1e9))) for c in children
-        ):
-            covered += max(0, stop - max(cursor, start))
-            cursor = max(cursor, stop)
-        own = _Open.__new__(_Open)
-        own.span, own.parent, own.path = uuid4().hex, opened.span, (*opened.path, "(own)")
-        own.kind, own.start, own.items, own.wait = "own", opened.start, 0, 0.0
-        _emit(replace(_record(own, max(0, wall - covered / 1e9), own_cpu), status=status), True)
-    return replace(record, status=status)
+def sink(project: Path) -> Path:
+    """The stage log of a project: its rows, and the walls of the previous command beside it."""
+    return project / ".unbake" / "stages.jsonl"
 
 
 @contextmanager
-def _scope(opened: _Open) -> Iterator[_Open]:
-    token = _stack.set((*_stack.get(), opened))
-    _live.append(opened.path)
-    status = "ok"
-    try:
-        if opened.kind in ("command", "stage", "pool"):
-            _notify("open", {"path": list(opened.path), "expected": expected(opened.path)})
-        yield opened
-    except BaseException as exc:
-        status = (
-            "refused" if isinstance(exc, Refusal) else "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
-        )
-        if isinstance(exc, Refusal):
-            opened.findings.extend(exc.findings)
-        elif status == "failed" and not vars(exc).get("_named", False):  # the stage that raised names the cause once
-            own = [f for f in traceback.extract_tb(exc.__traceback__) if "/unbake/" in f.filename]
-            frames = [f for f in own if Path(f.filename).stem != "effort"]
-            at = f" at {Path(frames[-1].filename).stem}:{frames[-1].name}:{frames[-1].lineno}" if frames else ""
-            opened.findings.append(Finding("internal.error", f"{type(exc).__name__}: {exc}{at}"))
-            vars(exc)["_named"] = True
-        raise
-    finally:
-        try:
-            record = _close(opened, status)
-            if opened.kind in ("command", "stage", "pool"):
-                _notify(
-                    "close",
-                    {
-                        "path": list(opened.path),
-                        "wall": record.wall_seconds,
-                        "status": record.status,
-                        "cores": record.cores,
-                        "jobs": record.jobs,
-                    },
-                )
-            _dispatched[record.span] = tuple(c.path[-1] for c in opened.children if c.kind == "pool")
-            record = _emit(replace(record, findings=tuple(opened.findings)), not opened.children)
-            _dispatched.pop(record.span, None)
-            stack = _stack.get()
-            if len(stack) > 1:
-                stack[-2].children.append(record)
-                _merge_cache(stack[-2].remote_cache, opened.remote_cache)
-        finally:
-            _stack.reset(token)
-            if opened.path in _live:
-                _live.remove(opened.path)
-
-
-@contextmanager
-def command(name: str, argv: Sequence[str]) -> Iterator[None]:
-    global _closed, _counters, _config, _sink, _buffer, _invocation, _seen
-    _closed, _counters, _config, _sink, _buffer, _invocation = [], {}, None, None, [], uuid4().hex
-    _seen = set()
-    memo._clear()  # abucache clears the memo on stages.command, which this tool does not yet run (the stages row)
-    _waits.clear()
-    token = _stack.set(())
+def command(name: str, argv: Sequence[str], project: Path) -> Iterator[None]:
+    """The span of one command of `project`: every stage opened inside it is recorded under it."""
+    _live.clear()
     yield_cpu()
-    try:
-        with _hold_beat(name, HOLD_BEAT), _scope(_Open(name, "command")):
-            yield None
-    finally:
-        _stack.reset(token)
-        _save_walls()
-
-
-def _trim(path: Path) -> None:
-    """Drops the oldest lines of a stage log past `LOG_BYTES`, keeping the newest half whole-line."""
-    if path.exists() and path.stat().st_size > LOG_BYTES:
-        with path.open("rb") as stream:
-            stream.seek(-LOG_BYTES // 2, 2)
-            stream.readline()
-            kept = stream.read()
-        temp = path.with_name(f"{path.name}.{os.getpid()}")
-        temp.write_bytes(kept)
-        temp.replace(path)
+    with _hold_beat(name, HOLD_BEAT), stages.command("unbake", name, argv, sink(project)):
+        yield None
 
 
 def bind(config: Config) -> None:
-    global _config, _sink, _buffer
-    with stage("effort.bind"):
-        _config, _sink = config, config.project.root / ".unbake" / "stages.jsonl"
-        stages.configure(parent=config.host.memory_parent_bytes)  # the memo's pressure reads the parent budget
-        _walls.clear()
-        _walls.update(_load_walls(_sink.with_name("walls.json")))
-        try:
-            _sink.parent.mkdir(parents=True, exist_ok=True)
-            _trim(_sink)
-            with _sink.open("a", encoding="utf-8") as stream:
-                while _buffer:
-                    stream.write(json.dumps(asdict(_buffer[0])) + "\n")
-                    stream.flush()
-                    _buffer.pop(0)
-        except OSError:
-            _log_failure()
-
-
-@contextmanager
-def stage(name: str) -> Iterator[Span]:
-    if not _stack.get():
-        yield _Null()
-    else:
-        with _scope(_Open(name, "stage", _stack.get()[-1])) as span:
-            yield span
-
-
-def record_native(name: str, result: NativeResult, start_ns: int) -> None:
-    if _stack.get():
-        opened = _Open(name, "native", _stack.get()[-1])
-        opened.start = start_ns
-        record = _emit(
-            _record(opened, result.wall_seconds, native=result.cpu_seconds, worker_rss_peak_bytes=result.max_rss_bytes)
-        )
-        _stack.get()[-1].children.append(record)
-
-
-def record_pool(
-    name: str,
-    items: int,
-    jobs: int,
-    admitted: int,
-    start_ns: int,
-    envelopes: Sequence[Json],
-    dispatch_seconds: float = 0.0,
-    end_ns: int | None = None,
-    slot_seconds: float = 0.0,
-) -> None:
-    if not _stack.get():
-        return
-    opened = _Open(name, "pool", _stack.get()[-1])
-    opened.start = start_ns
-    cache: dict[str, tuple[int, int]] = {}
-    shipped: list[tuple[StageRecord, bool]] = []  # every worker record, rebased, and whether it is a worker's leaf
-    for envelope in envelopes:
-        _merge_cache(cache, envelope.get("cache", {}))
-        records = envelope.get("records", [])
-        ids = {r["span"]: uuid4().hex for r in records}
-        parents = {r["parent"] for r in records}  # a shipped stage nothing else hangs under is a worker's leaf
-        for raw in records:
-            values = dict(raw)
-            values.update(
-                invocation=_invocation,
-                span=ids[raw["span"]],
-                parent=ids.get(raw["parent"], opened.span),
-                path=opened.path + tuple(raw["path"]),
-                parent_cpu_seconds=0,
-                worker_cpu_seconds=raw["parent_cpu_seconds"] + raw["worker_cpu_seconds"],
-                parent_rss_peak_bytes=0,
-                worker_rss_peak_bytes=max(raw["parent_rss_peak_bytes"], raw["worker_rss_peak_bytes"]),
-            )
-            values["memory_limits"] = {k: Origin(**v) for k, v in raw.get("memory_limits", {}).items()}
-            values.update(_limits())
-            values["cache"] = {k: tuple(v) for k, v in raw.get("cache", {}).items()}
-            values["findings"] = tuple(
-                Finding(
-                    **{
-                        **f,
-                        "versions": tuple(f.get("versions", ())),
-                        "missing": tuple(f.get("missing", ())),
-                        "origin": Origin(**f["origin"]) if f.get("origin") else None,
-                    }
-                )
-                for f in raw.get("findings", [])
-            )
-            shipped.append((StageRecord(**values), raw["span"] not in parents))
-    for folded, leaf in fold(shipped):
-        _emit(folded, leaf, True)
-    record = _emit(
-        _record(
-            opened,
-            max(0, (end_ns or time.perf_counter_ns()) - start_ns) / 1e9,
-            worker=sum(e["worker_cpu"] for e in envelopes),
-            native=sum(e["native_cpu"] for e in envelopes),
-            items=items,
-            jobs=jobs,
-            workers_admitted=admitted,
-            cache=cache,
-            workers_used=len({e["pid"] for e in envelopes}),
-            dispatch_seconds=dispatch_seconds,
-            slot_seconds=slot_seconds,
-            wait_seconds=sum(e.get("wait_seconds", 0.0) for e in envelopes),
-            busy_seconds=sum((e["end_ns"] - e["start_ns"]) / 1e9 - e.get("wait_seconds", 0.0) for e in envelopes),
-            worker_rss_peak_bytes=max((e["rss"] for e in envelopes), default=0),
-        ),
-        True,
+    """Gives the stage tree the host's budgets, memory limits and the project the wait log's lines name."""
+    host = config.host
+    keys = ("resources.memory_parent_bytes", "resources.memory_worker_bytes")
+    stages.configure(
+        budgets=stages.Budgets(host.serial_seconds, host.serial_cores, host.pool_fill, host.pool_fanout),
+        budget_origins={k: v for k, v in host.origins.items() if k.startswith("budgets.")},
+        memory_limits={k: host.origins[k].file for k in keys},
+        memory_limit_values=dict(zip(keys, (host.memory_parent_bytes, host.memory_worker_bytes), strict=True)),
+        parent=host.memory_parent_bytes,
+        package="unbake",
+        project=str(config.project.root),
     )
-    _stack.get()[-1].children.append(record)
-    _merge_cache(_stack.get()[-1].remote_cache, cache)
 
 
-def fold(shipped: Sequence[tuple[StageRecord, bool]]) -> list[tuple[StageRecord, bool]]:
-    """Worker records, one per path: thousands of jobs below the log floor each still add up to the stage they spent
-    their time in. A worker folds its chunk's records, the parent a pool's chunks. A record with findings, a status
-    other than ok or a wall at the log floor stays on its own: the slow jobs of a pool's tail are each seen."""
-    groups: dict[tuple[str, tuple[str, ...]], list[tuple[StageRecord, bool]]] = {}
-    alone: list[tuple[StageRecord, bool]] = []
-    floor = _config.host.serial_seconds / 4 if _config else float("inf")
-    for record, leaf in shipped:
-        if record.findings or record.status != "ok" or record.wall_seconds >= floor:  # a slow one is seen alone
-            alone.append((record, leaf))
-        else:
-            groups.setdefault((record.kind, record.path), []).append((record, leaf))
-    span: dict[str | None, str | None] = {
-        r.span: (members[0][0].span if len(members) > 1 else r.span) for members in groups.values() for r, _ in members
-    }
-    out = [(replace(r, parent=span.get(r.parent, r.parent)), leaf) for r, leaf in alone]
-    for members in groups.values():
-        first = members[0][0]
-        if len(members) == 1:
-            out.append((replace(first, parent=span.get(first.parent, first.parent)), members[0][1]))
-            continue
-        rows = [r for r, _ in members]
-        wall = sum(r.wall_seconds for r in rows)
-        own, worker = sum(r.parent_cpu_seconds for r in rows), sum(r.worker_cpu_seconds for r in rows)
-        native = sum(r.native_cpu_seconds for r in rows)
-        cores = (own + worker + native) / wall if wall else 0
-        cache: dict[str, tuple[int, int]] = {}
-        for r in rows:
-            _merge_cache(cache, dict(r.cache))
-        folded = replace(
-            first,
-            parent=span.get(first.parent, first.parent),
-            execution="parallel" if _config and cores >= _config.host.serial_cores else "serial",
-            start_ns=min(r.start_ns for r in rows),
-            wall_seconds=wall,
-            parent_cpu_seconds=own,
-            worker_cpu_seconds=worker,
-            native_cpu_seconds=native,
-            cores=cores,
-            items=sum(r.items for r in rows),
-            jobs=sum(r.jobs for r in rows),
-            workers_used=max(r.workers_used for r in rows),
-            workers_admitted=max(r.workers_admitted for r in rows),
-            worker_rss_peak_bytes=max(r.worker_rss_peak_bytes for r in rows),
-            cache=cache,
-            wait_seconds=sum(r.wait_seconds for r in rows),
-            dispatch_seconds=sum(r.dispatch_seconds for r in rows),
-            busy_seconds=sum(r.busy_seconds for r in rows),
-            slot_seconds=sum(r.slot_seconds for r in rows),
-            spans=sum(r.spans for r in rows),
-        )
-        out.append((folded, all(leaf for _, leaf in members)))
-    return out
-
-
-class _Null:
-    def add(self, *, items: int = 0, findings: Sequence[Finding] = ()) -> None:
-        pass
-
-
-def _merge_cache(target: dict[str, Any], source: dict[str, Any]) -> None:
-    for key, pair in source.items():
-        previous = target.get(key, (0, 0))
-        target[key] = (previous[0] + pair[0], previous[1] + pair[1])
-
-
-def count(kind: str, hit: bool) -> None:
-    _counters.setdefault(kind, [0, 0])[0 if hit else 1] += 1
-
-
-def counters() -> dict[str, tuple[int, int]]:
-    return {k: (v[0], v[1]) for k, v in _counters.items()}
-
-
-def cache_total(stages: Json) -> Json:
-    """Hits and misses of the whole command, in total and per cache kind: the command's own (outermost) stage already
-    holds every lookup made under it, so nothing is summed over the nested stages. An empty tree falls back to this
-    process's counters."""
-    pairs = stages.get("cache") if stages else None
-    if not pairs:
-        pairs = counters()
-    kinds = {k: {"hits": int(v[0]), "misses": int(v[1])} for k, v in sorted(pairs.items()) if v[0] or v[1]}
-    return {
-        "hits": sum(v["hits"] for v in kinds.values()),
-        "misses": sum(v["misses"] for v in kinds.values()),
-        "kinds": kinds,
-    }
-
-
-@contextmanager
-def capture() -> Iterator[list[StageRecord]]:
-    global _closed, _counters, _sink, _buffer, _invocation, _seen
-    saved = _closed, _counters, _sink, _buffer, _invocation, _seen
-    _closed, _counters, _sink, _buffer, _invocation, _seen = [], {}, None, [], uuid4().hex, set()
-    token = _stack.set(())
-    try:
-        with _scope(_Open("job", "job")):
-            yield _closed
-    finally:
-        _stack.reset(token)
-        _closed, _counters, _sink, _buffer, _invocation, _seen = saved
-
-
-def tree() -> Json:
-    nodes = {r.span: {**asdict(r), "children": []} for r in _closed}
-    roots: list[Any] = []
-    for record in _closed:
-        (nodes[record.parent]["children"] if record.parent in nodes else roots).append(nodes[record.span])
-    return roots[-1] if roots else {}
-
-
-def invocation() -> str:
-    return _invocation
+__all__ = ["Finding", "bind", "command", "sink", "yield_cpu"]

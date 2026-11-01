@@ -14,8 +14,9 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+from abucache import stages
 from unbake import config as configuration
-from unbake import effort, pool, store, windows
+from unbake import pool, store, windows
 from unbake.contracts import Config, Finding, Json, Refusal, digest, sha256
 
 Symbol = tuple[int, int | None, int | None, str]  # vram, rom, size, type ("func" or the data type)
@@ -365,7 +366,7 @@ def _functions(table: Mapping[str, Symbol]) -> list[str]:
 def correspondences(config: Config) -> tuple[Correspondence, ...]:
     """(x, a, y, b): name x in version a's code and name y in version b for the same thing, all pairings agreeing.
     The functions pair by masked code; the names their operands use then vote. Cached on the asm content."""
-    with effort.stage("symbols.correspondences"):
+    with stages.stage("symbols.correspondences"):
         project: Any = config.project
         versions: tuple[str, ...] = tuple(project.versions)
         source = project.names_from
@@ -421,7 +422,7 @@ def join(config: Config) -> tuple[Correspondence, ...]:
     the renames made as (x, source, y, b)."""
     project: Any = config.project
     source = project.names_from
-    with effort.stage("symbols.join"):
+    with stages.stage("symbols.join"):
         tables = {v: load(config, v) for v in project.versions}
         made: list[Correspondence] = []
         for x, a, y, b in correspondences(config):

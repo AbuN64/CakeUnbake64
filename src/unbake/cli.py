@@ -16,6 +16,7 @@ from typing import Any
 import click
 from click.core import ParameterSource
 
+from abucache import stages
 from unbake import __version__, config, effort, human, store, treelock
 from unbake.contracts import Finding, Json, Refusal
 
@@ -79,15 +80,15 @@ def _emit(name: str, code: int, result: Json | None, findings: Sequence[Finding]
     if code != 0 and not findings:  # a failure always names its cause
         findings = [Finding("internal.no-cause", f"{name} exited {code} without any finding naming why")]
     ordered = sorted(findings, key=lambda f: not f.blocking)
-    stages = effort.tree()
+    timing = stages.tree()
     document = {
         "ok": code == 0,
-        "invocation": effort.invocation(),
+        "invocation": stages.invocation(),
         "result": result,
         "findings": [human.standard(f) for f in ordered],
         "summary": human.tally(ordered),
-        "stages": stages,
-        "cache": effort.cache_total(stages),  # kept by --short too: the stage tree it drops is not where it is read
+        "stages": timing,
+        "cache": stages.cache_total(timing),  # kept by --short too: the stage tree it drops is not where it is read
     }
     if short and result is not None:  # the verdict and the diff only: no stage tree or proofs
         missing = sorted({m for p in result.get("proofs", ()) for m in p["missing"]} | {*result.get("missing", ())})[:8]
@@ -113,18 +114,17 @@ def _run(name: str, params: dict[str, Any], argv: Sequence[str]) -> int:
     findings: list[Finding] = []
     code = 0
     cfg = None
+    root = Path(params.pop("project", None) or Path.cwd()).resolve()  # one absolute root: splat runs elsewhere
     try:
-        with effort.command(name, argv):
+        with effort.command(name, argv, root):
             host = params.pop("host")
             handler = _handler(name)
             if not config.load_resource("commands.toml")["command"][name].get("configured", True):
-                root = Path(params.pop("project", None) or Path.cwd()).resolve()
                 result = handler({**params, "host": host, "project": root})
             else:
                 host = host or config.default_host()
                 if host is None:
                     raise Refusal(Finding("config.missing", config.NO_HOST))
-                root = Path(params.pop("project") or Path.cwd()).resolve()  # splat runs elsewhere: one absolute root
                 cfg = config.load(root, host)
                 effort.bind(cfg)
                 with treelock.hold(root, who=name, wait=name not in _MEASURERS) if name in _READERS else nullcontext():

@@ -18,7 +18,8 @@ from pathlib import Path
 from string import Template
 from typing import TYPE_CHECKING
 
-from unbake import adapters, effort, front, linkfill, pool, process, report, store, symbols, tree, versions, windows
+from abucache import stages
+from unbake import adapters, front, linkfill, pool, process, report, store, symbols, tree, versions, windows
 from unbake import config as configuration
 from unbake.contracts import (
     Config,
@@ -95,7 +96,7 @@ def install_toolchains(config: Config, ids: Sequence[str]) -> list[Path]:
 
 
 def install_toolchain(config: Config, id: str) -> Path:
-    with effort.stage("build.install_toolchain"):
+    with stages.stage("build.install_toolchain"):
         rows = configuration.toolchains()
         if id not in rows:
             raise Refusal(Finding("toolchain.pin", reason=f"toolchain {id} is not in toolchains.toml"))
@@ -283,7 +284,7 @@ def generator_of(text: str) -> str | None:
 
 def makefile(config: Config) -> bytes:
     """The one Makefile of a repository: the same body for every game, whatever the number of files."""
-    with effort.stage("build.makefile"):
+    with stages.stage("build.makefile"):
         project, rows = config.project, configuration.toolchains()
         nm = getattr(project, "non_matching", None)  # the macro of a NON_MATCHING build, when the project has one
         used = sorted({project.toolchain, *(f.toolchain for f in project.files.values() if f.toolchain)})
@@ -520,7 +521,7 @@ def text_sizes(config: Config, held: Tree, v: str) -> bytes:
     next owned bytes of anything else. A compiler or assembler may pad a section past its last function (IDO and
     gas round `.text` up to 16 bytes); the build cuts a zero tail back to this size before the object links. Only an
     object whose code lies in one run and is followed by owned bytes of its segment gets a row."""
-    with effort.stage("build.text_sizes"):
+    with stages.stage("build.text_sizes"):
         cuts = versions.segments(config, v)
         sizes: dict[str, int | None] = {}
         placed = zip(config.project.version[v].segments, versions.pieces(config, v), strict=True)
@@ -800,7 +801,7 @@ def linker(config: Config, held: Tree) -> bytes:
     """The single link script: one output section per segment whose input sections are in the order their bytes lie in
     the ROM, so a file's rodata may follow its code (one segment) or sit in a data segment of its own, and `#if` per
     version where the versions differ."""
-    with effort.stage("build.linker"):
+    with stages.stage("build.linker"):
         project = config.project
         per_object = configuration.toolchain(project.toolchain).get("link_sections", "per-section") == "per-object"
         found: dict[str, dict[str, Segment]] = {}
@@ -866,7 +867,7 @@ def splat_yaml(config: Config, v: str, held: Tree) -> bytes:
     that follows data or a function of declared size starts a `c` subsegment again
     (splat reads no function past a size it was given), as does each function a file owns, in C or behind a stand-in
     (else splat may read it as an entry inside the function before it: the stand-in has no file, the C one a twin)."""
-    with effort.stage("build.splat_yaml") as span:
+    with stages.stage("build.splat_yaml") as span:
         project = config.project
         row = configuration.toolchain(project.toolchain)
         cuts = versions.segments(config, v)
@@ -904,7 +905,7 @@ def splat_yaml(config: Config, v: str, held: Tree) -> bytes:
                     blocking=False,
                 )
                 span.add(findings=[finding])
-                effort.say(finding.reason)
+                stages.say(finding.reason)
         listed = {r.name for r in rows}
         rows += [  # owned data starts its own piece, though aliases.txt alone or no rom of its row places it
             versions.Row(n, fact[0], fact[3], fact[1], fact[2], 0)
@@ -942,7 +943,7 @@ def splat_yaml(config: Config, v: str, held: Tree) -> bytes:
                         blocking=False,
                     )
                     span.add(findings=[finding])
-                    effort.say(finding.reason)
+                    stages.say(finding.reason)
                     continue
                 if not split:
                     continue
@@ -971,7 +972,7 @@ def splat_yaml(config: Config, v: str, held: Tree) -> bytes:
                         blocking=False,
                     )
                     span.add(findings=[finding])
-                    effort.say(finding.reason)
+                    stages.say(finding.reason)
             cells.sort(key=lambda c: (c[0], c[1] != _C))  # at one address, data outranks a restart of code
             kept = [c for c, after in zip(cells, [*cells[1:], None], strict=True) if after is None or after[0] > c[0]]
             out += ["    subsegments:", *(f"      - [0x{at:X}, {kind}, {name}]" for at, kind, name in kept)]
@@ -1066,7 +1067,7 @@ def _objstore(config: Config) -> str:
 
 
 def local_mk(config: Config) -> bytes:
-    with effort.stage("build.local_mk"):
+    with stages.stage("build.local_mk"):
         assignments = [
             f"JOBS := {config.host.workers}",
             f"PPUNIT := {_preprocess_unit(config)}",
@@ -1102,7 +1103,7 @@ def _make(config: Config, target: str) -> NativeResult:
 
 def extract(config: Config, version: str | None = None) -> NativeResult:
     """`make extract`: splat splits one version's baserom (default: all) into asm/<v>/."""
-    with effort.stage("build.extract"):
+    with stages.stage("build.extract"):
         # splat writes in place; a tree set up from a shared cache holds hard links to it, so no link may survive
         root = config.project.root / "asm"
         store.unshare(root / version if version else root)
@@ -1423,11 +1424,11 @@ def drop_reflagged(config: Config, new: bytes | None = None) -> int:
 
 def make_check(config: Config, held: Tree | None = None) -> Json:
     """`make check`: one make run builds and links every version and verifies its sha1."""
-    with effort.stage("build.make_check"):
+    with stages.stage("build.make_check"):
         stamp, known = config.project.root / ".unbake/make.json", inputs(config)
         done = {"exit": 0, "versions": list(config.project.versions)}
         if stamp.exists() and json.loads(stamp.read_bytes()).get("inputs") == known:
-            effort.count("make-check", True)
+            stages.count("make-check", True)
             report.record(
                 config,
                 held or tree.capture(config),
@@ -1437,7 +1438,7 @@ def make_check(config: Config, held: Tree | None = None) -> Json:
                 build_failed=None,
             )
             return done
-        effort.count("make-check", False)
+        stages.count("make-check", False)
         drop_reflagged(config)
         result = _make(config, "check")
         if result.exit == 0:

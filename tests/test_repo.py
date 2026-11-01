@@ -13,11 +13,12 @@ from unittest.mock import Mock
 import fixture
 import pytest
 
-from unbake import adapters, effort, repo
+from abucache import stages
+from unbake import adapters, repo
 from unbake import config as configuration
 from unbake.contracts import Finding, NativeResult, Refusal, sha1
 
-STAGE = effort.stage  # the world fixture replaces it with a no-op
+STAGE = stages.stage  # the world fixture replaces it with a no-op
 
 pytestmark = pytest.mark.usefixtures("plain_roms")
 
@@ -33,7 +34,7 @@ def isolate_native(monkeypatch):
     # Any missed mock must fail rather than launch a process or a worker.
     monkeypatch.setattr(repo.process, "run", Mock(side_effect=AssertionError("unmocked process")))
     monkeypatch.setattr(repo.pool, "map", Mock(side_effect=AssertionError("unmocked pool")))
-    monkeypatch.setattr(repo.effort, "stage", lambda name: nullcontext())
+    monkeypatch.setattr(repo.stages, "stage", lambda name: nullcontext())
 
 
 @pytest.fixture
@@ -907,8 +908,8 @@ def test_one_sync_records_make_check_once_in_the_effort_stages(world, monkeypatc
     monkeypatch.setattr(repo.report, "record", lambda *a, **k: verdicts.append(k))
     monkeypatch.setattr(repo.report, "files", lambda config, tree: {"README.md": b"real"})
     monkeypatch.setattr(repo.build, "inputs", lambda config: "inputs")
-    monkeypatch.setattr(effort, "stage", STAGE)
-    with effort.capture() as closed:
+    monkeypatch.setattr(stages, "stage", STAGE)
+    with stages.capture() as closed:
         repo.sync_command(world.cfg, {})
     names = [r.path[-1] for r in closed]
     assert names.count("build.make_check") == 1 and len(verdicts) == 1

@@ -9,7 +9,7 @@ from typing import Any
 
 import fixture
 import pytest
-from abucache import memo
+from abucache import memo, stages
 from abucache.store import forget
 
 from unbake import adapters, effort, pool
@@ -78,9 +78,9 @@ def _fresh_module_state(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path_factory.mktemp("run")))
     monkeypatch.delenv("UNBAKE_CORES", raising=False)  # a test runner's holder is not these tests' holder
     forget()
-    effort._config = None
     memo._clear()
-    effort._listeners.clear()
+    stages._listeners[:] = [effort._track]  # the hold beat reads the open stage from the one tracker
+    monkeypatch.chdir(tmp_path_factory.mktemp("cwd"))  # a command's stage log goes under its working directory
     pool._drop_executor()
     yield
 

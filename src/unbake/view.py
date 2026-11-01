@@ -13,9 +13,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from abucache import memo
+from abucache import memo, stages
 
-from unbake import adapters, effort, pool, store
+from unbake import adapters, pool, store
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Recipe, Refusal, Snapshot, SourceView, UnitSpec, digest, macro, sha256
 
@@ -293,7 +293,7 @@ def _key(
 
 def get(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, *, lines: bool = True) -> SourceView:
     """The preprocessed view; lines=False skips the per-line marker table that only active_lines needs."""
-    with effort.stage("view.get"):
+    with stages.stage("view.get"):
         config = snapshot.config
         if configuration.is_assembly(unit.path):
             text = snapshot.read(unit.path).decode()
@@ -400,7 +400,7 @@ def _one(item: tuple[Snapshot, UnitSpec, str, Recipe]) -> SourceView:
 
 
 def all_versions(snapshot: Snapshot, unit: UnitSpec, recipe: Recipe, versions: Sequence[str]) -> dict[str, SourceView]:
-    with effort.stage("view.all_versions"):
+    with stages.stage("view.all_versions"):
         results = pool.map(
             snapshot.config, "view.all_versions", _one, [(snapshot, unit, version, recipe) for version in versions]
         )
@@ -411,7 +411,7 @@ _by_file: list[Any] = []  # the one view whose lines were last grouped by file, 
 
 
 def active_lines(view: SourceView, path: str) -> dict[int, str]:
-    with effort.stage("view.active_lines"):
+    with stages.stage("view.active_lines"):
         if not _by_file or _by_file[0] is not view:  # a policy pass asks for every header of one view in turn
             text = view.text.splitlines()
             grouped: dict[str, dict[int, str]] = {}

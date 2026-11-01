@@ -21,9 +21,9 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from abucache import memo
+from abucache import memo, stages
 
-from unbake import adapters, effort, libasm, pool, process, recipes, store, symbols
+from unbake import adapters, libasm, pool, process, recipes, store, symbols
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Refusal, sha256
 from unbake.resources import cc_cache
@@ -1047,7 +1047,7 @@ def _digest(config: Config, blobs: Mapping[str, bytes]) -> str:
 
 
 def capture(config: Config, overlay: Mapping[str, bytes | None] = {}) -> Tree:
-    with effort.stage("tree.capture"):
+    with stages.stage("tree.capture"):
         blobs = _files(config, overlay)
         digest = _digest(config, blobs)
         return _hand_marked(config, memo.memo(("tree", digest), lambda: _captured(config, blobs, digest, overlay)))

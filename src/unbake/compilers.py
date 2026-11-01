@@ -28,7 +28,8 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from unbake import adapters, effort, pool, process, recipes, store
+from abucache import stages
+from unbake import adapters, pool, process, recipes, store
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Json, Recipe, Refusal, UnitSpec, digest, sha256
 
@@ -268,7 +269,7 @@ def _fingerprint_job(item: tuple[Config, str, list[str]]) -> list[Row]:
 def fingerprint(config: Config, params: Json) -> Row:
     """Write `.unbake/compilers/fingerprint.jsonl`: a row per function with its features and class, a row per unit
     and a row per directory with class counts. Needs the built objects of the version, no compiler."""
-    with effort.stage("compilers.fingerprint"):
+    with stages.stage("compilers.fingerprint"):
         version = params.get("version") or config.project.names_from
         units = _units(config, version, params.get("paths") or ())
         if not units:
@@ -492,7 +493,7 @@ def census(config: Config, params: Json) -> Row:
     """Recompile the C functions of each unit with every candidate and store the differing lines in
     `.unbake/compilers/census.jsonl`. Units whose inputs are unchanged since the stored row are not recompiled; the
     call stops after `cpu` CPU seconds (default CPU_BUDGET) and a later call resumes."""
-    with effort.stage("compilers.census"):
+    with stages.stage("compilers.census"):
         version = params.get("version") or config.project.names_from
         paths = params.get("paths") or ()
         drafts = bool(params.get("drafts"))
@@ -740,7 +741,7 @@ def propose(config: Config, params: Json) -> Row:
     """Join `fingerprint` and `census`: the smallest directory rows (plus file exceptions) that make every judged C
     function exact, the dead rows, the units whose shapes their row cannot emit, the drafts another row makes exact.
     Writes `.unbake/compilers/propose.json` and `units.tsv`."""
-    with effort.stage("compilers.propose"):
+    with stages.stage("compilers.propose"):
         version = params.get("version") or config.project.names_from
         fp, cen = _read(config, FINGERPRINT), _read(config, CENSUS)
         if not cen:

@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from unbake import api, effort, journal, linkdiag, native, policy, process, repo, report, tree
+from abucache import stages
+from unbake import api, journal, linkdiag, native, policy, process, repo, report, tree
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Json, Plan, Proof, Receipt, Refusal, Submission, digest, sha1, sha256
 
@@ -983,7 +984,7 @@ def prepare(
     config: Config, request: Json, extras: Mapping[str, bytes], fuzzy: bool, message: str | None = None
 ) -> Landing:
     """The write that lands one candidate, judged by policy but not yet built."""
-    with effort.stage("publish.prepare"):
+    with stages.stage("publish.prepare"):
         name = request["function"]
         source = Path(request["file"]).read_text(encoding="utf-8")
         captured = tree.capture(config)
@@ -1046,7 +1047,7 @@ def accept_each(config: Config, checks: Sequence[tuple[Json, Mapping[str, bytes]
 # ---------------------------------------------------------------- building
 def build(config: Config, versions: Sequence[str]) -> None:
     """Builds the ROM of each given version (one make, each target once) and refuses unless every sha1 matches."""
-    with effort.stage("publish.build"):
+    with stages.stage("publish.build"):
         roms = {v: f"build/{v}/{config.project.name}.z64" for v in versions}
         made = process.make(config, list(roms.values()), config.host.slots or config.host.workers)
         bad = []
@@ -1133,7 +1134,7 @@ def gained(config: Config, name: str, now: Mapping[str, float]) -> None:
 
 # ---------------------------------------------------------------- landing
 def land(config: Config, submission: Submission) -> Receipt:
-    with effort.stage("publish.land"):
+    with stages.stage("publish.land"):
         if submission.operation not in ("publish", "fuzzy"):
             raise Refusal(Finding("land.request", "Unknown submission operation.", unit=submission.member))
         if submission.extra_bases.keys() != submission.extras.keys():
@@ -1165,5 +1166,5 @@ def land(config: Config, submission: Submission) -> Receipt:
             files = apply_checked(config, landing)
         plan = landing.plan
         return Receipt(
-            plan.operation, files, plan.message, plan.digest, submission.proofs, len(plan.debt), effort.invocation()
+            plan.operation, files, plan.message, plan.digest, submission.proofs, len(plan.debt), stages.invocation()
         )

@@ -13,9 +13,9 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from abucache import memo
+from abucache import memo, stages
 
-from unbake import blobs, effort, fakematch, linkfill, platform, present, rescore, store
+from unbake import blobs, fakematch, linkfill, platform, present, rescore, store
 from unbake import config as configuration
 from unbake.contracts import Finding, Json, Refusal, sha256_file
 
@@ -470,7 +470,7 @@ def _states(
 def _states_run(config: Any, params: Json) -> Json:
     """Write the three-state counts to .unbake/states.json and return them under `states`; nothing tracked changes and
     nothing is built, compiled or scored."""
-    with effort.stage("report.states"):
+    with stages.stage("report.states"):
         document = _states(config, _capture(config), params.get("exact") or None)
         sdk = lambda p: configuration.library(config.project, p)  # noqa: E731
         document["sdk_asm"] = fakematch.asm_allowed(_sources(config), list(config.project.version), sdk)
@@ -664,12 +664,12 @@ def _versions(config: Any, tree: Any, totals: Buckets) -> dict[str, Json]:
 
 def progress(config: Any, tree: Any) -> Json:
     """The per-version credit the README shows."""
-    with effort.stage("report.progress"):
+    with stages.stage("report.progress"):
         return {"versions": _versions(config, tree, _tallies(config, tree)[0])}
 
 
 def current(config: Any, tree: Any) -> Json:
-    with effort.stage("report.current"):
+    with stages.stage("report.current"):
         totals, segments, kinds = _tallies(config, tree)
         debt: Json = {"stale": True, "action": "unbake check"}
         document = _check(config, tree)
@@ -759,7 +759,7 @@ def _rom_sha256(config: Any, version: str) -> str:
 
 
 def readme(text: str, config: Any, report: Json) -> str:
-    with effort.stage("report.readme"):
+    with stages.stage("report.readme"):
         settings = configuration.load_resource("repo.toml")["readme"]
         begin, end, cells = (settings[k] for k in ("begin", "end", "bar"))
         if text.count(begin) != 1 or text.count(end) != 1 or text.index(begin) >= text.index(end):
@@ -897,7 +897,7 @@ def files(config: Any, tree: Any, settle: bool = False) -> dict[str, bytes]:
     """README.md with its progress block, the one image it embeds and an existing progress.json with its map files;
     empty when `publish_hold` holds the tree, so the numbers on disk stay as they are. `settle`: refuse unless the
     README written would come out the same again (the rest reads only the tree, which writing them does not change)."""
-    with effort.stage("report.files"):
+    with stages.stage("report.files"):
         if publish_hold(config, tree):
             return {}
         document = progress(config, tree)
@@ -935,7 +935,7 @@ def unknown_spans(config: Any, tree: Any) -> Json:
 
 def _unknown_run(config: Any) -> Json:
     """Write the unknown spans to .unbake/unknown.json and return them; nothing tracked changes."""
-    with effort.stage("report.unknown"):
+    with stages.stage("report.unknown"):
         tree = _capture(config)
         found = unknown_spans(config, tree)
         document = {"digest": tree.digest, "versions": found}
@@ -950,7 +950,7 @@ def run(config: Any, params: Json) -> Json:
         return _unknown_run(config)
     if params.get("states"):
         return _states_run(config, params)
-    with effort.stage("report.run"):
+    with stages.stage("report.run"):
         if exact := params.get("exact"):  # the caller vouches for the link verdict (a checked push); no build runs
             build = import_module("unbake.build")
             record_build(Path(config.project.root), build.project_inputs(config.project), sorted(exact))
@@ -993,7 +993,7 @@ def _fakes_stream(tree: Any) -> Json:
 
 def map_command(config: Any, params: Json) -> Json:
     """Write the module map to .unbake/map.json; nothing tracked changes. `fakes` and `moves` add their census."""
-    with effort.stage("report.map"):
+    with stages.stage("report.map"):
         tree = _capture(config)
         if params.get("fakes"):
             return _fakes_stream(tree)

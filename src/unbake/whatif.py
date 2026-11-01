@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from unbake import compare, config, effort, native, pool, process, sched, store
+from abucache import stages
+from unbake import compare, config, native, pool, process, sched, store
 from unbake.contracts import Config, Finding, Json, Proof, Refusal
 
 _DEP = re.compile(r"(\d+)>(\d+)(?::(\w+))?")
@@ -435,7 +436,7 @@ def _greedy(
 
 def whatif_command(config_: Config, params: Json) -> Json:
     """Compile the candidate with scheduler changes and score it; with --search find the smallest exact change set."""
-    with effort.stage("whatif"):
+    with stages.stage("whatif"):
         kind = params.get("kind") or "deps"
         mode = params.get("search")
         if kind not in _KINDS or (mode and mode not in _SEARCHES):

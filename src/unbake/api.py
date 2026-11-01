@@ -8,7 +8,7 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
-from abucache import memo as cache
+from abucache import memo as cache, stages
 
 from unbake import (
     adapters,
@@ -26,7 +26,7 @@ from unbake import (
 from unbake import config as _config
 from unbake import symbols as _symbols
 from unbake import versions as _versions
-from unbake.contracts import Config, Finding, Json, Refusal, Snapshot, Span, StageRecord
+from unbake.contracts import Config, Finding, Json, Refusal, Snapshot, Span
 from unbake.tree import Module, Tree, capture
 
 __all__ = [
@@ -199,27 +199,32 @@ def pool_map(
 
 
 # ---------------------------------------------------------------- stage timing
+_bound: list[Path] = []  # the project root of the config `bind` was last given: the stage log's place
+
+
 def command(name: str, argv: Sequence[str]) -> AbstractContextManager[None]:
-    """The span of one command: every stage opened inside it is recorded under it."""
-    return effort.command(name, argv)
+    """The span of one command: every stage opened inside it is recorded under it, in the bound project's stage log
+    (the working directory's when nothing is bound)."""
+    return effort.command(name, argv, _bound[-1] if _bound else Path.cwd())
 
 
 def bind(config: Config) -> None:
     """Record the stages of this process to the project's stage stream."""
+    _bound[:] = [config.project.root]
     effort.bind(config)
 
 
 def stage(name: str) -> AbstractContextManager[Span]:
     """One timed stage, a child of the one open around it."""
-    return effort.stage(name)
+    return stages.stage(name)
 
 
-def closed() -> tuple[StageRecord, ...]:
+def closed() -> tuple[stages.StageRecord, ...]:
     """The stage records closed so far in this process."""
-    return effort.closed()
+    return stages.closed()
 
 
-def summary(records: Sequence[StageRecord]) -> list[str]:
+def summary(records: Sequence[stages.StageRecord]) -> list[str]:
     """The stage tree and the cache lines of closed records, as the human lines a command prints with --stages."""
     return human.summary(records)
 
@@ -230,7 +235,7 @@ def tree_lock(
     """Hold the work tree's reader/writer lock (see `unbake.treelock`); a reader waits for a ship instead of failing."""
     from unbake import treelock
 
-    return treelock.hold(config.project.root, exclusive=exclusive, who=who, say=say or effort.say)
+    return treelock.hold(config.project.root, exclusive=exclusive, who=who, say=say or stages.say)
 
 
 def tree_epoch(config: Config) -> int:

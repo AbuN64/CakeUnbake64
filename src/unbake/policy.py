@@ -15,14 +15,13 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
-from abucache import memo
+from abucache import memo, stages
 
 from unbake import (
     blobs,
     config,
     debtrules,
     delta,
-    effort,
     fakematch,
     fillaudit,
     lookalike,
@@ -1036,7 +1035,7 @@ def evaluate(
     sdk_group: bool,
     only: Collection[str] | None = None,
 ) -> tuple[Finding, ...]:
-    with effort.stage("policy.evaluate"):
+    with stages.stage("policy.evaluate"):
         if _sdk(snapshot.config, path):
             return ()  # vendored source idioms; compile and ROM proof are still mandatory
         if config.is_assembly(path):
@@ -1332,7 +1331,7 @@ def census(
     dispatch so their jobs fill the workers the census leaves idle; their results come back beside the findings.
     With changes, compare only those before/after texts, without preprocessing or compiling. With `only`, judge just
     those unit paths and the headers they read: the snapshot-wide listings are filtered, never recomputed per path."""
-    with effort.stage("policy.census"):
+    with stages.stage("policy.census"):
         if changes == {}:
             return (), []
         if changes is not None:

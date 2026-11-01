@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from unbake import policy, tree
+from unbake import effort, policy, tree
 from unbake.contracts import Config, Finding, Project, Snapshot, SourceView
 
 PATH = "src/unit.c"
@@ -31,7 +31,7 @@ def _evaluate(*args, **kwargs):
 
 @pytest.fixture
 def snapshot(monkeypatch, tmp_path):
-    monkeypatch.setattr(policy.effort, "stage", Mock(side_effect=lambda name: nullcontext()))
+    monkeypatch.setattr(policy.stages, "stage", Mock(side_effect=lambda name: nullcontext()))
     result = Mock(spec=Snapshot)
     result.config = Mock(spec=Config)
     result.config.project = Mock(spec=Project)
@@ -668,7 +668,6 @@ def test_credited_names_the_defined_functions_that_have_an_address(snapshot, mon
 
 def test_pieces_are_one_function_to_the_next_symbol(snapshot, monkeypatch):
     _placed_snapshot(snapshot, monkeypatch)
-    monkeypatch.setattr(policy.effort, "memo", lambda key, build: build())
     assert policy.pieces(snapshot, "D_800D7000", "us") == [("D_800D7000", 0x20)]
     assert policy.withheld_bytes(snapshot, {"D_800D7000"}, "D_800D7000", "us") == 0x20
     assert policy.withheld_bytes(snapshot, {"other"}, "D_800D7000", "us") == 0
@@ -817,7 +816,7 @@ def test_a_snapshot_is_captured_once_however_many_rules_ask(monkeypatch):
     base = SimpleNamespace(config="c", overlays={}, files=held, digest="d0")
     candidate = SimpleNamespace(config="c", overlays={"src/x.c": b"1"}, files=None, digest="d1")
     other = SimpleNamespace(config="c", overlays={"src/x.c": b"2"}, files=None, digest="d2")
-    with policy.effort.command("test-policy", ()):
+    with effort.command("test-policy", (), Path.cwd()):
         assert policy._tree(base) is held
         first = policy._tree(candidate)
         assert policy._tree(candidate) is first and policy._tree(candidate) is first
@@ -1035,7 +1034,6 @@ def test_struct_returns_index_names_by_value_definitions(snapshot, monkeypatch):
     }
     monkeypatch.setattr(policy, "_include_headers", lambda snap: ["include/q.h"])
     monkeypatch.setattr(policy, "_tree", lambda snap: Mock(modules=[Mock(path="src/a.c")]))
-    monkeypatch.setattr(policy.effort, "memo", lambda key, build: build())
     snap = Mock(digest="d", peek=lambda path: files.get(path))
     assert policy._struct_returns(snap) == {"build": "src/a.c"}
 

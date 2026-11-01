@@ -7,7 +7,8 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from typing import Protocol
 
-from unbake import effort, store
+from abucache import stages
+from unbake import store
 from unbake.contracts import Config, Finding, Plan, Refusal, sha256
 
 
@@ -162,7 +163,7 @@ def changed(snapshot: Reads, paths: Sequence[str]) -> tuple[str, ...]:
 
 def apply(config: Config, plan: Plan, snapshot: Reads) -> tuple[str, ...]:
     """Write the plan's files into the working tree only (never Git): each path must hold what the snapshot read."""
-    with effort.stage("journal.apply"):
+    with stages.stage("journal.apply"):
         if plan.blocking:
             raise ValueError("A blocking plan cannot be applied.")
         root = config.project.root
@@ -220,5 +221,5 @@ def _rollback(config: Config) -> bool:
 
 
 def recover(config: Config) -> bool:
-    with effort.stage("journal.recover"), _lock(config):
+    with stages.stage("journal.recover"), _lock(config):
         return _rollback(config)

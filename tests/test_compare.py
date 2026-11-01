@@ -30,7 +30,7 @@ CANDIDATE = "s32 stand_in(void) {\n    return 2;\n}\n"
 
 @pytest.fixture(autouse=True)
 def invocation():
-    with effort.command("test-compare", ()):
+    with effort.command("test-compare", (), Path.cwd()):
         yield
 
 

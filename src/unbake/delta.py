@@ -12,7 +12,8 @@ from collections.abc import Callable, Mapping, Sequence
 from hashlib import blake2b
 from typing import Any
 
-from unbake import effort, pool, store
+from abucache import stages
+from unbake import pool, store
 from unbake.contracts import Config, code_identity
 
 _FORMAT = 1  # bump when a record's shape changes: an older record reads as empty
@@ -52,7 +53,7 @@ def map(
     `pin` pins a file as the item's job does, `context` is what every item reads. With `code`, a record made by other
     code of the job (the job and every package function it reaches) is not used, so an install that changed other
     code keeps it; without, a record is a fact of its inputs alone (a tool install re-derives nothing)."""
-    with effort.stage("delta.map"):
+    with stages.stage("delta.map"):
         path = config.project.root / DIR / f"{name}.pickle"
         header = (_FORMAT, name, code_identity(function) if code else "", context)
         record = _load(path, header)
@@ -80,7 +81,7 @@ def map(
                 out[n], files_of[n] = row[2], old_sets[row[1]]
             else:
                 todo.append(n)
-            effort.count(f"{name}.delta", held)
+            stages.count(f"{name}.delta", held)
         fresh = pool.map(config, name, function, [items[n] for n in todo], key) if todo else []
         for n, (result, read) in zip(todo, fresh, strict=True):
             out[n] = result

@@ -5,7 +5,7 @@ from itertools import count
 from pathlib import Path
 
 import pytest
-from abucache import memo
+from abucache import memo, stages
 from test_effort import _config
 
 from unbake import effort, pool, process, repo
@@ -23,7 +23,7 @@ def cfg(tmp_path, monkeypatch):
         },
     }
     monkeypatch.setattr(pool, "_in_worker", True)  # jobs run in this process: the count is what is under test
-    monkeypatch.setattr(effort, "_listeners", [])
+    monkeypatch.setattr(stages, "_listeners", [])
     return replace(config, host=replace(config.host, origins=origins))
 
 
@@ -34,27 +34,27 @@ def test_a_keyed_map_dispatches_only_its_misses(cfg):
         ran.append(item)
         return item * 2
 
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         assert pool.map(cfg, "doubles", job, [1, 2, 3], str) == [2, 4, 6]
         assert pool.map(cfg, "doubles", job, [1, 2, 3, 4], str) == [2, 4, 6, 8]
         assert pool.map(cfg, "doubles", job, [1, 2, 3, 4], str) == [2, 4, 6, 8]
     assert ran == [1, 2, 3, 4]  # the warm map dispatched 0 items
-    assert [r.jobs for r in effort.closed() if r.kind == "pool"] == [3, 1, 0]
+    assert [r.jobs for r in stages.closed() if r.kind == "pool"] == [3, 1, 0]
 
 
 def test_a_none_key_always_dispatches(cfg):
     ran = []
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         for _ in range(2):
             pool.map(cfg, "open", ran.append, [1], lambda item: None)
     assert ran == [1, 1]
 
 
 def test_gather_runs_independent_groups_in_one_dispatch_loop(cfg):
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         found = pool.gather(cfg, [("squares", lambda v: v * v, [1, 2, 3]), ("names", str, ["a"], str)])
     assert found == [[1, 4, 9], ["a"]]
-    assert len([r for r in effort.closed() if r.path[-1] == "pool.map"]) == 1
+    assert len([r for r in stages.closed() if r.path[-1] == "pool.map"]) == 1
 
 
 def test_memo_computes_once_per_command_and_resets(cfg):
@@ -64,19 +64,19 @@ def test_memo_computes_once_per_command_and_resets(cfg):
         calls.append(1)
         return len(calls)
 
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         assert [memo.memo("k", produce), memo.memo("k", produce)] == [1, 1]
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         assert memo.memo("k", produce) == 2
 
 
 def _budgeted(cfg, *changes):
     """Each change is applied to one finished stage of a bound command and run through the watchdog in turn."""
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         effort.bind(cfg)
-        with effort.stage("work"):
+        with stages.stage("work"):
             pass
-        base = next(r for r in effort.closed() if r.path[-1] == "work")
+        base = next(r for r in stages.closed() if r.path[-1] == "work")
         return [effort._budget(replace(base, **change), True) for change in changes]
 
 
@@ -138,11 +138,11 @@ def test_peek_reads_a_file_or_says_it_is_absent(tmp_path):
 
 def test_budget_does_not_flag_a_stage_shipped_from_many_jobs_as_closed_twice(cfg):
     """Every job of a pool closes the same stage path: that is the design, not a repeat."""
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         effort.bind(cfg)
-        with effort.stage("work"):
+        with stages.stage("work"):
             pass
-        base = next(r for r in effort.closed() if r.path[-1] == "work")
+        base = next(r for r in stages.closed() if r.path[-1] == "work")
         slow = replace(base, wall_seconds=5.0, cores=3.0)
         assert [effort._budget(slow, True, True).findings for _ in range(3)] == [(), (), ()]
         assert not effort._seen
@@ -176,21 +176,21 @@ def test_sync_stand_in_recapture_has_its_own_stage_boundary(cfg, monkeypatch, ch
 
     def capture(config, overlay=None):
         overlays.append(overlay)
-        with effort.stage("tree.capture"), effort.stage("pool.map"):
-            effort.record_pool("tree.parse", 1, 1, 1, next(ticks), [], end_ns=next(ticks))
+        with stages.stage("tree.capture"), stages.stage("pool.map"):
+            stages.record_pool("tree.parse", 1, 1, 1, next(ticks), [], end_ns=next(ticks))
         return object()
 
     monkeypatch.setattr(repo.tree, "capture", capture)
     monkeypatch.setattr(repo, "stand_ins", lambda config, current: writes)
     monkeypatch.setattr(repo, "_generated", lambda config, current: {})
-    with effort.command("sync", []):
+    with effort.command("sync", [], Path.cwd()):
         effort.bind(cfg)
         result = repo.sync(cfg, {})
     assert result["written"] == sorted(writes)
     assert overlays == ([None, writes] if changed else [None])
-    captures = [r.path for r in effort.closed() if r.path[-1] == "tree.capture"]
+    captures = [r.path for r in stages.closed() if r.path[-1] == "tree.capture"]
     assert captures == [
         ("sync", "repo.sync", "tree.capture"),
         *(([("sync", "repo.sync", "repo.stand_ins", "tree.capture")]) if changed else []),
     ]
-    assert not [f for r in effort.closed() for f in r.findings if f.key == "budget.repeated"]
+    assert not [f for r in stages.closed() for f in r.findings if f.key == "budget.repeated"]

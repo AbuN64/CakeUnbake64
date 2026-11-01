@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from unbake import effort, report
+from abucache import stages
+from unbake import report
 
 
 def overview_path(version: str) -> str:
@@ -112,6 +113,6 @@ def overview(credit_rows: Iterable[Any], version: str) -> bytes:
 
 def files(config: Any, tree: Any) -> dict[str, bytes]:
     """The README image: docs/overview-<readme_map>.svg, or nothing when the project names no README map."""
-    with effort.stage("present.files"):
+    with stages.stage("present.files"):
         version = config.project.readme_map
         return {overview_path(version): overview(report.credits(config, tree), version)} if version else {}

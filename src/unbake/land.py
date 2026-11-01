@@ -12,11 +12,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from abucache import memo
+from abucache import memo, stages
 
 from unbake import (
     api,
-    effort,
     foreign,
     journal,
     non_matching,
@@ -107,7 +106,7 @@ def _enqueue(
         tuple(proofs),
         origin,
         request["note"],
-        effort.invocation(),
+        stages.invocation(),
         {path: f".unbake/inbox/{identity}.x{n}" for n, path in enumerate(sorted(extras))},
         {
             path: f".unbake/inbox/{identity}.b{n}" if data is not None else None
@@ -140,7 +139,7 @@ def submit(
 ) -> Submission | None:
     """One submission. `extras` (path -> new text) makes it a change set landed as one plan, every touched version
     building to its base sha1 or the whole set refused; only exact sets are submitted."""
-    with effort.stage("land.submit"):
+    with stages.stage("land.submit"):
         intake = _intake(config, request, proofs, extras)
         if intake is None:
             return None
@@ -152,7 +151,7 @@ def submit_many(config: Config, calls: Sequence[Mapping[str, Any]]) -> list[Subm
     """Many submissions (each call holds `submit`'s arguments by name), their acceptance checks together. Each call
     keeps its own verdict: its Refusal is its result and blocks no other call; the accepted ones enter the queue in
     order."""
-    with effort.stage("land.submit_many"):
+    with stages.stage("land.submit_many"):
         intakes = [_intake(config, c["request"], c["proofs"], c.get("extras")) for c in calls]
         checked = [n for n, i in enumerate(intakes) if i is not None]
         verdicts = dict(
@@ -293,7 +292,7 @@ def expire(config: Config) -> list[str]:
 
 
 def inbox(config: Config, only: Collection[str] | str | None = None) -> list[Submission]:
-    with effort.stage("land.inbox"):
+    with stages.stage("land.inbox"):
         entries, stamped = [], []
         wanted = {only} if isinstance(only, str) else only
         for path in (config.project.root / ".unbake/inbox").glob("*.json"):
@@ -345,7 +344,7 @@ def _record_refused(config: Config, entry: Submission, findings: Sequence[Findin
 def drain(config: Config, only: Collection[str] | str | None = None) -> Json:
     """Lands the inbox, one lock per entry so drains run side by side; `only` lands the entries of those ids and
     leaves every other lane's entry where it is. Abandoned entries go to inbox/attic first."""
-    with effort.stage("land.drain"):
+    with stages.stage("land.drain"):
         expire(config)
         landed: list[Any] = []
         refused: list[Any] = []
@@ -367,7 +366,7 @@ def drain(config: Config, only: Collection[str] | str | None = None) -> Json:
                     if not mine or not (config.project.root / f".unbake/inbox/{entry.id}.json").exists():
                         continue
                     claimed = True
-                    with effort.stage("land.entry"), store.shared(config, "structure"), memo.scoped():
+                    with stages.stage("land.entry"), store.shared(config, "structure"), memo.scoped():
                         try:
                             receipt = publish.land(config, entry)
                         except Exception as error:  # a crash must not leave the entry to fail again unseen
@@ -397,7 +396,7 @@ def _bodies(config: Config, paths: Sequence[str]) -> tuple[Finding, ...]:
 
 def check_command(config: Config, params: Json) -> Json:
     """The source rules over the files that own names (or the given paths); a blocking finding refuses."""
-    with effort.stage("land.check_command"), treelock.hold(config.project.root, exclusive=True, who="check"):
+    with stages.stage("land.check_command"), treelock.hold(config.project.root, exclusive=True, who="check"):
         given = list(params.get("paths", ()))
         held = tree.capture(config)
         paths = sorted(given or {m.path for m in held.modules})

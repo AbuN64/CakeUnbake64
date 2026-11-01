@@ -7,7 +7,8 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-from unbake import effort, process
+from abucache import stages
+from unbake import process
 from unbake.contracts import Host
 from unbake.resources import cc_cache
 
@@ -36,7 +37,7 @@ def build[Result](start: Callable[[str | None, bool], Result], root: Path, store
     try:
         first = start(str(manifest), True)
         if stamps.exists():
-            with effort.stage("make.front.preprocess") as span:
+            with stages.stage("make.front.preprocess") as span:
                 process.batch(store, root, stamps, workers, "--units")
                 span.add(items=len(cc_cache.commands(str(stamps))))
             stamps.unlink()
@@ -44,11 +45,11 @@ def build[Result](start: Callable[[str | None, bool], Result], root: Path, store
             first = start(str(manifest), False)
         if not manifest.exists():
             return first
-        with effort.stage("make.front") as span:
+        with stages.stage("make.front") as span:
             process.batch(store, root, manifest, workers)
             answered, total = _answered(manifest, root)
             span.add(items=total)
-            effort.say(f"make.front: {answered} of {total} compiles from the cache, {total - answered} compile")
+            stages.say(f"make.front: {answered} of {total} compiles from the cache, {total - answered} compile")
         return start(None, False)
     finally:
         _clear(manifest, root)

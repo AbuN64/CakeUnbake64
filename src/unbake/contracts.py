@@ -615,41 +615,6 @@ class Submission:
     entered: float = 0.0  # epoch seconds at admission; an old entry of a dead or silent session goes to inbox/attic
 
 
-# ---------------------------------------------------------------- observability
-@dataclass(frozen=True)
-class StageRecord:
-    invocation: str
-    span: str
-    parent: str | None
-    path: tuple[str, ...]
-    kind: str  # "command" | "stage" | "pool" | "job" | "native" | "own"
-    status: str  # "ok" | "refused" | "failed" | "interrupted"
-    execution: str  # "serial" | "parallel"
-    start_ns: int
-    wall_seconds: float
-    parent_cpu_seconds: float
-    worker_cpu_seconds: float
-    native_cpu_seconds: float
-    cores: float
-    items: int
-    jobs: int
-    workers_used: int
-    workers_admitted: int
-    parent_rss_peak_bytes: int
-    worker_rss_peak_bytes: int
-    memory_limits: Mapping[str, Origin] = field(default_factory=dict)
-    memory_limit_values: Mapping[str, int] = field(default_factory=dict)
-    cache: Mapping[str, tuple[int, int]] = field(default_factory=dict)  # cache kind -> (hits, misses)
-    findings: tuple[Finding, ...] = ()
-    wait_seconds: float = 0.0  # time this stage itself blocked on a lock
-    dispatch_seconds: float = 0.0  # pool: wall the parent spent outside waiting on workers
-    busy_seconds: float = 0.0  # pool: wall the workers spent inside jobs, summed
-    spans: int = 1  # how many worker spans of one pool this record folds, by path
-    slot_seconds: float = 0.0  # pool: host slots held times the seconds held (the share peers left it), summed
-    slot_wait_seconds: float = 0.0  # command: seconds spent waiting for host worker slots held by other commands
-    lock_wait_seconds: float = 0.0  # command: seconds spent waiting for project locks held by other commands
-
-
 # ---------------------------------------------------------------- adapter protocols
 class Assembler(Protocol):
     def assemble(self, source: Path, recipe: Recipe, include: Sequence[Path], out: Path) -> NativeResult: ...

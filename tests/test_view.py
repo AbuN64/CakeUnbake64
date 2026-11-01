@@ -119,7 +119,7 @@ def lane(tmp_path, monkeypatch):
     monkeypatch.setattr(view.store, "put_many", put_many)
     monkeypatch.setattr(view.store, "content", state.content)
     monkeypatch.setattr(view.pool, "map", state.pool)
-    monkeypatch.setattr(view.effort, "stage", state.stage)
+    monkeypatch.setattr(view.stages, "stage", state.stage)
     return state
 
 

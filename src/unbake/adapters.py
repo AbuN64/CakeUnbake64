@@ -14,11 +14,11 @@ from typing import Any
 
 import abucache
 import abucache.compile
-from abucache import link as linking
+from abucache import link as linking, stages
 from abucache.compile import Step
 
 from unbake import config as configuration
-from unbake import effort, process
+from unbake import process
 from unbake.contracts import Assembler, Config, Finding, Json, Linker, NativeResult, Placement, Recipe, Refusal, macro
 
 _VARIABLES = ('"$1"', '"$3"', '"$3.i"', '"$3.s"')
@@ -85,7 +85,7 @@ class GnuAssembler:
         self.config = config
 
     def assemble(self, source: Path, recipe: Recipe, include: Sequence[Path], out: Path) -> NativeResult:
-        with effort.stage("adapters.assemble"):
+        with stages.stage("adapters.assemble"):
             argv = render(
                 assemble_template(None)[0],
                 {
@@ -111,7 +111,7 @@ class Armips:
         self.config = config
 
     def assemble(self, source: Path, recipe: Recipe, include: Sequence[Path], out: Path) -> NativeResult:
-        with effort.stage("adapters.assemble"):
+        with stages.stage("adapters.assemble"):
             root = self.config.project.root
             # Source emits to the wrapper-selected output; never trusts a stale declared file.
             wrapper = out.with_suffix(".armips.s")
@@ -168,7 +168,7 @@ class TemplateToolchain:
     def preprocess(
         self, source: Path, recipe: Recipe, version: str, include: Sequence[Path], out: Path
     ) -> NativeResult:
-        with effort.stage("adapters.preprocess"):
+        with stages.stage("adapters.preprocess"):
             project = self.config.project
             if version not in project.version:
                 raise _unknown(f"version {version}")
@@ -191,7 +191,7 @@ class TemplateToolchain:
             return result
 
     def compile(self, preprocessed: Path, recipe: Recipe, out: Path) -> NativeResult:
-        with effort.stage("adapters.compile"):
+        with stages.stage("adapters.compile"):
             argv = self.argv(
                 "compile",
                 codegen=recipe.cflags,
@@ -207,7 +207,7 @@ class TemplateToolchain:
             return result
 
     def assemble(self, source: Path, recipe: Recipe, include: Sequence[Path], out: Path) -> NativeResult:
-        with effort.stage("adapters.assemble"):
+        with stages.stage("adapters.assemble"):
             if "assemble" not in self.row:
                 return GnuAssembler(self.config).assemble(source, recipe, include, out)
             includes = [f"-I{p}" for p in include]
@@ -273,7 +273,7 @@ class N64Link:
         self.config = config
 
     def link(self, obj: Path, sections: Sequence[Placement], symbols: Path, work: Path, trim: bool) -> NativeResult:
-        with effort.stage("adapters.link"):
+        with stages.stage("adapters.link"):
             root = self.config.project.root
             tools = {k: str(process.tool(self.config, k)) for k in ("mips_ld", "mips_objcopy")}
 
@@ -424,7 +424,7 @@ def _asm_includes(config: Config, version: str) -> list[str]:
 
 def script(config: Config, recipe: Recipe, version: str) -> str:
     """POSIX sh compiling "$1" to "$3" as a compile script; every word quoted except the "$n" words."""
-    with effort.stage("adapters.script"):
+    with stages.stage("adapters.script"):
         chain = toolchain(config, recipe.toolchain)
         if version not in config.project.version:
             raise _unknown(f"version {version}")

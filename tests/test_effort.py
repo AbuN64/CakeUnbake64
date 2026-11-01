@@ -1,15 +1,16 @@
-"""Effort spans, accounting, and revision-4 events."""
+"""unbake's seat on the stage tree: the sink, the bound host config, the hold beat and the niceness. The tree is
+tested in abucache."""
 
 import json
-from dataclasses import asdict
 from types import SimpleNamespace
 
-import fixture
 import pytest
-from abucache import memo
+from abucache import stages
 
 from unbake import effort
 from unbake.contracts import Config, Finding, Host, Origin, Refusal
+
+
 
 
 def _config(tmp_path):
@@ -27,451 +28,44 @@ def _config(tmp_path):
     return Config(project, host, "config")  # type: ignore[arg-type]
 
 
+
+
 @pytest.fixture(autouse=True)
 def _listeners(monkeypatch):
-    monkeypatch.setattr(effort, "_listeners", [])
+    monkeypatch.setattr(stages, "_listeners", list(stages._listeners))
 
 
-def test_listen_events():
-    events = []
-    effort.listen(lambda event, body: events.append((event, body)))
-    with effort.command("check", []), effort.stage("outer"), effort.capture():
-        effort.record_native("tool", fixture.native_result(cpu=2), 0)
-    assert [(event, body["path"]) for event, body in events] == [
-        ("open", ["check"]),
-        ("open", ["check", "outer"]),
-        ("close", ["check", "outer"]),
-        ("close", ["check"]),
-    ]
-    for event, body in events:
-        if event == "close":
-            assert body["wall"] >= 0
-            assert body["status"] == "ok"
-
-
-def test_progress_event():
-    events = []
-    effort.listen(lambda event, body: events.append((event, body)))
-    effort.progress("units", 2, 7)
-    assert events == [("progress", {"name": "units", "done": 2, "total": 7})]
-
-
-def test_closed_records():
-    with effort.command("first", []), effort.stage("child"):
-        pass
-    records = effort.closed()
-    assert isinstance(records, tuple)
-    assert [r.kind for r in records] == ["stage", "own", "command"]
-    assert records[0].parent == records[-1].span
-    assert records[1].path == ("first", "(own)")
-    assert effort.tree()["span"] == records[-1].span
-    with effort.command("second", []):
-        pass
-    assert [r.path for r in effort.closed()] == [("second",)]
-    assert records[-1].invocation != effort.invocation()
-
-
-def test_sink_under_dot_unbake(tmp_path, capsys):
-    with effort.command("check", []):
-        with effort.stage("before.bind"):
-            pass
+def test_a_command_logs_under_dot_unbake_of_its_project(tmp_path):
+    with effort.command("check", [], tmp_path):
         effort.bind(_config(tmp_path))
-    rows = [json.loads(line) for line in (tmp_path / ".unbake/stages.jsonl").read_text().splitlines()]
-    closed = effort.closed()
-    assert {r["span"] for r in rows} <= {r.span for r in closed}
-    assert rows[-1]["span"] == closed[-1].span  # the root is kept
-    assert not (tmp_path / "build/stages.jsonl").exists()
-    assert capsys.readouterr().err == ""
-
-
-@pytest.mark.parametrize("event", ["open", "close", "progress"])
-def test_listener_failure_is_finding(event):
-    def fail(kind, body):
-        if kind == event:
-            raise ValueError("listener broke")
-
-    seen = []
-    effort.listen(fail)
-    effort.listen(lambda kind, body: seen.append(kind))
-    with effort.command("check", []):
-        effort.progress("work", 1, 1)
-    findings = effort.closed()[-1].findings
-    assert len(findings) == 1
-    assert findings[0].key == "effort.log"
-    assert not findings[0].blocking
-    assert "listener broke" in findings[0].reason
-    assert seen == ["open", "progress", "close"]
-
-
-def test_listeners_survive_commands():
-    events = []
-    effort.listen(lambda event, body: events.append(event))
-    for name in ("one", "two"):
-        with effort.command(name, []):
+        with stages.stage("work"):
             pass
-    assert events == ["open", "close", "open", "close"]
+    rows = [json.loads(line) for line in effort.sink(tmp_path).read_text().splitlines()]
+    assert effort.sink(tmp_path) == tmp_path / ".unbake" / "stages.jsonl"
+    assert {r["span"] for r in rows} <= {r.span for r in stages.closed()}
+    assert rows[-1]["kind"] == "command"
 
 
-@pytest.mark.parametrize(
-    "exc,status",
-    [
-        (Refusal(Finding("effort.log", "stop")), "refused"),
-        (ValueError("stop"), "failed"),
-        (KeyboardInterrupt(), "interrupted"),
-    ],
-)
-def test_span_status_and_stack_restore(exc, status):
-    with pytest.raises(type(exc)), effort.command("check", []), effort.stage("work"):
-        raise exc
-    assert all(r.status == status for r in effort.closed())
-    assert effort._stack.get() == ()
-    if isinstance(exc, Refusal):
-        assert effort.closed()[-1].findings == exc.findings
-
-
-def test_own_wall_and_cpu(monkeypatch):
-    wall = iter([0, 1_000_000_000, 3_000_000_000, 5_000_000_000])
-    cpu = iter([0.0, 1.0, 3.0, 6.0])
-    monkeypatch.setattr(effort.time, "perf_counter_ns", lambda: next(wall))
-    monkeypatch.setattr(effort, "_cpu", lambda: next(cpu))
-    with effort.command("check", []), effort.stage("work"):
-        pass
-    child, own, root = effort.closed()
-    assert (child.wall_seconds, child.parent_cpu_seconds) == (2, 2)
-    assert (own.wall_seconds, own.parent_cpu_seconds) == (3, 4)
-    assert (root.wall_seconds, root.parent_cpu_seconds, root.cores) == (5, 6, 1.2)
-
-
-def test_native_and_pool_cpu_cache(tmp_path):
-    with effort.command("check", []):
+def test_bind_hands_the_host_limits_and_budgets_to_the_tree(tmp_path):
+    with effort.command("check", [], tmp_path):
         effort.bind(_config(tmp_path))
-        effort.record_native("tool", fixture.native_result(cpu=3), effort.time.perf_counter_ns())
-        effort.record_pool(
-            "units",
-            2,
-            2,
-            2,
-            effort.time.perf_counter_ns(),
-            [
-                {
-                    "worker_cpu": 4,
-                    "native_cpu": 5,
-                    "rss": 1234,
-                    "pid": 10,
-                    "start_ns": 0,
-                    "end_ns": 2_000_000_000,
-                    "cache": {"object": (2, 1)},
-                    "records": [],
-                    "wait_seconds": 1.0,
-                },
-                {
-                    "worker_cpu": 6,
-                    "native_cpu": 7,
-                    "rss": 2345,
-                    "pid": 11,
-                    "start_ns": 0,
-                    "end_ns": 3_000_000_000,
-                    "cache": {"object": (1, 2)},
-                    "records": [],
-                },
-            ],
-        )
-    root = effort.closed()[-1]
-    assert (root.worker_cpu_seconds, root.native_cpu_seconds) == (10, 15)
-    assert (root.items, root.jobs, root.workers_used, root.workers_admitted) == (2, 2, 2, 2)
-    assert root.worker_rss_peak_bytes == 2345
-    assert root.cache["object"] == (3, 3)
-    held = next(r for r in effort.closed() if r.kind == "pool")
-    assert held.wait_seconds == 1.0 and held.busy_seconds == 4.0
-
-
-def test_pool_job_records_rebased():
-    with effort.capture() as captured, effort.stage("work"):
-        effort.count("object", True)
-    raws = [asdict(r) for r in captured]
-    with effort.command("check", []):
-        effort.record_pool(
-            "units",
-            1,
-            1,
-            1,
-            effort.time.perf_counter_ns(),
-            [
-                {
-                    "worker_cpu": 1,
-                    "native_cpu": 0,
-                    "rss": 1,
-                    "pid": 1,
-                    "start_ns": 0,
-                    "end_ns": 1,
-                    "cache": {"object": (1, 0)},
-                    "records": raws,
-                }
-            ],
-        )
-    jobs = [r for r in effort.closed() if r.path[:2] == ("check", "units") and r.kind != "pool"]
-    assert [r.kind for r in jobs] == [r["kind"] for r in raws]
-    assert all(r.parent_cpu_seconds == 0 for r in jobs)
-    assert [r.worker_cpu_seconds for r in jobs] == [r["parent_cpu_seconds"] for r in raws]
-    assert all(r.path[:2] == ("check", "units") for r in jobs)
-    assert all(r.invocation == effort.invocation() for r in jobs)
-    assert not {r.span for r in jobs} & {r["span"] for r in raws}
-
-
-def test_capture_restores_and_null_stage():
-    with effort.stage("outside") as span:
-        span.add(items=3)
-    with effort.command("check", []):
-        effort.count("object", True)
-        with effort.capture() as records:
-            effort.count("view", False)
-        assert effort.counters() == {"object": (1, 0)}
-        assert records[-1].kind == "job"
-    assert effort.closed()[-1].cache == {"object": (1, 0)}
-
-
-def test_log_failure_is_debt(tmp_path, capsys):
-    (tmp_path / ".unbake").write_text("cannot be a directory")
-    with effort.command("check", []):
-        effort.bind(_config(tmp_path))
-    assert any(f.key == "effort.log" and not f.blocking for f in effort.closed()[-1].findings)
-    assert capsys.readouterr().err == ""
-
-
-def test_nested_cpu_inclusive_spans_exclusive_own(monkeypatch):
-    cpu = iter([0.0, 1.0, 2.0, 4.0, 7.0, 10.0])
-    monkeypatch.setattr(effort, "_cpu", lambda: next(cpu))
-    with effort.command("check", []), effort.stage("outer"), effort.stage("inner"):
-        pass
-    rows = {r.path: r for r in effort.closed()}
-    assert rows[("check",)].parent_cpu_seconds == 10
-    assert rows[("check", "outer")].parent_cpu_seconds == 6
-    assert rows[("check", "outer", "inner")].parent_cpu_seconds == 2
-    assert rows[("check", "(own)")].parent_cpu_seconds == 4
-    assert rows[("check", "outer", "(own)")].parent_cpu_seconds == 4
-
-
-def test_imported_native_own_and_cpu_classification():
-    with effort.capture() as captured, effort.stage("work"):
-        effort.record_native("tool", fixture.native_result(cpu=2), effort.time.perf_counter_ns())
-    raw = [asdict(r) for r in captured]
-    with effort.command("check", []):
-        effort.record_pool(
-            "units",
-            1,
-            1,
-            1,
-            effort.time.perf_counter_ns(),
-            [
-                {
-                    "worker_cpu": 1,
-                    "native_cpu": 2,
-                    "rss": 1,
-                    "pid": 1,
-                    "start_ns": 0,
-                    "end_ns": 1,
-                    "cache": {},
-                    "records": raw,
-                }
-            ],
-        )
-    imported = [r for r in effort.closed() if r.path[:3] == ("check", "units", "job")]
-    assert [r.kind for r in imported] == [r["kind"] for r in raw]
-    native = next(r for r in imported if r.kind == "native")
-    assert native.native_cpu_seconds == 2 and native.worker_cpu_seconds == 0
-    root = next(r for r in imported if r.kind == "job")
-    assert root.worker_cpu_seconds > 0 and root.parent_cpu_seconds == 0
-    assert root.parent_rss_peak_bytes == 0 and root.worker_rss_peak_bytes > 0
-
-
-def test_wait_is_charged_to_the_innermost_stage_only(tmp_path):
-    effort.bind(_config(tmp_path))
-    with effort.command("check", []), effort.stage("outer"), effort.stage("inner"):
-        effort.waited(1.5)
-    waits = {r.path[-1]: r.wait_seconds for r in effort.closed() if r.kind in ("stage", "command")}
-    assert waits == {"inner": 1.5, "outer": 0.0, "check": 0.0}
-
-
-def test_a_stage_that_fails_names_the_exception_and_the_frame_once():
-    from pathlib import Path
-
-    from unbake import land
-
-    with pytest.raises(FileNotFoundError), effort.command("land", []), effort.stage("outer"), effort.stage("inner"):
-        land._read(Path("/nonexistent/entry.json"))
-    failed = {r.path[-1]: r for r in effort._closed if r.status == "failed"}
-    note = failed["inner"].findings[0]
-    assert note.key == "internal.error" and "FileNotFoundError" in note.reason and " at land:_read:" in note.reason
-    assert failed["outer"].findings == ()  # the stage that raised names it, its parents do not repeat it
-
-
-def test_close_events_carry_cores_and_jobs_and_open_events_the_previous_wall():
-    events = []
-    effort.listen(lambda event, body: events.append((event, body)))
-    effort._walls["check > outer"] = 42.0
-    with effort.command("check", []), effort.stage("outer"):
-        pass
-    opens = {tuple(b["path"]): b["expected"] for e, b in events if e == "open"}
-    assert opens == {("check",): None, ("check", "outer"): 42.0}
-    closes = [b for e, b in events if e == "close"]
-    assert all({"cores", "jobs", "wall"} <= set(b) for b in closes)
-
-
-def test_walls_persist_beside_the_stage_log_for_shallow_stages(tmp_path, monkeypatch):
-    sink = tmp_path / "stages.jsonl"
-    monkeypatch.setattr(effort, "_walls", {})
-    with effort.command("check", []):
-        monkeypatch.setattr(effort, "_sink", sink)
-        with effort.stage("a"), effort.stage("b"), effort.stage("c"):
-            pass
-    saved = effort._load_walls(tmp_path / "walls.json")
-    assert set(saved) == {"check", "check > a", "check > a > b"}  # deeper than three levels is not remembered
-    assert effort._load_walls(tmp_path / "missing.json") == {}
-
-
-def test_the_stage_log_keeps_only_its_newest_whole_lines_past_the_limit(tmp_path, monkeypatch):
-    monkeypatch.setattr(effort, "LOG_BYTES", 100)
-    log = tmp_path / "stages.jsonl"
-    log.write_text("".join(f"line{i:03d}\n" for i in range(40)))
-    effort._trim(log)
-    kept = log.read_text().splitlines()
-    assert kept[-1] == "line039" and all(k.startswith("line") and len(k) == 7 for k in kept) and len(kept) <= 7
-    before = log.read_bytes()
-    effort._trim(log)
-    assert log.read_bytes() == before
-
-
-def test_the_memo_pressure_of_a_parent_is_measured_against_the_host_parent_budget(monkeypatch, tmp_path):
-    """effort.bind hands the host's parent memory to abucache, whose memo trims against it."""
-    effort.bind(_config(tmp_path))
-    real = memo.Path.read_text
-    monkeypatch.setattr(
-        memo.Path,
-        "read_text",
-        lambda self, *a, **k: (
-            "RssAnon:\t500 kB\nVmData:\t3000 kB\n" if str(self) == "/proc/self/status" else real(self, *a, **k)
-        ),
-    )
-    monkeypatch.setattr(memo, "_fork_data", -1)
-    assert memo.pressure() == (500 * 1024, effort._config.host.memory_parent_bytes)  # RssAnon, not VmData
-
-
-def test_release_drops_every_value_keyed_by_a_snapshot_digest_and_the_snapshot_itself(monkeypatch):
-    from types import SimpleNamespace
-
-    laid = SimpleNamespace(digest="wave1")
-    monkeypatch.setattr(
-        memo,
-        "_memo",
-        {
-            ("parent", "wave1"): 1,
-            ("pool.writes", "wave1"): b"blob",
-            ("pin", "wave1", "a.h"): "x",
-            ("overlay", "base", "w"): laid,  # keyed by its base: found by its value
-            ("pin", "wave2", "a.h"): "y",
-            ("catalog", "/root", "k"): 2,
-        },
-    )
-    assert memo.release("wave1") == 4
-    assert set(memo._memo) == {("pin", "wave2", "a.h"), ("catalog", "/root", "k")}
-
-
-def test_the_stage_log_keeps_the_head_of_a_long_finding_and_the_record_keeps_it_whole(tmp_path, monkeypatch):
-    sink = tmp_path / "stages.jsonl"
-    reason = "error: " + "x" * 50_000  # a compile error quoting whole headers
-    with effort.command("check", []):
-        monkeypatch.setattr(effort, "_sink", sink)
-        with pytest.raises(Refusal), effort.stage("native.objects"):
-            raise Refusal(Finding("compile.error", reason, missing=(f"version de: {reason}",)))
-    row = next(json.loads(line) for line in sink.read_text().splitlines() if "native.objects" in line)
-    logged = row["findings"][0]["reason"]
-    assert logged.startswith("error: x") and len(logged) < effort.REASON_CHARS + 40 and "50007 chars" in logged
-    (missing,) = row["findings"][0]["missing"]  # a proof gap carries the compiler's output in its missing lines
-    assert missing.startswith("version de: error: x") and "50019 chars" in missing
-    kept = next(r for r in effort.closed() if r.path[-1] == "native.objects")
-    assert kept.findings[0].reason == reason
-
-
-def _job_raw(path: tuple[str, ...], wall: float, cpu: float, wait: float, n: int, kind: str = "stage") -> dict:
-    return {
-        "invocation": "w",
-        "span": f"s{n}",
-        "parent": None,
-        "path": list(path),
-        "kind": kind,
-        "status": "ok",
-        "execution": "serial",
-        "start_ns": n,
-        "wall_seconds": wall,
-        "parent_cpu_seconds": cpu,
-        "worker_cpu_seconds": 0.0,
-        "native_cpu_seconds": 0.0,
-        "cores": cpu / wall,
-        "items": 1,
-        "jobs": 0,
-        "workers_used": 0,
-        "workers_admitted": 0,
-        "parent_rss_peak_bytes": 0,
-        "worker_rss_peak_bytes": n,
-        "cache": {"view": [0, 1]},
-        "findings": [],
-        "wait_seconds": wait,
+    root = stages.closed()[-1]
+    assert root.memory_limits == {
+        "resources.memory_parent_bytes": "/host.toml",
+        "resources.memory_worker_bytes": "/host.toml",
     }
+    assert root.memory_limit_values["resources.memory_parent_bytes"] == 1 << 30
 
 
-def _envelope(records: list[dict]) -> dict:
-    return {"worker_cpu": 0, "native_cpu": 0, "rss": 1, "pid": 1, "start_ns": 0, "end_ns": 1, "records": records}
+def test_a_refusal_ends_its_span_refused_with_its_findings_as_rows(tmp_path):
+    with pytest.raises(Refusal), effort.command("check", [], tmp_path), stages.stage("work"):
+        raise Refusal(Finding("effort.log", "no"))
+    record = next(r for r in stages.closed() if r.path[-1] == "work")
+    assert record.status == "refused"
+    assert [f["key"] for f in record.findings] == ["effort.log"]
 
 
-def test_sub_floor_worker_spans_of_one_path_fold_into_one_logged_record(tmp_path):
-    # setup's layout.ownership ran 5,439 jobs each under the log floor: every span was dropped and their 1,589
-    # worker-seconds vanished from the stage log. One path's spans fold into one record that crosses the floor.
-    raws = [_job_raw(("job", "native.objects"), 0.05, 0.02, 0.01, n) for n in range(5000)]
-    with effort.command("check", []):
-        effort.bind(_config(tmp_path))
-        effort.record_pool("units", 5000, 5000, 0, effort.time.perf_counter_ns(), [_envelope(raws)])
-    rows = [json.loads(line) for line in (tmp_path / ".unbake" / "stages.jsonl").read_text().splitlines()]
-    folded = [r for r in rows if r["path"][-2:] == ["job", "native.objects"]]
-    assert len(folded) == 1
-    row = folded[0]
-    assert row["spans"] == 5000 and row["items"] == 5000
-    assert row["wall_seconds"] == pytest.approx(250.0) and row["worker_cpu_seconds"] == pytest.approx(100.0)
-    assert row["wait_seconds"] == pytest.approx(50.0) and row["cores"] == pytest.approx(0.4)
-    assert row["cache"] == {"view": [0, 5000]} and row["worker_rss_peak_bytes"] == 4999
-    assert row["start_ns"] == 0 and not any(f["key"] == "budget.single_core" for f in row["findings"])
-
-
-def test_a_folded_child_hangs_under_its_folded_parent_and_findings_stay_alone(tmp_path):
-    raws = []
-    for n in range(3):
-        job = _job_raw(("job",), 1.0, 0.5, 0.0, n, kind="job")
-        child = _job_raw(("job", "view.get"), 0.5, 0.1, 0.0, 10 + n)
-        child["parent"] = job["span"]
-        raws += [job, child]
-    raws[1]["findings"] = [{"key": "k", "reason": "r"}]
-    with effort.command("check", []):
-        effort.record_pool("units", 3, 3, 1, effort.time.perf_counter_ns(), [_envelope(raws)])
-    shipped = [r for r in effort.closed() if r.path[:2] == ("check", "units") and r.kind != "pool"]
-    job = next(r for r in shipped if r.kind == "job")
-    views = [r for r in shipped if r.path[-1] == "view.get"]
-    assert job.spans == 3 and job.wall_seconds == 3.0
-    assert sorted(r.spans for r in views) == [1, 2]
-    assert all(r.parent == job.span for r in views)
-
-
-def test_a_worker_span_at_the_log_floor_stays_alone_so_a_pools_tail_is_seen(tmp_path):
-    # RW move round 1: publish.units kept 6.3 of 12 workers busy over 501 jobs; folded, no job's wall was left to
-    # tell a tail from a slow pool. Spans under the floor fold, a slow one stays alone.
-    raws = [_job_raw(("job",), 0.05, 0.02, 0.0, n, kind="job") for n in range(40)]
-    raws.append(_job_raw(("job",), 90.0, 89.0, 0.0, 99, kind="job"))
-    with effort.command("check", []):
-        effort.bind(_config(tmp_path))
-        effort.record_pool("units", 41, 41, 0, effort.time.perf_counter_ns(), [_envelope(raws)])
-    jobs = sorted((r.spans, r.wall_seconds) for r in effort.closed() if r.kind == "job")
-    assert jobs == [(1, 90.0), (40, pytest.approx(2.0))]
-
-
-def test_a_command_running_past_the_beat_says_its_stage_and_cpu(monkeypatch):
+def test_a_command_running_past_the_beat_says_its_stage_and_cpu(monkeypatch, tmp_path):
     """No silent hold: a long command prints its wall, process-tree CPU and the innermost open stage every beat."""
     import threading
 
@@ -485,8 +79,8 @@ def test_a_command_running_past_the_beat_says_its_stage_and_cpu(monkeypatch):
                 beat.set()
 
     monkeypatch.setattr(effort, "HOLD_BEAT", 0.05)
-    monkeypatch.setattr(effort, "_listeners", [listen])
-    with effort.command("submit", ["submit"]), effort.stage("publish.build"):
+    stages.listen(listen)
+    with effort.command("submit", ["submit"], tmp_path), stages.stage("publish.build"):
         assert beat.wait(60)  # the first beat's say is the signal; 60 s only bounds a beat that never comes
     assert any("hold: submit runs" in line and "CPU-s, now in submit > publish.build" in line for line in said)
 

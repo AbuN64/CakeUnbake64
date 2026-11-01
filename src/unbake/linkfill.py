@@ -24,8 +24,9 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from abucache import stages
 from unbake import config as configuration
-from unbake import effort, objectplan, versions, windows
+from unbake import objectplan, versions, windows
 from unbake.contracts import Config, Finding, Json, Refusal
 
 PAD_KIND = "pad"  # the plan's kind of an alignment pad
@@ -223,7 +224,7 @@ def generate(config: Config, params: Json) -> dict[str, Any]:
     file: one left from an earlier run is removed. A pad atom no piece of the version holds is refused. A bin segment
     has no plan: its rows are the version's spans no class holds that `stale_gaps` reads as alignment fill, and the
     bin rows already held stay."""
-    with effort.stage("layout.fill"):
+    with stages.stage("layout.fill"):
         files = Path(str(params["plan"]))
         missing = [
             str(f) for f in (files, files.parent / "OBJECTS.tsv", files.parent / "ASSIGN.tsv") if not f.is_file()

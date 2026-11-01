@@ -8,8 +8,9 @@ from functools import lru_cache
 from importlib import import_module
 from typing import Any, Protocol
 
+from abucache import stages
 from unbake import config as configuration
-from unbake import effort, pool, store, symptoms
+from unbake import pool, store, symptoms
 from unbake.contracts import code_identity, digest, sha256
 
 Fact = tuple[int, int, int, str]  # (vram, rom, size, type) of one symbol_addrs row
@@ -67,7 +68,7 @@ def scores(config: Any, tree: _Tree, facts: Facts, only: Collection[str] | None 
     keyed or measured, so one function's score never waits on the project's). A score is keyed by the module text,
     the name, the target bytes and the scorer, so an unchanged body measures nothing and a changed one measures
     exactly once."""
-    with effort.stage("rescore.scores"):
+    with stages.stage("rescore.scores"):
         found: dict[str, dict[str, float]] = {}
         misses: dict[tuple[str, str], list[tuple[str, str]]] = {}
         texts: dict[str, str] = {}

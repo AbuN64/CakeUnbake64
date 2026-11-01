@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from unbake import effort
+from abucache import stages
 from unbake.contracts import Finding, Refusal
 
 ENV = "UNBAKE_TREE_LOCK"
@@ -65,7 +65,7 @@ def _free(intent: int, tree: int) -> bool:
 
 @contextmanager
 def hold(
-    root: Path, *, exclusive: bool = False, who: str = "", say: Callable[[str], None] = effort.say, wait: bool = True
+    root: Path, *, exclusive: bool = False, who: str = "", say: Callable[[str], None] = stages.say, wait: bool = True
 ) -> Iterator[float]:
     """Hold the tree lock of `root` (shared by default); yields the seconds waited. A shared hold with `wait` false
     never waits for a writer: it says who writes, reads the tree as the writer has it (every file is whole, a file is
@@ -117,7 +117,7 @@ def hold(
             fcntl.flock(intent, fcntl.LOCK_UN)
             waited += _take(tree, fcntl.LOCK_SH, say, lambda: "waiting for the tree lock")
             if waited >= 1.0:  # the command's lock wait, with whom it waited for
-                effort.waited(waited, "lock", holder.removeprefix("waiting for "))
+                stages.waited(waited, "lock", holder.removeprefix("waiting for "))
         os.environ[ENV] = "1"
         try:
             yield waited

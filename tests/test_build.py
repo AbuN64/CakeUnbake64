@@ -895,8 +895,8 @@ def test_folded_data_symbols_have_a_finding_and_report_line(tmp_path, monkeypatc
     monkeypatch.setattr(build.configuration, "toolchain", lambda id: row)
     found, said = [], []
     span = SimpleNamespace(add=lambda **values: found.extend(values.get("findings", [])))
-    monkeypatch.setattr(build.effort, "stage", lambda name: nullcontext(span))
-    monkeypatch.setattr(build.effort, "say", said.append)
+    monkeypatch.setattr(build.stages, "stage", lambda name: nullcontext(span))
+    monkeypatch.setattr(build.stages, "say", said.append)
     text = build.splat_yaml(config, "us", make_tree()).decode()
     folded = offset != 0 and kind == "data"
     assert len(found) == int(folded)
@@ -1241,7 +1241,7 @@ def test_make_cache_hit_repairs_missing_report_verdict(tmp_path, monkeypatch):
 
 def _said(monkeypatch) -> list[str]:
     said: list[str] = []
-    monkeypatch.setattr(build.effort, "say", said.append)
+    monkeypatch.setattr(build.stages, "say", said.append)
     return said
 
 

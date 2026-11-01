@@ -12,7 +12,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from unbake import effort, process, store
+from abucache import stages
+from unbake import process, store
 from unbake.contracts import Config, Finding, Json, Refusal
 
 # passes whose output no original source has (masks, ^0, empty statements, dummy blocks): never proposed
@@ -191,7 +192,7 @@ def _place(config: Config, proc: Path = Path("/proc")) -> Path:
             )
         if now == began or now - last >= 15:
             last = now
-            effort.say(
+            stages.say(
                 f"permute queued: {len(held)} of {cap} places held by "
                 + ", ".join(f"pid {p}" for p, _ in held)
                 + f" ({now - began:.0f}s)"

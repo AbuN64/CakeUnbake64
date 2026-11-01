@@ -74,8 +74,16 @@ owner = "config"
 sentence = "a configuration or data file does not match its schema"
 
 [key."effort.log"]
-owner = "effort"
-sentence = "stage records could not be written to build/stages.jsonl"
+owner = "abucache"
+sentence = "stage records could not be written to .unbake/stages.jsonl"
+
+[key."events.feed"]
+owner = "abucache"
+sentence = "a slow stage or wait could not be written to the event feed"
+
+[key."events.runtime"]
+owner = "abucache"
+sentence = "the runtime file is unusable, so no slow stage reaches the event feed"
 
 [key."land.view-conversion"]
 owner = "adapters"

@@ -18,7 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from abucache import memo
+from abucache import memo, stages
 from test_effort import _config
 
 from unbake import config as configuration
@@ -51,7 +51,7 @@ def _square(value):
 @pytest.fixture(autouse=True)
 def _state(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path_factory.mktemp("run")))
-    monkeypatch.setattr(effort, "_listeners", [])
+    monkeypatch.setattr(stages, "_listeners", [])
     monkeypatch.setattr(pool, "_in_worker", False)
     yield
     pool._drop_executor()
@@ -92,8 +92,8 @@ def test_progress_counts(tmp_path, monkeypatch, mocked_parallel, serial):
     for name, value in (("_dir", []), ("_cmd", []), ("_want", 0), ("_size", 0), ("_share", 0)):
         monkeypatch.setattr(pool, name, value)  # the slot state another test on this worker left behind
     seen = []
-    effort.listen(lambda event, body: seen.append(body) if event == "progress" else None)
-    with effort.command("check", []):
+    stages.listen(lambda event, body: seen.append(body) if event == "progress" else None)
+    with effort.command("check", [], Path.cwd()):
         assert pool.map(_config(tmp_path), "units", _square, [1, 2, 3, 4]) == [1, 4, 9, 16]
     assert seen == [{"name": "units", "done": n, "total": 4} for n in range(1, 5)]
     if not serial:
@@ -106,9 +106,9 @@ def test_inline_no_executor(tmp_path, monkeypatch, items):
         pytest.fail("inline map started an executor")
 
     monkeypatch.setattr(pool, "_get_executor", forbidden)
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         assert pool.map(_config(tmp_path), "units", _square, items) == [v * v for v in items]
-    record = next(r for r in effort.closed() if r.kind == "pool")
+    record = next(r for r in stages.closed() if r.kind == "pool")
     assert record.items == record.jobs == len(items)
     assert record.workers_admitted == 0
 
@@ -123,20 +123,20 @@ def test_inline_no_executor(tmp_path, monkeypatch, items):
 )
 def test_worker_failure_mapping(tmp_path, mocked_parallel, monkeypatch, exc, key):
     monkeypatch.setattr(sys.modules[__name__], "_RAISED", exc)
-    with effort.command("check", []), pytest.raises(Refusal) as caught:
+    with effort.command("check", [], Path.cwd()), pytest.raises(Refusal) as caught:
         pool.map(_config(tmp_path), "units", _fail, [1, 2])
     assert caught.value.findings[0].key == key
     if key == "effort.log":
         assert caught.value is exc
     if key == "worker.memory":
         assert caught.value.findings[0].origin == _config(tmp_path).host.origins["resources.memory_worker_bytes"]
-    assert next(r for r in effort.closed() if r.kind == "pool").jobs == 2
+    assert next(r for r in stages.closed() if r.kind == "pool").jobs == 2
 
 
 def test_job_cache_and_metrics(tmp_path):
     def work(value):
-        effort.count("object", True)
-        effort.count("view", False)
+        stages.count("object", True)
+        stages.count("view", False)
         return value
 
     ok, value, envelope = pool._job(work, 7)
@@ -155,7 +155,7 @@ def test_broken_pool_dropped(tmp_path, monkeypatch, mocked_parallel):
 
     monkeypatch.setattr(pool, "wait", broken)
     monkeypatch.setattr(pool, "_drop_executor", lambda: dropped.append(True))
-    with effort.command("check", []), pytest.raises(Refusal) as caught:
+    with effort.command("check", [], Path.cwd()), pytest.raises(Refusal) as caught:
         pool.map(_config(tmp_path), "units", _square, [1, 2])
     assert caught.value.findings[0].key == "worker.crash"
     assert dropped == [True]
@@ -219,21 +219,21 @@ def test_threads_asking_at_once_create_one_executor(tmp_path, monkeypatch):
 
 def test_real_forked_map(tmp_path, monkeypatch):
     seen = []
-    effort.listen(lambda event, body: seen.append(body["done"]) if event == "progress" else None)
-    with effort.command("check", []):
+    stages.listen(lambda event, body: seen.append(body["done"]) if event == "progress" else None)
+    with effort.command("check", [], Path.cwd()):
         assert pool.map(_config(tmp_path), "units", _square, [2, 3, 4]) == [4, 9, 16]
     assert seen == [1, 2, 3]
-    record = next(r for r in effort.closed() if r.kind == "pool")
+    record = next(r for r in stages.closed() if r.kind == "pool")
     assert record.jobs == 3
     assert 1 <= record.workers_used <= record.workers_admitted == 2
 
 
 def test_large_map_batches_transport_and_preserves_every_metric(tmp_path, mocked_parallel):
     items = list(range(256))
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         values = pool.map(_config(tmp_path), "units", _square, items)
     assert values == [v * v for v in items]
-    record = next(r for r in effort.closed() if r.kind == "pool")
+    record = next(r for r in stages.closed() if r.kind == "pool")
     assert record.items == record.jobs == len(items)
     assert record.workers_admitted == 2
 
@@ -244,23 +244,23 @@ def _identify(value):
 
 def test_real_batched_work_count_order_and_worker_pids(tmp_path, monkeypatch):
     items = list(range(256))
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         values = pool.map(_config(tmp_path), "units", _identify, items)
     assert [value for value, pid in values] == items
     assert all(pid != os.getpid() for value, pid in values)
-    metrics = next(r for r in effort.closed() if r.kind == "pool")
+    metrics = next(r for r in stages.closed() if r.kind == "pool")
     assert metrics.jobs == metrics.items == len(items)
     assert metrics.workers_used == len({pid for value, pid in values})
     assert metrics.workers_admitted == 2
-    assert sum(r.spans for r in effort.closed() if r.kind == "job") == len(items)  # every job, folded
+    assert sum(r.spans for r in stages.closed() if r.kind == "job") == len(items)  # every job, folded
 
 
 def test_job_ships_only_notable_records(tmp_path):
     def work(value):
-        with effort.stage("quick"):
+        with stages.stage("quick"):
             pass
-        with effort.stage("waited"):
-            effort.waited(0.5)
+        with stages.stage("waited"):
+            stages.waited(0.5)
         return value
 
     _, _, everything = pool._job(work, 1)
@@ -268,9 +268,9 @@ def test_job_ships_only_notable_records(tmp_path):
 
 
 def test_pool_record_measures_the_parent_and_the_workers(tmp_path, mocked_parallel):
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         pool.map(_config(tmp_path), "units", _square, list(range(80)))
-    record = next(r for r in effort.closed() if r.kind == "pool")
+    record = next(r for r in stages.closed() if r.kind == "pool")
     assert record.dispatch_seconds >= 0 and record.busy_seconds >= 0 and record.jobs == 80
 
 
@@ -294,13 +294,13 @@ def test_a_warm_keyed_group_costs_one_store_read(tmp_path, monkeypatch):
         pool.store, "get", lambda cfg, kind, key, **kw: reads.append(kind) or real(cfg, kind, key, **kw)
     )
     items = [1, 2, 3, 4]
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         assert pool.map(config, "units", _square, items, key=str) == [1, 4, 9, 16]
     assert reads.count("units") == 4  # the cold run asks for every item
     reads.clear()
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         assert pool.map(config, "units", _square, items, key=str) == [1, 4, 9, 16]
-        assert effort.counters()["units"] == (4, 0)  # all four still count as hits
+        assert stages.counters()["units"] == (4, 0)  # all four still count as hits
     assert reads == ["units.group"]
     reads.clear()
     assert pool.map(config, "units", _square, [1, 2, 3, 5], key=str) == [1, 4, 9, 25]  # one new item: per-item reads
@@ -415,7 +415,7 @@ def test_the_keys_of_a_few_items_are_computed_here_and_many_go_to_the_workers(tm
     )
     few = [n for n in range(config.host.workers * pool._KEYS_INLINE)]
     many = [n for n in range(config.host.workers * pool._KEYS_INLINE + 1)]
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         run = pool._Run("few", _square, few, _name)
         pool._resolve(config, [run])
         assert asked == [] and run.keys == [pool.digest((_name(n), pool.code_identity(_square))) for n in few]
@@ -462,7 +462,7 @@ def test_a_pool_with_every_slot_taken_takes_whichever_frees_first(tmp_path):
 
 
 def test_slots_are_released_between_phases_and_the_executor_stays(tmp_path):
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         assert pool.map(_config(tmp_path), "units", _square, [1, 2, 3, 4]) == [1, 4, 9, 16]
         assert pool._slots == [] and pool._executor is not None  # idle between pools: others may take the slots
         held = _holder(os.environ["XDG_RUNTIME_DIR"], _config(tmp_path).host.workers)  # all free for another command
@@ -475,7 +475,7 @@ def test_slots_are_released_between_phases_and_the_executor_stays(tmp_path):
 
 
 def test_a_pool_that_waits_for_a_slot_runs_on_workers_that_wait_did_not_stop(tmp_path, monkeypatch):
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         assert pool.map(_config(tmp_path), "units", _square, [1, 2, 3, 4]) == [1, 4, 9, 16]
         assert pool._slots == [] and pool._executor is not None  # idle between pools, its slots back with the host
 
@@ -573,7 +573,7 @@ def test_a_snapshot_the_warm_workers_were_not_forked_with_travels_in_one_spill_f
 
 def test_real_forked_workers_see_the_parent_snapshot_unpickled(tmp_path):
     snapshot = _snapshot(tmp_path)
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         found = pool.map(snapshot.config, "units", _digest_of, [(snapshot, 1), (snapshot, 2), (snapshot, 3)])
     assert [f[:2] for f in found] == [("digest-1", 1), ("digest-1", 2), ("digest-1", 3)] and all(f[2] for f in found)
 
@@ -663,7 +663,7 @@ def test_each_group_of_a_gather_is_recorded_with_its_own_span_not_the_gathers(tm
     """A one-job group beside a big one must not show the whole dispatch as its own wall."""
     recorded = []
     monkeypatch.setattr(effort, "record_pool", lambda name, items, **kw: recorded.append((name, kw)))
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         pool.gather(_config(tmp_path), [("small", _name, [1]), ("big", _square, list(range(80)))])
     spans = {name: (kw["start_ns"], kw["end_ns"]) for name, kw in recorded}
     assert all(end is not None and start <= end for start, end in spans.values())
@@ -673,7 +673,7 @@ def test_each_group_of_a_gather_is_recorded_with_its_own_span_not_the_gathers(tm
 def test_a_warm_group_is_recorded_as_instant(tmp_path, mocked_parallel, monkeypatch):
     recorded = []
     monkeypatch.setattr(effort, "record_pool", lambda name, items, **kw: recorded.append((name, kw)))
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         pool.gather(_config(tmp_path), [("none", _name, []), ("big", _square, list(range(80)))])
     assert (
         dict(recorded)["none"]["end_ns"] == dict(recorded)["none"]["start_ns"] and dict(recorded)["none"]["jobs"] == 0
@@ -881,7 +881,7 @@ def _stall_run(tmp_path, monkeypatch, cpu, awaits=lambda pid, executor: True):
         return timed_out(pending, return_when)
 
     monkeypatch.setattr(pool, "wait", wait)
-    with effort.command("check", []), pytest.raises(Refusal) as caught:
+    with effort.command("check", [], Path.cwd()), pytest.raises(Refusal) as caught:
         pool.map(_config(tmp_path), "units", _square, [1, 2])
     return caught.value.findings[0].key, drops, len(rounds)
 
@@ -1126,7 +1126,7 @@ def test_a_held_slot_shows_up_as_its_own_wait_stage_naming_the_holders(tmp_path,
         stages.append(name)
         yield SimpleNamespace(add=lambda items=0, findings=(): recorded.extend(f.reason for f in findings))
 
-    monkeypatch.setattr(pool.effort, "stage", stage)
+    monkeypatch.setattr(pool.stages, "stage", stage)
     monkeypatch.setattr(pool, "_wait_free", lambda *a: pool._slots.append(open(os.devnull)))  # noqa: SIM115
     monkeypatch.setattr(pool, "_slots", [])
     monkeypatch.setattr(pool, "_cmd", [])
@@ -1149,7 +1149,7 @@ def test_a_share_short_of_the_work_shows_in_the_tree_once_naming_the_holders(tmp
         stages.append(name)
         yield SimpleNamespace(add=lambda items=0, findings=(): recorded.extend(f.reason for f in findings))
 
-    monkeypatch.setattr(pool.effort, "stage", stage)
+    monkeypatch.setattr(pool.stages, "stage", stage)
     monkeypatch.setattr(pool, "_slots", [])
     monkeypatch.setattr(pool, "_cmd", [])
     monkeypatch.setattr(pool, "_short", [])
@@ -1210,7 +1210,7 @@ def test_a_pool_holds_no_slot_its_workers_cannot_use_and_never_waits_while_holdi
     monkeypatch.setattr(pool, "_acquire", acquire)
     monkeypatch.setattr(pool, "_get_executor", lambda *a, **k: forks.append(1) or mocked_parallel.executor())
     monkeypatch.setattr(pool, "_wait_free", lambda *a: pytest.fail("waited for a slot while holding some"))
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         assert pool.map(config, "units", _square, list(range(8))) == [v * v for v in range(8)]
     assert forks == [1]  # the gather asks for the executor once: no refork as the share moves
     assert max(held) <= 4 and held[-1] <= 2  # never beyond the share, and fewer as the chunks run out
@@ -1394,9 +1394,9 @@ def _other_protocol(monkeypatch, lock, capsys=None):
 def test_a_command_waits_for_live_commands_of_another_slot_protocol_to_release(monkeypatch, lock):
     said = []
     monkeypatch.setattr(pool, "_pidfd", lambda pid: None)
-    monkeypatch.setattr(pool.effort, "say", said.append)
+    monkeypatch.setattr(pool.stages, "say", said.append)
     stages = []
-    real_stage = pool.effort.stage
+    real_stage = pool.stages.stage
 
     @contextmanager
     def stage(name):
@@ -1405,7 +1405,7 @@ def test_a_command_waits_for_live_commands_of_another_slot_protocol_to_release(m
             yield span
         stages[-1][1] = "closed"
 
-    monkeypatch.setattr(pool.effort, "stage", stage)
+    monkeypatch.setattr(pool.stages, "stage", stage)
     path, other, thread = _other_protocol(monkeypatch, lock)
     assert said == ["unbake: waiting for pids 77 hold host slots under another slot protocol than 2 to finish"]
     assert stages == [["pool.protocol", "open"]]  # the wait shows as its own stage while it lasts
@@ -1447,7 +1447,7 @@ def test_a_jobs_native_cpu_counts_every_program_it_waited_for_even_under_an_inli
 
 def test_a_jobs_native_cpu_includes_what_a_nested_pool_record_rolled_up(monkeypatch):
     def nested(value):
-        effort.record_pool(
+        stages.record_pool(
             "inner",
             1,
             jobs=1,
@@ -1507,7 +1507,7 @@ def test_every_chunk_is_ready_at_once_so_the_workers_stay_full_while_work_remain
 ):
     config = replace(_config(tmp_path), host=_host(tmp_path, slots=4, workers=4))
     monkeypatch.setattr(pool, "_size", 4)  # the fan the executor forked
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         assert pool.map(config, "units", _square, list(range(64))) == [v * v for v in range(64)]
     assert mocked_parallel[:4] == [1, 2, 3, 4] and set(mocked_parallel[3:]) == {4}  # in flight == workers to the end
 
@@ -1520,7 +1520,7 @@ def test_a_spilled_tree_carries_the_parents_indexes_so_warm_workers_never_build_
     monkeypatch.setattr(pool, "_sent", {})
     monkeypatch.setattr(pool, "_SHARED", {})
     monkeypatch.setattr(pool, "_laid", [])
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         memo.memo(("catalog", "root", "pins-1"), lambda: {"Vec3": ("include/m.h", 1, "typedef ...")})
         blobs = []
         for name in ("one", "two"):
@@ -1557,7 +1557,7 @@ def test_a_warm_worker_forgets_what_the_parent_forgot_before_the_next_dispatch(t
     # before and laid the next plan's overlays from them: 'an overlay laid again in a worker has digest'.
     config = _config(tmp_path)
     monkeypatch.setattr(memo, "_epochs", {})
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         memo.memo(("versions.read", "split"), lambda: "before extract")  # in the memo the workers fork holding
         assert pool.map(config, "units", _versions_read, [1, 2]) == ["before extract"] * 2
         memo.forget("versions.read")  # extract: the files these values were read from are rewritten
@@ -1578,7 +1578,7 @@ def test_follow_forgets_only_the_kinds_the_parent_forgot_since(monkeypatch):
 
 
 def _two_stages(value):
-    with effort.stage("native.objects"), effort.stage("view.get"):
+    with stages.stage("native.objects"), stages.stage("view.get"):
         sum(i * i for i in range(20000))  # cpu the fold must keep, job by job
     return value
 
@@ -1631,9 +1631,9 @@ def test_a_pool_records_the_slot_seconds_it_held_as_its_share_shrank(tmp_path, m
 
     monkeypatch.setattr(pool, "_acquire", acquire)
     config = replace(_config(tmp_path), host=_host(tmp_path, slots=12, workers=12))
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         assert pool.map(config, "units", _tick, list(range(48))) == list(range(48))
-    record = next(r for r in effort.closed() if r.kind == "pool")
+    record = next(r for r in stages.closed() if r.kind == "pool")
     held = record.slot_seconds / record.wall_seconds
     assert record.workers_admitted == 12 and 3.0 < held < 6.0
 
@@ -1660,7 +1660,7 @@ def test_warm_workers_hold_the_landing_lock_only_for_dispatches_sent_inside_it(t
     config = _config(tmp_path)
     root = config.project.root
     monkeypatch.setattr(pool.journal, "_HELD", set())
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         assert pool.map(config, "units", _holds, [root, root]) == [False, False]
         with pool.journal.held(config):
             assert pool.map(config, "units", _holds, [root, root]) == [True, True]
@@ -1784,7 +1784,7 @@ def test_a_refusal_while_keys_resolve_reaches_the_caller_not_an_unbound_width(tm
         raise refusal
 
     monkeypatch.setattr(pool, "_resolve", refuse)
-    with effort.command("t", ()), pytest.raises(Refusal) as caught:
+    with effort.command("t", (), Path.cwd()), pytest.raises(Refusal) as caught:
         pool.gather(_config(tmp_path), [("job", len, [b"a"], len)])
     assert caught.value is refusal
 
@@ -1885,7 +1885,7 @@ def test_a_chunk_that_ends_while_another_command_waits_is_a_rebalance_however_re
     asked = []
     real = pool._acquire
     monkeypatch.setattr(pool, "_acquire", lambda *a, **k: asked.append(a) or real(*a, **k))
-    with effort.command("check", []):
+    with effort.command("check", [], Path.cwd()):
         assert pool.map(config, "units", _square, list(range(8))) == [v * v for v in range(8)]
     assert len(asked) == (1 + 8 if queued else 1)  # the first take, then one look per chunk only while one waits
 
@@ -1919,20 +1919,20 @@ def test_a_wait_over_a_minute_is_one_line_in_the_hosts_wait_log_and_a_short_one_
     runtime = Path(os.environ["XDG_RUNTIME_DIR"])
     monkeypatch.setattr(effort, "wait_hook", pool._note_wait)
     pool._acquire(4)  # the slot directory exists
-    with effort.command("score", []):
-        effort.waited(5.0, "slots", "held by pids 7")
-        effort.waited(61.5, "slots", "held by pids 7, 8")
-        effort.waited(70.0, "lock", "land.lock")
-        effort.waited(2.0)
+    with effort.command("score", [], Path.cwd()):
+        stages.waited(5.0, "slots", "held by pids 7")
+        stages.waited(61.5, "slots", "held by pids 7, 8")
+        stages.waited(70.0, "lock", "land.lock")
+        stages.waited(2.0)
     lines = [json.loads(line) for line in (runtime / pool._POOL / pool._WAITS).read_text().splitlines()]
     assert [(r["what"], r["seconds"], r["detail"]) for r in lines] == [
         ("slots", 61.5, "held by pids 7, 8"),
         ("lock", 70.0, "land.lock"),
     ]
     assert all(r["pid"] == os.getpid() and r["at"] > 0 for r in lines)
-    root = next(r for r in effort.closed() if r.kind == "command")
+    root = next(r for r in stages.closed() if r.kind == "command")
     assert (root.slot_wait_seconds, root.lock_wait_seconds) == (66.5, 72.0)
-    assert human.summary(effort.closed())[1] == "wait 66.5s for slots, 72.0s for locks"
+    assert human.summary(stages.closed())[1] == "wait 66.5s for slots, 72.0s for locks"
     pool._release()
 
 

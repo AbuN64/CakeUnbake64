@@ -180,7 +180,7 @@ def test_a_command_that_drained_nothing_succeeds(argv: list[str], monkeypatch: P
 
 def test_a_failed_exit_without_findings_names_itself(capsys: Capture) -> None:
     cli.human.attach(sys.stderr, False)
-    with cli.effort.command("submit", []):  # the envelope names the command that ran
+    with cli.effort.command("submit", [], Path.cwd()):  # the envelope names the command that ran
         assert cli._emit("submit", 1, None, []) == 1
     document = _envelope(capsys.readouterr().out)
     assert document["ok"] is False
@@ -404,10 +404,10 @@ def test_every_result_carries_the_cache_counts_of_its_command_even_when_short(
     """The stage tree is what `--short` drops; the counts must not live only there."""
 
     def handler(cfg: Any, params: dict[str, Any]) -> dict[str, Any]:
-        cli.effort.count("score", True)
-        with cli.effort.stage("inner"):
-            cli.effort.count("build", False)
-            cli.effort.count("build", False)
+        cli.stages.count("score", True)
+        with cli.stages.stage("inner"):
+            cli.stages.count("build", False)
+            cli.stages.count("build", False)
         return {"unit": "src/f.c", "exact": False, "proofs": []}
 
     monkeypatch.setattr(cli, "_handler", lambda name: handler)
@@ -425,7 +425,7 @@ def test_every_result_carries_the_cache_counts_of_its_command_even_when_short(
 
 def test_a_refused_command_still_reports_its_cache_counts(monkeypatch: Patch, capsys: Capture) -> None:
     def handler(cfg: Any, params: dict[str, Any]) -> dict[str, Any]:
-        cli.effort.count("extract", True)
+        cli.stages.count("extract", True)
         raise Refusal(Finding("setup.splat", "no"))
 
     monkeypatch.setattr(cli, "_handler", lambda name: handler)

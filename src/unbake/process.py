@@ -14,7 +14,9 @@ from pathlib import Path
 from time import perf_counter_ns
 from typing import IO
 
-from unbake import effort
+from abucache import stages
+from abucache.proc import Completed
+
 from unbake.contracts import Config, Finding, NativeResult, Refusal
 
 
@@ -164,7 +166,13 @@ def _execute(
         usage.ru_maxrss * 1024,
         dict(outputs),
     )
-    effort.record_native(name, result, start)
+    stages.record_native(
+        name,
+        Completed(
+            result.argv, result.cwd, result.exit, result.signal, b"", b"", result.wall_seconds, result.cpu_seconds, result.max_rss_bytes
+        ),
+        start,
+    )
     return result
 
 
@@ -181,7 +189,7 @@ def run(
     env: Mapping[str, str] = {},
     pass_fds: Sequence[int] = (),
 ) -> NativeResult:
-    with effort.stage("process.run"):
+    with stages.stage("process.run"):
         executable = str(argv[0]) if argv else ""
         if not executable or not Path(executable).is_file() or not os.access(executable, os.X_OK):
             raise Refusal(Finding("native.missing_tool", reason="the tool is not an executable file", path=executable))
@@ -241,7 +249,7 @@ def tool(config: Config, name: str, *, kind: str | None = None) -> Path:
 
 
 def git(config: Config, *args: str) -> NativeResult:
-    with effort.stage("process.git"):
+    with stages.stage("process.git"):
         result = run(
             "git " + args[0],
             [tool(config, "git"), "-c", "core.untrackedCache=false", "-c", "core.fsmonitor=false", *args],
@@ -267,7 +275,7 @@ def make(config: Config, targets: Sequence[str], jobs: int = 0) -> NativeResult:
     from unbake import front, pool  # pool imports store, which imports this module
 
     root = config.project.root
-    with effort.stage("make"), pool.jobserver(config.host, jobs) as (granted, env, fds):
+    with stages.stage("make"), pool.jobserver(config.host, jobs) as (granted, env, fds):
         argv: list[str | Path] = [tool(config, "make"), "-k", *targets]
 
         def start(record: str | None, preprocess: bool) -> NativeResult:
@@ -277,7 +285,7 @@ def make(config: Config, targets: Sequence[str], jobs: int = 0) -> NativeResult:
             # the runs of one make are different work (find stale stamps, find stale compiles, build): each its own
             # stage, so effort reports a repeat only when the same phase really ran twice
             phase = "make.build" if record is None else "make.preprocess" if preprocess else "make.record"
-            with effort.stage(phase):
+            with stages.stage(phase):
                 return run("make", argv, root, tmp=scratch(root), env={**env, **extra}, pass_fds=fds)
 
         # the batch is plain CPU work between the two makes: it takes every host slot, not the share make started with

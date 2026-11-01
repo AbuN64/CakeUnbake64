@@ -25,7 +25,8 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from unbake import build, effort, pool, process, store, tree
+from abucache import stages
+from unbake import build, pool, process, store, tree
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Host, Json, Refusal
 from unbake.typecensus import Decl, Norm, Stmt, clashes, declarations, files_of, index, scan, table, tkey
@@ -258,15 +259,15 @@ def line(name: str, got: Plan | None, failed: Mapping[str, str], seconds: float)
     )
 
 
-def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Callable[[str], None] = effort.say) -> Json:
+def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Callable[[str], None] = stages.say) -> Json:
     """Settle one type for each clashing name (or each of `names`); the tree keeps the rewrites that held. `say` takes
     one line per name as soon as it is settled or out of candidates."""
     units = seams.units()
     if not any(units.values()):
         raise Refusal(Finding("unify.units", "no compiled unit found: build the tree first (unbake setup)"))
-    with effort.stage("unify.baseline"):
+    with stages.stage("unify.baseline"):
         base = baseline(root, seams, units)
-    with effort.stage("unify.census"):
+    with stages.stage("unify.census"):
         census = collect(units, seams.read)
         found = clashes(census.per)
     src = Sources(lambda p: (root / p).read_bytes().decode("latin-1"))
@@ -281,7 +282,7 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
         rounds += 1
         plans: dict[str, Plan] = {}
         for name in pending:
-            with effort.stage("unify.plan"):
+            with stages.stage("unify.plan"):
                 got = plan(name, sites_of(census.per, name), rank[name], src, census.norm)
             if isinstance(got, Plan):
                 plans[name] = got
@@ -290,7 +291,7 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
                     failed[name][""] = got
                 say(line(name, None, failed[name], spent[name]))
         pending = []
-        with effort.stage("unify.touch"):
+        with stages.stage("unify.touch"):
             units_of = {n: touched(census, p) for n, p in plans.items()}
         for group in batches(units_of):
             started, built = time.monotonic(), built + 1
@@ -299,7 +300,7 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
             span = set().union(*(units_of[n] for n in group))
             tried |= span
             rebuilt += len(span)
-            with effort.stage("unify.rebuild"):
+            with stages.stage("unify.rebuild"):
                 made = rebuild(root, seams, span)
             for name in group:
                 bad = differing(units_of[name], made, base)
@@ -314,7 +315,7 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
                     say(line(name, plans[name], failed[name], spent[name]))
             _write(root, files, settled.values(), src)  # the names that failed go back to their original text
     reached = set().union(tried, *(reach(census, p) for p in settled.values()))
-    with effort.stage("unify.verify"):
+    with stages.stage("unify.verify"):
         back = rebuild(root, seams, reached)
     drift = sorted(target(u) for u, h in back.items() if h != base[u])
     if drift:

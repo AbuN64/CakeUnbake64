@@ -15,7 +15,8 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
-from unbake import compare, effort, pool, store
+from abucache import stages
+from unbake import compare, pool, store
 from unbake.contracts import Config, Finding, Json, Refusal
 
 _DECL = re.compile(
@@ -193,7 +194,7 @@ def _job(item: tuple[Config, Json]) -> Json | None:
 
 def order_command(config: Config, params: Json) -> Json:
     """`unbake order FILE --function FN`: climb the statement order of FN toward the ROM; write the best source."""
-    with effort.stage("order"):
+    with stages.stage("order"):
         source = Path(params["file"])
         if not source.is_file():
             raise Refusal(Finding("order.file", reason=f"{source} does not exist", action="pass the candidate C file"))

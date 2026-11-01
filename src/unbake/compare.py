@@ -11,10 +11,11 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
+
+from abucache import stages
 from unbake import (
     alloc,
     api,
-    effort,
     land,
     linkdiag,
     native,
@@ -367,9 +368,9 @@ def run(config: Config, params: Json) -> Json:
     if params.get("widen"):
         from unbake import widen
 
-        with effort.stage("compare.widen"):
+        with stages.stage("compare.widen"):
             return widen.run(config, params)
-    with effort.stage("compare.run"):
+    with stages.stage("compare.run"):
         done = _attempt(config, [Path(params["file"])], params, "compare", False)
         proofs, found, entry = done["proofs"], done["found"], done["submission"]
         score = {v: min(p.score for p in proofs if p.version == v) for v in sorted({p.version for p in proofs})}
@@ -403,7 +404,7 @@ def _row(files: Sequence[Path], done: dict[str, Any]) -> dict[str, Any]:
 
 
 def submit_command(config: Config, params: Json) -> Json:
-    with effort.stage("compare.submit_command"):
+    with stages.stage("compare.submit_command"):
         if params.get("batch_data"):
             from unbake import batch_data
 
@@ -513,7 +514,7 @@ def score_command(config: Config, params: Json) -> Json:
     --alloc the registers (a table of every pseudo with its priority, the target's register and who took it) and the
     instruction order; --quick drops the source rules to answer in seconds. --variants scores a JSON list of
     {file, overlays} in one process, side by side."""
-    with effort.stage("compare.score"):
+    with stages.stage("compare.score"):
         if params.get("variants"):
             return _score_variants(config, params)
         if not params.get("file"):
@@ -980,7 +981,7 @@ def probe_command(config: Config, params: Json) -> Json:
     """Compile only the module that owns the function, the candidate in place of its stand-in, in one version, and
     diff that function against the ROM: the measure score makes, without the tree capture, the source rules, the
     other versions or the landing checks. Writes nothing but --dumps DIR."""
-    with effort.stage("compare.probe"):
+    with stages.stage("compare.probe"):
         extras, version, name, placed, resolved = probe_placement(config, params)
         owner, text = placed.owner, placed.text
         proof = _sited(native.measure(config, version, name, owner.path, text, _overrides(params), extras), resolved)

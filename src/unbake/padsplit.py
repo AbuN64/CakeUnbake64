@@ -13,7 +13,8 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
-from unbake import batch_data, effort, journal, publish, repo, tree, treelock
+from abucache import stages
+from unbake import batch_data, journal, publish, repo, tree, treelock
 from unbake.contracts import Config, Finding, Json, Refusal
 
 _OPEN = re.compile(r"#\s*(?:if|ifdef|ifndef)\b")
@@ -265,7 +266,7 @@ def run(config: Config, params: Json) -> Json:
     of their own (one per module) and the stand-in `unbake sync` writes for each pad word."""
     rows = _rows(Path(params["pad_split"]).resolve())
     with ExitStack() as held:
-        held.enter_context(effort.stage("publish.pad_split"))
+        held.enter_context(stages.stage("publish.pad_split"))
         held.enter_context(
             treelock.hold(config.project.root, exclusive=True, who="pad-split")
         )  # the tree, then the journal

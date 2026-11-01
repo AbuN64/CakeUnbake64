@@ -8,8 +8,9 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from typing import TextIO
 
-from unbake import config, effort
-from unbake.contracts import Finding, Json, StageRecord
+from abucache import stages
+from unbake import config
+from unbake.contracts import Finding, Json
 
 _stream: TextIO | None = None
 _tty = False
@@ -21,7 +22,7 @@ _DEPTH = 3  # stages this shallow report progress lines
 def attach(stream: TextIO, tty: bool) -> None:
     global _stream, _tty
     _stream, _tty = stream, tty
-    effort.listen(_event)
+    stages.listen(_event)
 
 
 def _clear() -> None:
@@ -122,7 +123,7 @@ def finding(finding: Finding) -> str:
     return "\n".join(lines)
 
 
-def summary(records: Sequence[StageRecord]) -> list[str]:
+def summary(records: Sequence[stages.StageRecord]) -> list[str]:
     root = next((r for r in reversed(records) if r.kind == "command"), None)
     if root is None:
         return []
@@ -145,7 +146,7 @@ def summary(records: Sequence[StageRecord]) -> list[str]:
         memory.append(
             f"{label} peak {getattr(root, field + '_rss_peak_bytes') / 1e6:.1f} MB "
             f"of {root.memory_limit_values.get(key, 0) / 1e6:.1f} MB "
-            f"({origin.file if origin else 'unbound'})"
+            f"({origin or 'unbound'})"
         )
     lines.append("memory: " + ", ".join(memory))
     lines.extend(f"cache: {kind} {hits} warm / {misses} cold" for kind, (hits, misses) in sorted(root.cache.items()))
@@ -157,10 +158,10 @@ def summary(records: Sequence[StageRecord]) -> list[str]:
         for r in sorted(records, key=lambda r: r.wall_seconds, reverse=True)[:10]
     )
     lines.extend(
-        f"slow: {config.sentence(f.key)} {f.reason}"
+        f"slow: {config.sentence(f['key'])} {f['reason']}"
         for record in records
         for f in record.findings
-        if f.key.startswith("budget.")
+        if f["key"].startswith("budget.")
     )
     return lines
 
@@ -274,7 +275,7 @@ def finish(command: str, result: Json | None, findings: Sequence[Finding]) -> No
     lines.extend(_written(command, result))
     if command in ("score", "probe"):  # result fields belong to their command's contract (upgrade.source is a URL)
         lines.extend(_score(result or {}))
-    lines.extend(summary(effort.closed()))
+    lines.extend(summary(stages.closed()))
     for line in lines:
         _stream.write(line + "\n")
     _stream.flush()

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from abucache import stages
 from unbake import effort, pool, store
 from unbake.contracts import Config, Refusal
 
@@ -48,14 +49,14 @@ def test_cached_pool_cached_holds_no_lock(cfg: Config) -> None:
 
 
 def test_cached_counts_and_put_overwrites(cfg: Config) -> None:
-    before = effort.counters().get("kind", (0, 0))
+    before = stages.counters().get("kind", (0, 0))
     assert store.cached(cfg, "kind", "a", lambda: b"one") == b"one"
     assert store.cached(cfg, "kind", "a", lambda: b"two") == b"one"
-    after = effort.counters()["kind"]
+    after = stages.counters()["kind"]
     assert (after[0] - before[0], after[1] - before[1]) == (1, 1)
     store.put(cfg, "kind", "a", b"three")
     assert store.cached(cfg, "kind", "a", lambda: b"four") == b"three"
-    assert effort.counters()["kind"] == (after[0] + 1, after[1])
+    assert stages.counters()["kind"] == (after[0] + 1, after[1])
 
 
 def test_append_rows_roundtrip(cfg: Config) -> None:
@@ -111,7 +112,7 @@ def test_log_kinds(cfg: Config) -> None:
     store.log(cfg, "receipt", {"x": 1})
     (row,) = store.rows(cfg, "ledger")
     assert row["schema"] == 2 and row["kind"] == "receipt" and row["body"] == {"x": 1}
-    assert row["invocation"] == effort.invocation() and row["time"]
+    assert row["invocation"] == stages.invocation() and row["time"]
     with pytest.raises(Refusal) as caught:
         store.log(cfg, "bogus", {})
     assert caught.value.findings[0].key == "store.corrupt"
@@ -174,12 +175,12 @@ def test_flock_charges_only_blocked_time(tmp_path, monkeypatch):
             raise BlockingIOError
 
     monkeypatch.setattr(store.fcntl, "flock", flock)
-    with effort.command("check", []):
-        with effort.stage("blocked"), store._flock(tmp_path / "a.lock", store.fcntl.LOCK_EX):
+    with effort.command("check", [], Path.cwd()):
+        with stages.stage("blocked"), store._flock(tmp_path / "a.lock", store.fcntl.LOCK_EX):
             pass
-        with effort.stage("free"), store._flock(tmp_path / "b.lock", store.fcntl.LOCK_EX):
+        with stages.stage("free"), store._flock(tmp_path / "b.lock", store.fcntl.LOCK_EX):
             pass
-    waits = {r.path[-1]: r.wait_seconds for r in effort.closed() if r.kind == "stage"}
+    waits = {r.path[-1]: r.wait_seconds for r in stages.closed() if r.kind == "stage"}
     assert waits["blocked"] > 0 and waits["free"] == 0
     assert calls[1] == store.fcntl.LOCK_EX | store.fcntl.LOCK_NB
 
@@ -355,7 +356,7 @@ def test_a_contended_lock_is_waited_for_inside_a_stage_of_its_own(tmp_path, monk
         stages.append(name)
         yield None
 
-    monkeypatch.setattr(store.effort, "stage", stage)
+    monkeypatch.setattr(store.stages, "stage", stage)
     path = tmp_path / "held.lock"
     with store._flock(path, fcntl.LOCK_EX), store._flock(path, fcntl.LOCK_EX, wait_s=0.0) as taken:
         assert taken is None

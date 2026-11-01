@@ -29,7 +29,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(process, "git", git_mock)
     monkeypatch.setattr(process, "run", git_mock)
     stage = Mock(side_effect=lambda name: nullcontext())
-    monkeypatch.setattr(journal.effort, "stage", stage)
+    monkeypatch.setattr(journal.stages, "stage", stage)
     return config, git_mock, stage
 
 

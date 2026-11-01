@@ -16,13 +16,13 @@ from pathlib import Path
 from typing import Any, cast
 
 import abucache
-from abucache import compile, memo
+from abucache import compile, memo, stages
 from elftools.common.exceptions import ELFError
 from elftools.elf.elffile import ELFFile
 from elftools.elf.relocation import RelocationSection
 from elftools.elf.sections import SymbolTableSection
 
-from unbake import adapters, config, effort, libasm, process, recipes, store, symbols, symptoms, tree, versions, view
+from unbake import adapters, config, libasm, process, recipes, store, symbols, symptoms, tree, versions, view
 from unbake.contracts import (
     Config,
     Finding,
@@ -93,12 +93,12 @@ def _replayed[T](cfg: Config, key: str, produce: Callable[[], T]) -> T:
     """A failed build is as final as an object: its refusal is stored under the key and replayed."""
     refused = store.get(cfg, "refused", key)
     if refused is not None:
-        effort.count("refused", True)
+        stages.count("refused", True)
         raise Refusal(*(_finding(row) for row in json.loads(refused)))
     try:
         return produce()
     except Refusal as refusal:
-        effort.count("refused", False)
+        stages.count("refused", False)
         store.put(cfg, "refused", key, json.dumps([asdict(f) for f in refusal.findings]).encode())
         raise
 
@@ -143,7 +143,7 @@ def objects(
     """Preprocess, compile and assemble one module through abucache's cache keyed by the preprocessed bytes, the
     commands and the tools. The same text compiles once, whatever file, version or checkout asks. With `align` (the
     address mod 8 of the unit's data in the ROM) its assembly loses the alignment that start does not meet."""
-    with effort.stage("native.objects"), _tools(unit, snapshot, unit, version, recipe):
+    with stages.stage("native.objects"), _tools(unit, snapshot, unit, version, recipe):
         cfg = snapshot.config
         work.mkdir(parents=True, exist_ok=True)
         if config.is_assembly(unit.path):
@@ -228,7 +228,7 @@ def warnings(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, w
     """The refused-view warnings of the unit's own compile, kept by the text compiled."""
     if config.is_assembly(unit.path):
         return ()
-    with effort.stage("native.warnings"), _tools(unit, snapshot, unit, version, recipe):
+    with stages.stage("native.warnings"), _tools(unit, snapshot, unit, version, recipe):
         cfg = snapshot.config
         work.mkdir(parents=True, exist_ok=True)
         stem = Path(unit.path).stem
@@ -421,7 +421,7 @@ def measure_names(
 ) -> dict[str, Proof]:
     """`measure` of each name: the module is parsed, preprocessed and compiled once, whatever number of its functions
     are asked for, and only the link and compare are made per function."""
-    with effort.stage("native.measure"):
+    with stages.stage("native.measure"):
         source = sha256(text.encode())
         snapshot, unit, recipe, owned = candidate(config_, version, path, text, overrides, overlays, names)
         proofs: dict[str, Proof] = {}

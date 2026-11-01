@@ -28,7 +28,7 @@ ZEROS = bytes(0x20)
 
 @pytest.fixture(autouse=True)
 def invocation():
-    with effort.command("test-native", ()):
+    with effort.command("test-native", (), Path.cwd()):
         yield
 
 

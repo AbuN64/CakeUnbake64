@@ -7,7 +7,6 @@ import ctypes
 import fcntl
 import gc
 import io
-import json
 import os
 import pickle
 import resource
@@ -29,10 +28,10 @@ from pathlib import Path
 from typing import Any
 
 import psutil
-from abucache import memo
+from abucache import memo, stages
 from abucache.store import absorb_touched, take_touched
 
-from unbake import effort, journal, store
+from unbake import journal, store
 from unbake.contracts import Config, Finding, Host, Json, Refusal, Snapshot, code_identity, digest, sha256
 
 __plumbing__ = True  # contracts.code_identity names this code and never follows it: it shapes no result
@@ -77,8 +76,6 @@ _sent: dict[str, set[Any]] = {}  # name -> the keys of that table a spill file o
 _forked: set[str] = set()  # the keys of `_SHARED` the current workers were forked with
 
 
-_WAITS = "waits.jsonl"  # in the slot directory: one line per wait of 60 s or more, whoever waited (effort.WAIT_NOTE)
-_WAITS_KEEP = 1 << 20  # bytes: the wait log keeps its newest half once it grows past this
 
 
 _HARD_LIMIT = 4  # a worker is refused memory at this many times host memory_worker_bytes; that budget sizes the pool
@@ -146,38 +143,6 @@ def _foreign(base: Path) -> tuple[list[Path], list[Path]]:
     return dirs, sorted(p for p in files if _busy(p))
 
 
-def _note_wait(what: str, seconds: float, detail: str, project: str) -> None:
-    """Appends one line for a wait of this command to the host's wait log (the slot directory's `waits.jsonl`), as a
-    single O_APPEND write so concurrent commands never interleave: who waited, for what, how long, and who held it.
-    The log is the host's, not a project's: the peek reads one file for every tree on the host."""
-    pool = _dir[0] if _dir else Path(os.environ.get("XDG_RUNTIME_DIR", "")) / _POOL
-    line = {
-        "at": round(time.time(), 1),
-        "pid": os.getpid(),
-        "project": project,
-        "what": what,
-        "seconds": round(seconds, 1),
-        "detail": detail,
-    }
-    try:
-        path = pool / _WAITS
-        if path.exists() and path.stat().st_size > _WAITS_KEEP:
-            kept = path.read_bytes()[-_WAITS_KEEP // 2 :].partition(b"\n")[2]
-            part = path.with_name(f".{_WAITS}.{os.getpid()}")
-            part.write_bytes(kept)
-            part.replace(path)
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC, 0o600)
-        try:
-            os.write(fd, (json.dumps(line) + "\n").encode())
-        finally:
-            os.close(fd)
-    except OSError:  # a missing or read-only runtime directory loses the line, never the command
-        pass
-
-
-effort.wait_hook = _note_wait
-
-
 def _pool(base: Path) -> Path:
     """The slot directory of this protocol, once no command of another protocol is live: their slots are other files,
     so running beside one would book the same cores twice. Until they finish this command sleeps on their pidfds and
@@ -185,12 +150,12 @@ def _pool(base: Path) -> Path:
     if live := _foreign(base)[1]:
         named = ", ".join(str(_pid(p)) for p in live)
         reason = f"pids {named} hold host slots under another slot protocol than {_PROTOCOL}"
-        effort.say(f"unbake: waiting for {reason} to finish")
-        with effort.stage("pool.protocol") as span:  # the wait is a stage of its own in the tree
+        stages.say(f"unbake: waiting for {reason} to finish")
+        with stages.stage("pool.protocol") as span:  # the wait is a stage of its own in the tree
             span.add(items=len(live), findings=[Finding("pool.protocol", reason, blocking=False)])
             began = time.perf_counter()
             _drain(base)
-            effort.waited(time.perf_counter() - began, "slots", f"slot protocol of pids {named}")
+            stages.waited(time.perf_counter() - began, "slots", f"slot protocol of pids {named}")
     pool = base / _POOL
     pool.mkdir(exist_ok=True)
     return pool
@@ -482,7 +447,7 @@ def _wait_free(pool: Path, mine: Path, want: int) -> None:
         if time.monotonic() - last >= 15.0:  # a wait is never silent (10-22: `recipe status` hung 60 s saying nothing)
             last = time.monotonic()
             who = ", ".join(f"{_pid(p)} {_command(_pid(p))}" for p in _peers(pool, mine) if p != mine)
-            effort.say(
+            stages.say(
                 f"unbake: waiting for a worker slot ({last - began:.0f}s); the slots are held by: {who or 'none'}"
             )
         return False
@@ -533,7 +498,7 @@ def _acquire(want: int, active: int = 0, cap: int = 0) -> None:
     _take(pool, size, take)
     if 0 < len(_slots) < take and _short != [len(_slots), take]:  # a share short of the work shows in the tree once
         _short[:] = [len(_slots), take]
-        with effort.stage("pool.short_slots") as span:
+        with stages.stage("pool.short_slots") as span:
             others = [str(_pid(p)) for p in peers if p != mine]
             span.add(
                 items=take - len(_slots),
@@ -552,12 +517,12 @@ def _acquire(want: int, active: int = 0, cap: int = 0) -> None:
         holders = [_pid(p) for p in peers if p != mine]
         _enter(pool)  # first come, first served: a newer command takes no slot while this one waits
         try:
-            with effort.stage("pool.wait_slot") as span:
+            with stages.stage("pool.wait_slot") as span:
                 held = f"held by pids {', '.join(str(p) for p in holders)}" if holders else "held by no live command"
                 span.add(items=len(holders), findings=[Finding("pool.wait_slot", held, blocking=False)])
                 began = time.perf_counter()
                 _wait_free(pool, mine, want)
-                effort.waited(time.perf_counter() - began, "slots", held)
+                stages.waited(time.perf_counter() - began, "slots", held)
             _, size, share = _divide(pool, mine, want)  # a release frees whole shares: take the rest of this one too
             _share = share
             _take(pool, size, min(share, cap) if cap else share)
@@ -728,7 +693,7 @@ def _job(function: Callable[[Any], Any], item: Any) -> tuple[bool, Any, Json]:
     start_ns = time.monotonic_ns()
     before = resource.getrusage(resource.RUSAGE_SELF)
     spawned = resource.getrusage(resource.RUSAGE_CHILDREN)
-    with effort.capture() as records:
+    with stages.capture() as records:
         try:
             with memo.scoped():
                 value, ok = function(item), True
@@ -786,9 +751,9 @@ def _spill(config: Config, name: str, value: Callable[[], bytes]) -> str:
             part.write_bytes(value())
             part.replace(target)
             path = str(target)
-            effort.count("pool.spill", False)
+            stages.count("pool.spill", False)
         else:
-            effort.count("pool.spill", True)
+            stages.count("pool.spill", True)
         _spilled[name] = path  # newest last
         return path
 
@@ -938,7 +903,7 @@ def _chunk(
     if sink and outcomes:
         clean = len(sink) > 3 and sink[3]  # a stable key stores only a result with nothing to report
         before = resource.getrusage(resource.RUSAGE_SELF)
-        with effort.capture() as written, effort.stage("pool.sink"):
+        with stages.capture() as written, stages.stage("pool.sink"):
             store.put_many(
                 sink[0],
                 sink[1],
@@ -964,7 +929,7 @@ def _chunk(
         outcomes[-1] = (*outcomes[-1][:2], {**outcomes[-1][2], "touched": take_touched()})
     records = [r for _, _, envelope in outcomes for r in envelope["records"]]
     parents = {r.parent for r in records}
-    folded = [asdict(r) for r, _ in effort.fold([(r, r.span not in parents) for r in records])]
+    folded = [asdict(r) for r, _ in stages.fold([(r, r.span not in parents) for r in records])]
     for n, (ok, value, envelope) in enumerate(outcomes):  # the chunk's records travel once, in its last envelope
         outcomes[n] = (ok, value, {**envelope, "records": folded if n == len(outcomes) - 1 else []})
     return outcomes
@@ -1072,7 +1037,7 @@ class _Run:
         warm = rows if whole else [k and store.get(config, self.name, k, named=True) for k in keys]
         for index, found in enumerate(warm):
             ok, value = store.loads(found) if found else (False, None)
-            effort.count(self.name, ok)
+            stages.count(self.name, ok)
             if ok:
                 self.outcomes[index] = (True, value, {})
         self.todo = [i for i, outcome in enumerate(self.outcomes) if outcome is None]
@@ -1102,7 +1067,7 @@ class _Run:
             absorb_touched(meta.pop("touched", {}))
             self.outcomes[index] = (outcome[0], outcome[1], meta)
         self.done, self.last = self.done + len(picked), time.monotonic_ns()
-        effort.progress(self.name, self.done, len(self.items))
+        stages.progress(self.name, self.done, len(self.items))
 
 
 def _resolve(config: Config, runs: Sequence[_Run]) -> None:
@@ -1139,7 +1104,7 @@ def gather(config: Config, groups: Sequence[tuple[Any, ...]]) -> list[list[Any]]
     """Runs independent (name, function, items[, key]) groups in one dispatch loop, so a small group never idles the
     workers. A keyed group resolves its cache hits in the parent and dispatches only its misses. Every chunk is
     ready at once: as many are in flight as the slots held allow, and a finished one is replaced at once."""
-    with effort.stage("pool.map"):
+    with stages.stage("pool.map"):
         start_ns, waited, current, rebalanced = time.monotonic_ns(), 0.0, (0, 0), time.monotonic()
         held, mark = 0.0, time.monotonic()  # slot-seconds this gather held: the share it was given, as it changed
         runs = [_Run(*group) for group in groups]
@@ -1239,7 +1204,7 @@ def gather(config: Config, groups: Sequence[tuple[Any, ...]]) -> list[list[Any]]
                     if _users_add(-1) == 0:
                         _release()
             for run in runs:
-                effort.record_pool(
+                stages.record_pool(
                     run.name,
                     len(run.items),
                     jobs=run.submitted,

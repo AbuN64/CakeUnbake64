@@ -15,6 +15,7 @@ import fixture
 import psutil
 import pytest
 
+from abucache import stages
 from unbake import effort, process
 from unbake.contracts import Config, Host, Project, Refusal
 
@@ -132,9 +133,9 @@ def test_timeout_kills_group(tmp_path, stdin):
 
 
 def test_native_recorded(tmp_path):
-    with effort.command("test-process", ()):
+    with effort.command("test-process", (), Path.cwd()):
         result = process.run("native-child", ("/bin/sh", "-c", "echo recorded"), tmp_path, tmp=tmp_path / "tmp")
-    records = effort.closed()
+    records = stages.closed()
     native = [r for r in records if r.kind == "native"]
     assert len(native) == 1
     assert native[0].path[-1] == "native-child"
@@ -249,7 +250,7 @@ def test_wait4_accounting_and_record_callback(tmp_path, monkeypatch):
     record = Mock()
     monkeypatch.setattr(process.subprocess, "Popen", popen)
     monkeypatch.setattr(process.os, "wait4", wait4)
-    monkeypatch.setattr(effort, "record_native", record)
+    monkeypatch.setattr(stages, "record_native", record)
     before = perf_counter()
     result = process.run("accounting", ("/bin/sh", "-c", "exit 7"), tmp_path, tmp=tmp_path / "tmp")
     after = perf_counter()
@@ -282,7 +283,7 @@ def test_git_delegates_and_refuses(process_config, monkeypatch, exit_code):
         result = replace(result, signal=9)
     run = Mock(return_value=result)
     monkeypatch.setattr(process, "run", run)
-    with effort.command("mock-git", ()):
+    with effort.command("mock-git", (), Path.cwd()):
         if exit_code == 0:
             assert process.git(process_config, "status", "--short") is result
         else:
@@ -307,7 +308,7 @@ def test_git_delegates_and_refuses(process_config, monkeypatch, exit_code):
         root,
         tmp=process.scratch(root),
     )
-    assert any(r.path[-1] == "process.git" for r in effort.closed() if r.kind == "stage")
+    assert any(r.path[-1] == "process.git" for r in stages.closed() if r.kind == "stage")
 
 
 def test_children_get_the_project_tmpdir(tmp_path):
@@ -408,7 +409,7 @@ def test_the_runs_of_one_make_are_stages_of_their_own(process_config, monkeypatc
     monkeypatch.setattr(process, "tool", lambda *a, **k: Path("make"))
     monkeypatch.setattr(process, "run", lambda *a, **k: "ok")
     monkeypatch.setattr(front, "build", three_runs)
-    with effort.capture() as closed:
+    with stages.capture() as closed:
         process.make(process_config, ["x"])
     assert [r.path[-1] for r in closed if r.path[-2:-1] == ("make",) and r.path[-1] != "(own)"] == [
         "make.preprocess",

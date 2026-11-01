@@ -7,7 +7,8 @@ from collections.abc import Sequence
 from contextlib import ExitStack
 from pathlib import Path
 
-from unbake import effort, journal, process, publish, store, tree, treelock
+from abucache import stages
+from unbake import journal, process, publish, store, tree, treelock
 from unbake.contracts import Config, Finding, Json, Refusal, digest
 
 
@@ -69,7 +70,7 @@ def run(config: Config, params: Json) -> Json:
         raise Refusal(Finding("land.request", "--batch-data cannot be combined with files or --function."))
     rows = _manifest(Path(params["batch_data"]).resolve())
     with ExitStack() as held:
-        held.enter_context(effort.stage("publish.batch_data"))
+        held.enter_context(stages.stage("publish.batch_data"))
         if not held.enter_context(store.exclusive(config, "land", wait=False)):
             raise Refusal(Finding("land.request", "A landing is running; retry the data batch when idle."))
         held.enter_context(store.shared(config, "structure"))  # the drain's order: land, then structure

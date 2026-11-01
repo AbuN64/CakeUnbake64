@@ -15,10 +15,10 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
-from abucache import memo
+from abucache import memo, stages
 
 from unbake import config as configuration
-from unbake import effort, journal, rnc, store, windows
+from unbake import journal, rnc, store, windows
 from unbake.contracts import Config, Finding, Json, Plan, Refusal, digest, sha256, sha256_file
 
 Spans = list[tuple[int, int]]
@@ -619,7 +619,7 @@ def land(config: Config, packet: Json, plan_files: str | None = None) -> Json:
     audit refuses a version that holds records without it). Returns the git commands, the counts and the per-version
     credit delta."""
     file = path_of(config)
-    with effort.stage("blobs.land"):
+    with stages.stage("blobs.land"):
         old = _read(config)
         plan = import_plan(config, packet)
         if plan.blocking:
@@ -635,7 +635,7 @@ def land(config: Config, packet: Json, plan_files: str | None = None) -> Json:
             else {"files": [], "message": plan.message, "add": "", "commit": ""}
         )
         try:
-            with effort.stage("blobs.land.readback"):
+            with stages.stage("blobs.land.readback"):
                 if _read(config) != text:
                     raise Refusal(Finding("blobs.land", "blobs.toml read back differs from the plan", path=file))
                 document = parse(config, text)
@@ -649,11 +649,11 @@ def land(config: Config, packet: Json, plan_files: str | None = None) -> Json:
                 gone = sorted(n for n in packet.get("supersedes", ()) if n in document["blob"])
                 if gone:
                     raise Refusal(Finding("blobs.land", f"superseded rows read back: {', '.join(gone[:5])}", path=file))
-            with effort.stage("blobs.land.audit"):
+            with stages.stage("blobs.land.audit"):
                 audit = import_module("unbake.policy").audit_command(
                     {"project": str(config.project.root), "against": "HEAD", "plan": plan_files}
                 )
-            with effort.stage("blobs.land.partition"):
+            with stages.stage("blobs.land.partition"):
                 after = _partitions(config)
                 for v, p in after.items():
                     held = sum(p[k] for k in PARTS)
@@ -806,7 +806,7 @@ def _packet(path: str) -> Json:
 def run(config: Config, params: Json) -> Json:
     """`unbake blobs`: list the blobs and the partition of every version; `import PACKET` merges an evidence packet;
     `land PACKET [--plan FILES.tsv]` imports it as a checked, all-or-nothing facts-only landing."""
-    with effort.stage("blobs.run"):
+    with stages.stage("blobs.run"):
         action = list(params.get("action") or ())
         if action[:1] == ["prove"]:
             if len(action) != 3:
