@@ -441,10 +441,14 @@ def verdicts(
             layout[module, cls][version] = list(dict.fromkeys(u for _, _, u in hits))
             for (i, _, one), (j, _, two) in pairwise(hits):
                 if following.get(i) != j:
-                    between = [seq[k]["u"] for k in live if i < k < j and owner.get(seq[k]["u"]) != module]
+                    between = list(
+                        dict.fromkeys(seq[k]["u"] for k in live if i < k < j and owner.get(seq[k]["u"]) != module)
+                    )
                     if between:
                         gapped.add((module, version))
-                        hard[module].append(f"gap: {version} {cls} {one} .. {two} has {', '.join(between[:3])} between")
+                        hard[module].append(
+                            f"gap: {version} {cls} {one} .. {two} has {len(between)} between: {', '.join(between)}"
+                        )
                 for k in range(i + 1, j):
                     if seq[k]["k"] == "align":
                         soft[module].append(f"align: {version} {cls} ALIGN({seq[k]['a']}) before {two}")

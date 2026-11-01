@@ -31,7 +31,21 @@ def test_another_modules_bytes_between_two_units_keep_them_separate() -> None:
     rows = [("a", "M"), ("x", "N"), ("b", "M")]
     seq = [entry("a", "text", 8), entry("x", "text", 4), entry("b", "text", 8)]
     out = run(rows, seq)["M"]
-    assert out["verdict"] == "separate" and out["hard"] == ["gap: us text a .. b has x between"]
+    assert out["verdict"] == "separate" and out["hard"] == ["gap: us text a .. b has 1 between: x"]
+
+
+def test_a_gap_names_every_unit_between_once_not_the_first_three() -> None:
+    """SMP_OVERLAY: ~35 other modules sit between two units; a unit with several runs counts once."""
+    rows = [("a", "M"), ("b", "M")]
+    between = ["u1", "u2", "u3", "u4", "u5"]
+    seq = [
+        entry("a", "text", 8),
+        *(entry(u, "text", 4) for u in between),
+        entry("u2", "text", 4),
+        entry("b", "text", 8),
+    ]
+    out = run(rows, seq)["M"]
+    assert out["hard"] == ["gap: us text a .. b has 5 between: u1, u2, u3, u4, u5"]
 
 
 def test_an_empty_entry_between_does_not_break_adjacency() -> None:
@@ -576,4 +590,4 @@ def test_a_gap_in_a_version_leaves_no_lma_finding_for_it() -> None:
         with_parts(entry("b", "rodata", 4, ".rodata"), rodata=piece(4, 4)),
     ]
     out = run(rows, seq)["M"]
-    assert out["hard"] == ["gap: us rodata a .. b has x between"]
+    assert out["hard"] == ["gap: us rodata a .. b has 1 between: x"]
