@@ -725,7 +725,7 @@ _BLOB_KEYS = (
 
 def _blobs_line(label: str, held: Json, cells: int) -> str:
     """Blobs: █ decoded (proven fill included), ▒ identified, ░ the rest, over the blob bytes progress.json also
-    states; the unknown bytes are no blob and have their own line."""
+    states; the unknown bytes are no blob; the README states them only in the summary line."""
     return _bar(label, held["blobs_decoded"], held["blobs_total"], held["blobs_total"], cells)
 
 
@@ -741,11 +741,6 @@ def _functions_line(label: str, held: Json) -> str:
     """The README line of the functions in the same words: exact (matched), fuzzy (a measured draft), none."""
     exact, draft = held["functions_matched"], held["functions_fuzzy"]
     return f"{label} exact {exact:,}, fuzzy {draft:,}, none {held['functions_total'] - exact - draft:,}"
-
-
-def _unknown_line(label: str, held: Json) -> str:
-    """The README line of the ROM bytes no class holds: shown whenever there are any, never inside a percentage."""
-    return f"{label} {held['unknown_total']:,} bytes"
 
 
 def _linker_fill(bucket: Json, counted: bool) -> str:
@@ -817,8 +812,6 @@ def readme(text: str, config: Any, report: Json) -> str:
                 rows.append(_blobs_line("blobs".ljust(9), versions[v], cells))
                 rows.append(_functions_line("fn rows".ljust(9), versions[v]))
                 rows.append(_states_line("blob rows".ljust(9), versions[v]))
-                if versions[v]["unknown_total"]:
-                    rows.append(_unknown_line("unknown".ljust(9), versions[v]))
             blocks.append(header + "\n|---|\n| <pre><code>" + "</code><br><code>".join(rows) + "</code></pre> |")
         text = text[: text.index(begin) + len(begin)] + "\n" + "\n\n".join(blocks) + "\n" + text[text.index(end) :]
         first, last = settings["dependencies_begin"], settings["dependencies_end"]

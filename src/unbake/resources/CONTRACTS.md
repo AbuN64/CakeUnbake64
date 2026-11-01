@@ -313,7 +313,7 @@ code, with the parsed fields of the 64-byte cartridge header: `pi` `release`/`pa
 `clock_rate`, `entry_point`, libultra `release`, `crc1`, `crc2`, `name`, `game_id`, `country`, `version`; never raw
 bytes and nothing past 0x40), `code` and `data` (`bytes`, `matched`), `blob` (`bytes`, `decoded`), `linker_fill`
 and `unknown` (`bytes`), and the `bytes` sum to `rom_size` exactly (`audit.partition` refuses any other sum). The
-README shows 100.00% only at `unknown` 0, floors every other percentage and lists the unknown bytes on their own line.
+README shows 100.00% only at `unknown` 0, floors every other percentage and states the unknown bytes only in the summary line, never as a per-version row.
 progress.json carries no map. Each version's map is its own file `docs/map-<version>.json` (schema 1, written with
 progress.json under the same hold): `version`, `rom_size`, `fns` rows `[name, rom, size, percent, path, line]`,
 `blobs` rows `[id, rom, size, state, type]` of the live content types only (accounting rows stay in blobs.toml), and `spans` with `data`, `platform` and `fill` (proven fill) half-open

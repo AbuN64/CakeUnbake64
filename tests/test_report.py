@@ -1,6 +1,7 @@
 """Progress from the source tree: the credit formula, the README block and the work counts, on mocked inputs."""
 
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -344,9 +345,13 @@ def test_readme_with_blob_accounting_measures_against_the_rom_and_drops_the_part
     for row in ("code      [", "data      [", "functions ["):  # values of the old rows are the same
         assert row.strip() in plain and row.strip() in out
     assert "blobs     [████████▒▒▒▒▒▒▒▒▒▒▒▒]  40.00% (~100.00%)  400 of 1,000</code>" in out
-    assert "unknown   7,294,964 bytes</code>" in out  # the bytes no class holds: their own line, in no percentage
-    for gone in ("platform  [", "unknown   [", "rom       ", "data = C globals"):
+    for gone in ("platform  [", "unknown   ", "rom       ", "data = C globals"):  # no bare unknown row per version
         assert gone not in out
+    boxes = [b for b in out.split("\n\n") if b.startswith("| ")]
+    assert len(boxes) == len(config.project.version)
+    for box in boxes:  # a per-version box holds the barred rows and the two count lines, never a bare unknown row
+        rows = re.findall(r"<code>(.*?)</code>", box)
+        assert [" ".join(r.split()[:2]) for r in rows] == ["code [", "data [", "functions [", "blobs [", "fn rows", "blob rows"]
     # the top bars are measured against the exact ROM size: matched code+data+blobs plus platform, reaching fuzzy
     assert " of 8,388,608 bytes, linker fill 0 bytes, unknown " in out and "us   [" in out
     assert " of 16,777,216 bytes, linker fill 0 bytes, unknown " in out
