@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import os
+import re
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -28,6 +29,9 @@ MISS = 3  # `get` exit code: no object of this key is stored (the program runs);
 _KIND = "unit"
 _STORED = "store"  # a tally line besides abucache's hit and miss: an object put in the store
 _TALLY = "objcache.tally"
+_PASSES = Path(__file__).parent / "resources" / "make"
+# unbake's resources, spelled by whichever install runs make
+_INSTALLED = re.compile(r"[^\s'\"]*/unbake/resources(?=/)")
 
 
 def _tally_path(store: Path) -> Path:
@@ -81,6 +85,21 @@ def tools(compiler: str) -> str:
     return compile.identity(sorted(p for p in folder.iterdir() if p.is_file()))
 
 
+def _installed(text: str) -> str:
+    """`text` with the place of unbake's own resources (the front script in the flags, the passes in the program)
+    named `<unbake>`: a gate job runs from a venv of its own, so that place differs per job, and keyed by it no job
+    found an object another had made (9278 compiles from the cache, 450 s of objects made again)."""
+    return _INSTALLED.sub("<unbake>", text)
+
+
+def _passes() -> str:
+    """What the passes in the program do: the digest of their text, which the place no longer says."""
+    sums = hashlib.sha256()
+    for path in sorted(_PASSES.glob("*.py")):
+        sums.update(path.name.encode() + b"\0" + path.read_bytes())
+    return sums.hexdigest()
+
+
 def entry(out: str, compiler: str, flags: str, textsize: str, program: str, extracted: Sequence[str]) -> str:
     """The store key of the object `out` the program would make."""
     sums = hashlib.sha256()
@@ -88,7 +107,9 @@ def entry(out: str, compiler: str, flags: str, textsize: str, program: str, extr
         with contextlib.suppress(OSError):
             sums.update(Path(name).read_bytes())
     source = out.removesuffix(".o") + ".i"
-    step = compile.Step("object", Path(out).name, (flags, textsize, program, sums.hexdigest()))
+    step = compile.Step(
+        "object", Path(out).name, (_installed(flags), textsize, _installed(program), _passes(), sums.hexdigest())
+    )
     return compile.key(Path(source).read_bytes(), Path(source).name, [step], tools(compiler))
 
 

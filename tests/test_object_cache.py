@@ -203,3 +203,43 @@ def test_main_reads_the_makefiles_word_order(tmp_path, monkeypatch):
     assert seen[1] == ("cache", "a.o", "cc", "flags", "0x10", "prog", ["x.s"])
     with pytest.raises(SystemExit):
         objcache.main(["objcache", "get", str(tmp_path), "99", "a.o", "cc", "flags", "0x10", "prog"])
+
+
+# a slice of the real gate job: make expands the flags and the program with the place of unbake's resources, and the
+# gate job's venv is a new one per job (rig-20261101T102020Z: 0 of 9278 objects found, 450 s of passes and objects)
+FRONT = "sh {venv}/lib/python3.12/site-packages/unbake/resources/cc_front.sh /c/store.cc tools/gcc-2.8.1-sn64/cc1"
+PASS = "python3 -I {venv}/lib/python3.12/site-packages/unbake/resources/make/strip_align.py build/de/x.s 8"
+
+
+def test_the_place_of_unbake_is_not_the_key(tmp_path):
+    a, b = trees(tmp_path)
+    venv_a, venv_b = "/run/user/1000/job/tRI5fG/gate-unbake-venv", "/run/user/1000/job/w9Kq2x/gate-unbake-venv"
+    a.build(flags=f"{FRONT.format(venv=venv_a)} -O2", program=f"@compile cc x.i && {PASS.format(venv=venv_a)}")
+    b.build(flags=f"{FRONT.format(venv=venv_b)} -O2", program=f"@compile cc x.i && {PASS.format(venv=venv_b)}")
+    assert (a.runs, b.runs) == (1, 0)
+
+
+def test_the_link_to_the_live_venv_names_the_same_place(tmp_path):
+    a, b = trees(tmp_path)
+    a.build(program="python3 -I /home/abu/venv-unbake.1f3a/lib/python3.12/site-packages/unbake/resources/make/p.py x")
+    b.build(program="python3 -I /home/abu/venv-unbake/lib/python3.12/site-packages/unbake/resources/make/p.py x")
+    assert b.runs == 0
+
+
+def test_a_changed_pass_misses_where_it_is_installed(tmp_path, monkeypatch):
+    a, b = trees(tmp_path)
+    passes = tmp_path / "passes"
+    passes.mkdir()
+    (passes / "strip_align.py").write_text("one")
+    monkeypatch.setattr(objcache, "_PASSES", passes)
+    a.build()
+    (passes / "strip_align.py").write_text("two")
+    b.build()
+    assert b.runs == 1
+
+
+def test_another_path_that_is_not_unbake_is_the_key(tmp_path):
+    a, b = trees(tmp_path)
+    a.build(program="python3 -I /opt/one/make/strip_align.py x")
+    b.build(program="python3 -I /opt/two/make/strip_align.py x")
+    assert b.runs == 1
