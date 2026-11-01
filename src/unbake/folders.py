@@ -826,15 +826,41 @@ def _symbols(elf: Path) -> tuple[list[int], list[tuple[int, int, str]]]:
     return [a for a, _, _ in found], found
 
 
-def _moved(config: Config, version: str, owners: Mapping[str, str], limit: int = 50) -> list[str]:
-    """Where the built ROM of a version differs from its baserom, one line per module (a merged unit of `owners`, else
-    the symbol): the first differing ROM offset and the symbol at or before its address. A ROM shorter or longer
-    than the baserom is named first."""
+def _built_rom(config: Config, version: str, baserom: bytes, jobs: int) -> bytes | None:
+    """The ROM of a version as its Makefile recipe cuts it: the ROM make left, else (the recipe deletes a ROM whose
+    SHA-1 is wrong, and that ROM is the one to diff) the head of the baserom up to the first segment, the linked
+    image after it, cut or padded to the baserom's length. The image is relinked when the failed build lost it; None
+    when it cannot be linked."""
     project = config.project
     built = project.root / "build" / version / f"{project.name}.z64"
-    if not built.is_file():
-        return [f"{version}: no ROM was built"]
-    ours, theirs = built.read_bytes(), configuration.rom(project, version).read_bytes()
+    if built.is_file():
+        return built.read_bytes()
+    image = project.root / "build" / version / f"{project.name}.bin"
+    if not image.is_file():
+        make = process.tool(config, "make")
+        process.run(
+            f"make {image.name}",
+            [make, f"-j{jobs}", image.relative_to(project.root).as_posix()],
+            project.root,
+            tmp=process.scratch(project.root),
+            timeout=3600,
+        )
+    if not image.is_file():
+        return None
+    head = baserom[: project.version[version].segments[0].rom]
+    return (head + image.read_bytes())[: len(baserom)].ljust(len(baserom), b"\0")
+
+
+def _moved(config: Config, version: str, owners: Mapping[str, str], limit: int = 50, jobs: int = 4) -> list[str]:
+    """Where the built ROM of a version differs from its baserom, one line per module (a merged unit of `owners`, else
+    the symbol): the first differing ROM offset and the symbol at or before its address. A ROM shorter or longer
+    than the baserom is named first. The ROM is the one make left or, when the Makefile deleted it on a wrong
+    SHA-1, the one its recipe would have cut (`_built_rom`)."""
+    project = config.project
+    theirs = configuration.rom(project, version).read_bytes()
+    ours = _built_rom(config, version, theirs, jobs)
+    if ours is None:
+        return [f"{version}: no ROM was built and the image does not link"]
     lines = [] if len(ours) == len(theirs) else [f"{version}: ROM is {len(ours)} bytes, the baserom {len(theirs)}"]
     elf = project.root / "build" / version / f"{project.name}.elf"
     addresses, table = _symbols(elf) if elf.is_file() else ([], [])
@@ -880,7 +906,7 @@ def prove(config: Config, params: Json) -> Row:
         tail = [line for line in (done.stdout + done.stderr).decode(errors="replace").splitlines() if line.strip()]
         if done.exit != 0:
             owners = params.get("owners") or {}
-            named = [line for v in config.project.versions for line in _moved(config, v, owners)]
+            named = [line for v in config.project.versions for line in _moved(config, v, owners, jobs=jobs)]
             raise _refuse(f"make check exit {done.exit} after the move", missing=(*named, *tail[-20:]))
         return {"proved": True, "check": tail[-5:]}
 

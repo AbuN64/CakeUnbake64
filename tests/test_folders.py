@@ -6,6 +6,7 @@ import json
 import subprocess
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import fixture
@@ -451,3 +452,68 @@ def test_a_folder_keeping_its_name_while_its_contents_are_renamed_inside_is_fold
 def test_a_folder_whose_files_scatter_is_not_folded() -> None:
     tracked = ["src/lib/a.c", "src/lib/b.c"]
     assert "src/lib/" not in folders.folded(tracked, {"src/lib/a.c": "src/x/a.c", "src/lib/b.c": "src/y/b.c"})
+
+
+def _refused_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, keep_bin: bool) -> SimpleNamespace:
+    """A slice of MERGE-TOOL-6's refusal (ENGINE-CLEAN rig-20261101T080153Z): de's image differs from the baserom in
+    one word of a merged module, and make deleted build/de/RageWars.z64 on the SHA-1 mismatch."""
+    rom0, size, bad = 16, 64, 40
+    baserom = bytes(range(size))
+    image = bytearray(baserom[rom0:])
+    image[bad - rom0] ^= 0xFF
+    (tmp_path / "roms").mkdir()
+    (tmp_path / "roms" / "baserom.de.z64").write_bytes(baserom)
+    build = tmp_path / "build" / "de"
+    build.mkdir(parents=True)
+    if keep_bin:
+        (build / "RageWars.bin").write_bytes(bytes(image))
+    project = SimpleNamespace(
+        root=tmp_path,
+        name="RageWars",
+        versions=["de"],
+        version={"de": SimpleNamespace(segments=[SimpleNamespace(rom=rom0)])},
+    )
+    monkeypatch.setattr(folders.configuration, "rom", lambda p, v: tmp_path / "roms" / f"baserom.{v}.z64")
+    monkeypatch.setattr(folders.rommap, "pieces", lambda c, v: [("main", rom0, size, 0x80000000)])
+    symbols = [(0x80000000 + 8, 16, "other"), (0x80000000 + 16, 16, "dynlight_add")]
+    monkeypatch.setattr(folders, "_symbols", lambda elf: ([a for a, _, _ in symbols], symbols))
+    monkeypatch.setattr(folders.merging, "object_facts", lambda obj: (0, 0, 0, ["dynlight_add"]))
+    (build / "RageWars.elf").write_bytes(b"")
+    (build / "src").mkdir()
+    (build / "src" / "GDYNLIGHT.CPP.o").write_bytes(b"")
+    return SimpleNamespace(project=project)
+
+
+def test_a_rom_make_deleted_on_a_wrong_sha1_is_cut_from_the_image_and_names_the_module_that_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _refused_world(tmp_path, monkeypatch, keep_bin=True)
+    lines = folders._moved(config, "de", {"src/GDYNLIGHT.CPP": "SOURCE/ENGINE/GDYNLIGHT.CPP"})
+    assert lines == ["de: module SOURCE/ENGINE/GDYNLIGHT.CPP, symbol dynlight_add, first differing ROM offset 0x28"]
+    assert not (tmp_path / "build" / "de" / "RageWars.z64").exists()  # nothing is left for make to call up to date
+
+
+def test_a_lost_image_is_relinked_by_make_before_the_rom_is_cut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _refused_world(tmp_path, monkeypatch, keep_bin=False)
+    ran: list[list[str]] = []
+
+    def relink(name, argv, cwd, **kw):
+        ran.append([str(a) for a in argv])
+        (tmp_path / "build" / "de" / "RageWars.bin").write_bytes(bytes(range(16, 64)))
+        return SimpleNamespace(exit=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(folders.process, "tool", lambda c, n: "make")
+    monkeypatch.setattr(folders.process, "run", relink)
+    assert folders._moved(config, "de", {}) == []  # the image matches the baserom: nothing differs
+    assert ran == [["make", "-j4", "build/de/RageWars.bin"]]
+
+
+def test_an_image_that_does_not_link_is_named_not_silently_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _refused_world(tmp_path, monkeypatch, keep_bin=False)
+    monkeypatch.setattr(folders.process, "tool", lambda c, n: "make")
+    monkeypatch.setattr(folders.process, "run", lambda *a, **k: SimpleNamespace(exit=2, stdout=b"", stderr=b""))
+    assert folders._moved(config, "de", {}) == ["de: no ROM was built and the image does not link"]
