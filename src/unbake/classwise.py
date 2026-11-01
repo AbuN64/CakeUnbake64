@@ -175,14 +175,37 @@ def _condition(versions: Iterable[str], guards: Mapping[str, str]) -> str:
     return " || ".join(f"defined({guards[v]})" for v in sorted(versions))
 
 
-def _fill(n: int, fill: Row, guards: Mapping[str, str]) -> Chunk:
-    """The array of the stale bytes `fill` names; under a condition when only some versions link them there."""
+def _fill(n: int, fill: Row, versions: Sequence[str], guards: Mapping[str, str]) -> Chunk:
+    """The array of the stale bytes `fill` names for `versions`; under a condition when only some versions link them
+    there."""
     const = "const " if fill["cls"] == "rodata" else ""
     text = f"{const}unsigned char unbake_fill_{n}[] = {{{', '.join(f'0x{b:02X}' for b in fill['data'])}}};"
     chunk = Chunk(fill["after"], 1 << 30, text, text, [fill["cls"]], [f"unbake_fill_{n}"])
-    if guards and set(fill["versions"]) != set(guards):
-        chunk.when = _condition(fill["versions"], guards)
+    if guards and set(versions) != set(guards):
+        chunk.when = _condition(versions, guards)
     return chunk
+
+
+def _fill_places(
+    fill: Row,
+    moves: Mapping[tuple[str, str], Mapping[str | None, tuple[int, list[str]]]],
+    rank: Mapping[str, Mapping[str, int]],
+) -> list[tuple[tuple[int, int, int, int], list[str]]]:
+    """Where the stale bytes of `fill` sit in the chain: right after the unit's data as the fill's versions link it. A
+    unit some versions link elsewhere is emitted twice (its original and a copy per anchor), so the bytes follow the
+    copy of the versions that hold them, never the last copy of the unit. Returns (place, versions) per distinct
+    place; the place is the chain key of the unit's copy with the array's position past every statement of it."""
+    cls, unit = fill["cls"], fill["after"]
+    left = list(fill["versions"])
+    out: list[tuple[tuple[int, int, int, int], list[str]]] = []
+    for anchor, (at, versions) in moves.get((cls, unit), {}).items():
+        here = [v for v in left if v in versions]
+        if here:
+            out.append(((rank[cls][anchor] if anchor else -1, 1, at, 1 << 30), here))
+            left = [v for v in left if v not in here]
+    if left:
+        out.append(((rank[cls][unit], 0, 0, 1 << 30), left))
+    return out
 
 
 def _extern(text: str, masked: str) -> str:
@@ -223,7 +246,8 @@ def arrange(
         if unplaced:
             rank.setdefault(cls, {}).update({u: len(rank.get(cls, {})) + i for i, u in enumerate(sorted(unplaced))})
     place: dict[Chunk, tuple[int, int, int, int]] = {c: (rank[c.cls][c.unit], 0, 0, c.at) for c in storage}
-    for (cls, unit), anchors in _moves(bases, orders).items():
+    moves = _moves(bases, orders)
+    for (cls, unit), anchors in moves.items():
         every_version = [v for _, versions in anchors.values() for v in versions]
         for chunk in [c for c in storage if c.unit == unit and c.cls == cls]:
             chunk.unless = _condition(every_version, guards or {})
@@ -232,16 +256,15 @@ def arrange(
                 copy.when = _condition(versions, guards or {})
                 storage.append(copy)
                 place[copy] = (rank[cls][anchor] if anchor else -1, 1, at, chunk.at)
+    kept = [f for f in fills if f["cls"] in _STORED and f["after"] in rank.get(f["cls"], {})]
+    for n, fill in enumerate(kept):
+        for where, versions in _fill_places(fill, moves, rank):
+            chunk = _fill(n, fill, versions, guards or {})
+            storage.append(chunk)
+            place[chunk] = where
     chain: dict[str, list[Chunk]] = defaultdict(list)
     for chunk in sorted(storage, key=lambda c: place[c]):
         chain[chunk.cls].append(chunk)
-    kept = [f for f in fills if f["cls"] in _STORED and f["after"] in rank.get(f["cls"], {})]
-    for n, fill in enumerate(kept):
-        chunk = _fill(n, fill, guards or {})
-        storage.append(chunk)
-        at = rank[chunk.cls][chunk.unit]
-        members = chain[chunk.cls]
-        members.insert(next((i for i, c in enumerate(members) if rank[c.cls][c.unit] > at), len(members)), chunk)
     # a unit whose object holds read-only data no statement of it defines (the literals its functions emit) has that
     # data where its functions are compiled, so its functions sit at the unit's place in the read-only data order
     defined = {(c.unit, n) for c in storage for n in c.defines}

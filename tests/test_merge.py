@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from unbake import merge
 
 
@@ -316,3 +318,43 @@ def test_stale_bytes_only_some_versions_link_are_guarded_by_those_versions() -> 
     text = out["text"]
     assert "#if defined(VERSION_DE)\nunsigned char unbake_fill_0[] = {0x01, 0x02};\n#endif" in text
     assert text.index("k_A") < text.index("unbake_fill_0") < text.index("k_B")
+
+
+def test_a_fill_follows_the_copy_of_its_unit_that_the_fills_versions_link() -> None:
+    """GAME.CPP in us: the link places AMMO.CPP's 4-byte word (g_Player_DrawPulsingMenuSpriteConstantWords_us, ROM
+    0xDDFF4), the 8 stale bytes 000a000400000014 (0xDDFF8) and then g_fmtDec2Pad (0xDE000); the other versions link
+    AMMO.CPP after it, so the merged text holds AMMO twice, and the bytes sit after the copy us links, not after the
+    copy the other versions link (which leaves g_fmtDec2Pad 8 B early in us)."""
+    ammo = "const float g_Player_DrawPulsingMenuSpriteConstantWords_us[1] = { 0.5f };\n"
+    fmt = 'const char g_fmtDec2Pad[5] = "%02d";\n'
+    fill = {"after": "ammo", "cls": "rodata", "data": bytes.fromhex("000a000400000014"), "versions": ["us"]}
+    out = merge.merge(
+        [("fmt", fmt), ("ammo", ammo)],
+        never,
+        orders={"rodata": {"us": ["ammo", "fmt"], "de": ["fmt", "ammo"], "eu": ["fmt", "ammo"]}},
+        classes={
+            "ammo": {"g_Player_DrawPulsingMenuSpriteConstantWords_us": "rodata"},
+            "fmt": {"g_fmtDec2Pad": "rodata"},
+        },
+        guards={"us": "VERSION_US", "de": "VERSION_DE", "eu": "VERSION_EU"},
+        fills=[fill],
+    )
+    assert out["conflicts"] == []
+    linked = _preprocessed(out["text"], "VERSION_US")
+    word, bytes_, pad = (linked.index(k) for k in ("g_Player_Draw", "unbake_fill_0", "g_fmtDec2Pad"))
+    assert word < bytes_ < pad
+    assert "unbake_fill_0" not in _preprocessed(out["text"], "VERSION_DE")
+
+
+def _preprocessed(text: str, version: str) -> str:
+    """The text as the compiler of `version` reads it: the `#if` blocks whose condition is false are gone."""
+    kept, live = [], [True]
+    for line in text.split("\n"):
+        if line.startswith("#if"):
+            condition = re.sub(r"defined\((\w+)\)", lambda m: str(m.group(1) == version), line[3:])
+            live.append(live[-1] and eval(condition.replace("||", " or ").replace("!", " not ")))
+        elif line.startswith("#endif"):
+            live.pop()
+        elif live[-1]:
+            kept.append(line)
+    return "\n".join(kept)
