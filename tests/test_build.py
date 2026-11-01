@@ -1024,6 +1024,33 @@ def test_data_starting_word_aligned_but_off_eight_loses_only_the_eight_alignment
     assert source.read_text() == ".text\n.align 3\nf:\n.section .rodata\n.word 1\n.align 2\n.word 2\n.half 3\n"
 
 
+def test_a_merged_objects_word_aligned_rodata_keeps_its_alignment_beside_data_packed_at_the_byte(tmp_path):
+    """de pirawread + sirawdma: read-only data from an 8-aligned address (`EX\\0`, then a string behind `.align 2`) and
+    data at the odd 0x...83 (the pin 0x5FC3). NOALIGN once stripped the alignment of the whole object, so the string
+    sat 1 B early in the ROM; now only `.data` loses it."""
+    import subprocess
+    import sys
+
+    held = make_tree(
+        both("src/a.c", "f_1", "d_2"),
+        both("src/b.c", "d_3", "d_4", sections={"d_3": ".rodata", "d_4": ".data"}),
+        both("src/c.c", "d_5", "d_6", sections={"d_5": ".rodata", "d_6": ".data"}),
+    )
+    table = {v: dict(rows) for v, rows in held.symbols.items()}
+    table["us"]["d_3"] = (0x80200034, 0x1034, 0x10, "data")  # word aligned, off 8: still stripped
+    table["us"]["d_4"] = (0x80200043, 0x1043, 0x10, "data")  # off a word
+    table["us"]["d_5"] = (0x80200050, 0x1050, 0x10, "data")  # 8-aligned
+    table["us"]["d_6"] = (0x80200063, 0x1063, 0x10, "data")  # off a word
+    held = Tree(held.digest, held.modules, table)
+    rows = build.text_sizes(make_config(tmp_path), held, "us").decode().splitlines()
+    assert "build/us/src/b.c.o: NOALIGN := 1" in rows
+    assert "build/us/src/c.c.o: NOALIGN := 1:data" in rows
+    source = tmp_path / "x.s"
+    source.write_text(".section .rodata\n.align 2\n.word 1\n.section .data\n.align 2\n.word 2\n.text\n")
+    subprocess.run([sys.executable, "-I", adapters.make_tool("strip_align.py"), str(source), "1:data"], check=True)
+    assert source.read_text() == ".section .rodata\n.align 2\n.word 1\n.section .data\n.4byte 2\n.text\n"
+
+
 def test_a_toolchain_row_biases_jump_tables_and_allocates_rdata():
     """jump_table_base and rdata_alloc of a toolchain row become recipe lines around its assembler."""
     lines = build._recipe("gcc-2.8.1-sn64").splitlines()[-1].split(" '&&' ")

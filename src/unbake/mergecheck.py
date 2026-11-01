@@ -229,7 +229,8 @@ def spans(
     entry to its last (the module's pieces aligned as linked, ALIGN directives and `MAX(., offset)` pins between
     them); the bytes of other modules between two entries are the `gap` finding's, so they are not walked and the
     pins after them are not read. The merged span packs the module's pieces of each class again, each at the alignment
-    the link kept for it (`_linked_align`), class after class as the link places the sections.
+    the link kept for it (`_linked_align`), class after class as the link places the sections; a class the link pinned
+    (`MAX(., offset)` right before its first piece) starts no earlier than that offset, as the merged object's does.
     `built` holds the merged object's own sections (name -> (size, alignment) pieces, `object_facts`): a class it
     holds is measured on those pieces, so the in-object padding the model cannot see is part of the span."""
     out: list[tuple[str, int, int, int]] = []
@@ -237,6 +238,7 @@ def spans(
         rows = [(i, e) for i, e in enumerate(seq) if e["o"] == section]
         mine = [i for i, e in rows if e["k"] == "entry" and e["u"] in units]
         position, start, foreign, classes = 0, 0, False, defaultdict(list)
+        pin, pins = None, {}  # the `MAX(., offset)` before an entry, and per class the pin before its first piece
         for i, row in rows:
             if i > mine[-1]:
                 break
@@ -254,12 +256,15 @@ def spans(
                 continue
             if row["k"] == "minimum":
                 position = position if foreign else max(position, row["offset"])
+                pin = None if foreign else row["offset"]
                 continue
             for cls in row.get("parts", {}):
                 for size, align in row["parts"][cls]:
                     at = _up(position, row.get("subalign") or align)
                     position = at + size
                     if i >= mine[0]:
+                        if cls not in pins:
+                            pins[cls] = pin
                         classes[cls].append((size, _linked_align(at, align), row.get("subalign") or 0))
         merged = 0
         for cls, pieces in classes.items():
@@ -267,7 +272,12 @@ def spans(
                 own = [p for name, found in built.items() if _section_class(name) == cls for p in found]
                 if own:
                     pieces = [(size, align, pieces[0][2]) for size, align in own]
-            merged = _up(merged, pieces[0][2] or max(a for _, a, _ in pieces))
+            pin = pins.get(cls)
+            if pin is not None:  # the link script pins each class where it linked: the merged object keeps it
+                merged = max(merged, pin - start)
+            # the object's section starts at an address that is a multiple of its alignment (the link counts from the
+            # output section's start, not from the module's first byte), after the pin as the script orders them
+            merged = _up(start + merged, pieces[0][2] or max(a for _, a, _ in pieces)) - start
             packed = 0
             for size, align, _ in pieces:
                 packed = _up(packed, align) + size

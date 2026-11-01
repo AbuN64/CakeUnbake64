@@ -347,6 +347,35 @@ def test_merged_span_pads_pieces_to_their_own_alignment_under_subalign() -> None
     assert mergecheck.spans(seq, {"a", "b"}) == [(".data", 80, 80, 0)]
 
 
+def test_a_merged_class_aligns_where_the_link_places_it_not_from_the_module_start() -> None:
+    """A module that starts 4 B into its output section: its 16-aligned data lands 12 B after the module's first byte,
+    so the object ends at 24 B and not 12 B; a fill row written at 8 B made ld refuse the link (location counter
+    backwards, 12 to 16 B short)."""
+    seq = [
+        {**with_parts(entry("x", "text", 4), text=piece(4, 4))},
+        {**with_parts(entry("a", "data", 8), data=piece(8, 16))},
+        {**with_parts(entry("b", "data", 4), data=piece(4, 4))},
+    ]
+    assert mergecheck.spans(seq, {"a", "b"}) == [(".text", 24, 24, 4)]
+    built = {".data": [(8, 16), (4, 4)]}
+    assert mergecheck.spans(seq, {"a", "b"}, built) == [(".text", 24, 24, 4)]
+
+
+def test_a_class_the_link_pinned_starts_no_earlier_in_the_merged_object() -> None:
+    """de pirawread.c (.game_data 0x5FB0): 18 B of rodata, a pin at 0x5FC3, 13 B of data. The merged object's data
+    still starts at the pin, so the object ends at 0x5FD0 and not 0x5FCF; a fill row written at 0x5FCF made ld refuse
+    the link (800c7990 -> 800c798f)."""
+    seq = [
+        {"o": ".game_data", "k": "minimum", "offset": 0x5FB0},
+        {**with_parts(entry("a", "rodata", 18, ".game_data"), rodata=piece(18, 1)), "subalign": 1},
+        {"o": ".game_data", "k": "minimum", "offset": 0x5FC3},
+        {**with_parts(entry("b", "data", 13, ".game_data"), data=piece(13, 1)), "subalign": 1},
+    ]
+    built = {".rdata": [(18, 1)], ".data": [(13, 16)]}
+    assert mergecheck.spans(seq, {"a", "b"}) == [(".game_data", 32, 32, 0x5FB0)]
+    assert mergecheck.spans(seq, {"a", "b"}, built) == [(".game_data", 32, 32, 0x5FB0)]
+
+
 def test_minimum_does_not_move_back_or_count_prefix_space_as_module_bytes():
     seq = [
         {"o": ".data", "k": "minimum", "offset": 100},

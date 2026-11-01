@@ -10,7 +10,7 @@ import shlex
 import sys
 import tarfile
 import urllib.request
-from collections import deque
+from collections import defaultdict, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha1
@@ -553,12 +553,17 @@ def text_sizes(config: Config, held: Tree, v: str) -> bytes:
         return "\n".join([f"# {_GENERATED}", *rows, ""]).encode()
 
 
-def _unaligned(config: Config, held: Tree, v: str) -> dict[str, int]:
+def _unaligned(config: Config, held: Tree, v: str) -> dict[str, str]:
     """The files whose data starts a run of their own off a word boundary in the ROM: the ROM packs it at the byte, so
-    the build drops the alignment the compiler asks for in that object's data sections (NOALIGN := 1). Data off 8 only
-    is not here: whether the ROM pads it against the address or the section start differs per object, and the build
-    keeps its own result for every one (the native measure alone re-assembles it, where the ROM proves it)."""
+    the build drops the alignment the compiler asks for in that object's data sections (NOALIGN := 1). Only the
+    sections that need it: a section every run of which starts on an 8-byte boundary (a merged object's read-only
+    data beside data at an odd address) keeps the alignment its compiler asks for, as the ROM aligned it, and the
+    value then names the sections that lose it (`1:data,sdata`). Data off 8 only is not here: whether the ROM pads it
+    against the address or the section start differs per object, and the build keeps its own result for every one (the
+    native measure alone re-assembles it, where the ROM proves it)."""
     found: set[str] = set()
+    off: dict[str, set[str]] = defaultdict(set)
+    every: dict[str, set[str]] = defaultdict(set)
     for segment, (piece, *_) in zip(config.project.version[v].segments, versions.pieces(config, v), strict=True):
         if segment.kind == "bin":
             continue
@@ -567,8 +572,14 @@ def _unaligned(config: Config, held: Tree, v: str) -> dict[str, int]:
             if (path, section) != last and section != ".text":
                 vram = rom - segment.rom + (segment.vram or segment.rom)
                 found |= {path} if vram % 4 else set()
+                every[path].add(section)
+                if vram % 8:
+                    off[path].add(section)
             last = (path, section)
-    return {path: 1 for path in sorted(found)}
+    return {
+        path: "1" if off[path] == every[path] else "1:" + ",".join(sorted(s.lstrip(".") for s in off[path]))
+        for path in sorted(found)
+    }
 
 
 def _phased(config: Config, held: Tree, v: str) -> dict[str, str]:
@@ -654,7 +665,7 @@ class _Version:
     apart: set[str]
     code: dict[str, list[str]]
     where: dict[str, dict[str, int]]
-    unaligned: dict[str, int]
+    unaligned: dict[str, str]
     fills: list[linkfill.Fill]
     literal: dict[tuple[int | None, str], str]
 
