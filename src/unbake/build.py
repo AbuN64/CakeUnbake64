@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import sys
 import tarfile
 import urllib.request
 from collections import deque
@@ -212,17 +213,16 @@ def _recipe(id: str) -> str:
         parts.append(f"$(if $(UNRELOC),{_THEN} $(PASS)unreloc_pass.py $@)")
         parts.append(f"$(if $(TEXTCUT),{_THEN} $(PASS)textcut_pass.py $@ $(TEXTCUT))")
         body = " ".join(parts)
-    # The object cache (OBJCACHE, local.mk; empty on a host without one): a stored object of the same key is put in place
-    # and the program skipped (`@probe`, then the trim), else the program runs and its object is stored.
-    cached = (
-        f"@probe $(CCPY) --objget $(OBJCACHE) $@ $(call shq,$(lastword $(CC_{key}))) $(call shq,$(CC_FLAGS)) "
-        f"$(call shq,$(TEXTSIZE)) $(call shq,$(PROGRAM_{key})) {_OBJ_INPUTS} {_THEN} $(PROGRAM_{key}) {_THEN} "
-        f"$(CCPY) --objput $(OBJCACHE) $@ $(call shq,$(lastword $(CC_{key}))) $(call shq,$(CC_FLAGS)) "
-        f"$(call shq,$(TEXTSIZE)) $(call shq,$(PROGRAM_{key})) {_OBJ_INPUTS}"
+    # The object store (OBJSTORE, local.mk: unbake.objcache over abucache's content store): an object of the same key is
+    # put in place and the program skipped (`@probe`, then the trim), else the program runs and its object is stored.
+    args = (
+        f"$@ $(call shq,$(lastword $(CC_{key}))) $(call shq,$(CC_FLAGS)) $(call shq,$(TEXTSIZE)) "
+        f"$(call shq,$(PROGRAM_{key})) {_OBJ_INPUTS}"
     )
     return (
         f"define PREPROCESS_{key}\n$(Q){preprocess}\nendef\n"
-        f"COMPILE_{key} = $(if $(OBJCACHE),{cached},$(PROGRAM_{key}))\nPROGRAM_{key} = {body}"
+        f"COMPILE_{key} = @probe $(OBJSTORE) get {args} {_THEN} $(PROGRAM_{key}) {_THEN} $(OBJSTORE) put {args}\n"
+        f"PROGRAM_{key} = {body}"
     )
 
 
@@ -1047,13 +1047,20 @@ def _cc_cache() -> str:
     return " ".join(["python3", "-I", "-S", shlex.quote(str(script))])
 
 
+def _objstore(config: Config) -> str:
+    """The object rule's store as a command (OBJSTORE): the host content cache, where every tree on the host shares it."""
+    host = config.host
+    words = [sys.executable, "-m", "unbake.objcache", str(store.content_directory(host)), str(host.cache_max_bytes)]
+    return " ".join(shlex.quote(w) for w in words)
+
+
 def local_mk(config: Config) -> bytes:
     with effort.stage("build.local_mk"):
         assignments = [
             f"JOBS := {config.host.workers}",
             f"PPUNIT := {_preprocess_unit(config)}",
             f"CCPY := {_cc_cache()}",
-            f"OBJCACHE := {front.objects(config.host) or ''}",
+            f"OBJSTORE := {_objstore(config)}",
             f"MKTOOLS := {_stable(Path(__file__).parent / 'resources' / 'make')}",
             *(
                 f"{var} := {_stable(config.host.tools[row['host']]) if row['host'] in config.host.tools else ''}"

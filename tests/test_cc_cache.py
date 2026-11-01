@@ -129,7 +129,11 @@ def test_the_script_runs_standalone_from_the_package_file(tmp_path):
 
 def test_local_mk_puts_each_compiler_behind_the_front(tmp_path):
     host = SimpleNamespace(
-        workers=4, tools={}, toolchain_root=Path("/chains"), cache_dir=Path("/home/x/.cache/unbake/content")
+        workers=4,
+        tools={},
+        toolchain_root=Path("/chains"),
+        cache_dir=Path("/home/x/.cache/unbake/content"),
+        cache_max_bytes=1,
     )
     text = build.local_mk(SimpleNamespace(host=host)).decode()
     line = next(row for row in text.splitlines() if row.startswith("CC_gcc_2_8_1_sn64 :="))
@@ -388,7 +392,11 @@ def test_a_failed_preprocess_is_not_stored_and_a_command_without_a_dependency_fi
 
 def test_local_mk_puts_the_stamp_recipe_in_one_process(tmp_path):
     host = SimpleNamespace(
-        workers=4, tools={}, toolchain_root=Path("/chains"), cache_dir=Path("/home/x/.cache/unbake/content")
+        workers=4,
+        tools={},
+        toolchain_root=Path("/chains"),
+        cache_dir=Path("/home/x/.cache/unbake/content"),
+        cache_max_bytes=1,
     )
     text = build.local_mk(SimpleNamespace(host=host)).decode()
     line = next(row for row in text.splitlines() if row.startswith("PPUNIT :="))
@@ -451,7 +459,7 @@ def test_a_unit_starts_two_programs_beyond_itself_when_the_cache_answers(tmp_pat
     started = []
     real = subprocess.run
     monkeypatch.setattr(subprocess, "run", lambda argv, **kw: started.append(Path(argv[0]).name) or real(argv, **kw))
-    cc_cache.preprocessor_identity.cache_clear()
+    cc_cache.PREPROCESSORS.clear()
     hdrkey, stamprec = tools(tmp_path)
     monkeypatch.chdir(root)
     args = ["-MMD", "-MP", "-MF", "x.d", "x.c"]

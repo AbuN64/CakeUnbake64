@@ -31,7 +31,10 @@ CCPY = f"CCPY={sys.executable} {Path(__file__).parent / 'ccpy_stub.py'}"  # the 
 def _write_makefile(tmp_path: Path, config: SimpleNamespace) -> None:
     """The Makefile a tree has, with the local.mk that names the build's helper programs (MKTOOLS)."""
     (tmp_path / "Makefile").write_bytes(build.makefile(config))
-    (tmp_path / "local.mk").write_text(f"MKTOOLS := {Path(adapters.make_tool('hdrkey.c')).parent}\n")
+    stub = Path(__file__).parent / "objstore_stub.py"
+    (tmp_path / "local.mk").write_text(
+        f"MKTOOLS := {Path(adapters.make_tool('hdrkey.c')).parent}\nOBJSTORE := {sys.executable} {stub}\n"
+    )
 
 
 def segments(version: str) -> tuple[Segment, ...]:
@@ -378,7 +381,13 @@ def test_link_script_grows_with_files_but_makefile_does_not(tmp_path):
 
 
 def test_local_mk_names_pinned_tools_only_by_host_path(tmp_path, monkeypatch):
-    host = SimpleNamespace(workers=4, tools={"cpp": "/usr/bin/cpp"}, toolchain_root=Path("/chains"))
+    host = SimpleNamespace(
+        workers=4,
+        tools={"cpp": "/usr/bin/cpp"},
+        toolchain_root=Path("/chains"),
+        cache_dir=Path("/c/content"),
+        cache_max_bytes=1,
+    )
     text = build.local_mk(SimpleNamespace(host=host)).decode()
     assert "JOBS := 4" in text
     assert "CPP := /usr/bin/cpp" in text

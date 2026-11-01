@@ -1,42 +1,51 @@
-"""The object cache: an object made once under a key (toolchain, flags row, `.i` bytes) is copied, never made twice."""
+"""The object store: an object made once under a key (toolchain, flags, `.i` bytes, program) is copied, not made twice.
+The store is a dict behind abucache's ContentCache get/put; the compiler is a counter, no process starts."""
 
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
-from unbake.resources import cc_cache
+from unbake import build, config, objcache
+
+
+class Store:
+    """abucache's ContentCache as a dict: what a compile stores is what a later compile reads."""
+
+    def __init__(self) -> None:
+        self.entries: dict[tuple[str, str], bytes] = {}
+        self.counts: list[tuple[str, bool]] = []
+
+    def get(self, kind: str, key: str) -> bytes | None:
+        return self.entries.get((kind, key))
+
+    def put(self, kind: str, key: str, value: bytes) -> None:
+        self.entries[(kind, key)] = value
+
+    def count(self, kind: str, hit: bool) -> None:
+        self.counts.append((kind, hit))
 
 
 class Tree:
-    """A tree with one source text; its program is mocked: it counts its compiler runs, no process starts."""
+    """A tree with one source text; its program is mocked: it counts its compiler runs."""
 
-    def __init__(self, root: Path, compiler: Path, cache: Path, text: str = "int a;") -> None:
-        self.root, self.compiler, self.cache, self.text = root, compiler, cache, text
+    def __init__(self, root: Path, compiler: Path, store: Store, text: str = "int a;") -> None:
+        self.root, self.compiler, self.store, self.text = root, compiler, store, text
         self.runs = 0
 
-    def key(self, flags: str = "-O2", textsize: str = "", program: str = "cc x.i", extracted: str = "") -> list[str]:
-        return [
-            str(self.cache),
-            "x.o",
-            str(self.compiler),
-            flags,
-            textsize,
-            program,
-            *([extracted] if extracted else []),
-        ]
-
-    def build(self, **key: str) -> str:
-        """`@probe --objget`, else the compiler and `--objput` (the object rule's program); the object's text."""
+    def build(self, flags: str = "-O2", textsize: str = "", program: str = "cc x.i", extracted: str = "") -> str:
+        """`get`, else the compiler and `put` (the object rule's program); the object's text."""
         cwd = os.getcwd()
         os.chdir(self.root)
         try:
             (self.root / "x.i").write_text(self.text)
-            args = self.key(**key)
-            if cc_cache.object_get(*args[:6], args[6:]) != 0:  # type: ignore[arg-type]
+            args = ("x.o", str(self.compiler), flags, textsize, program, [extracted] if extracted else [])
+            if objcache.get(self.store, *args) != 0:  # type: ignore[arg-type]
                 self.runs += 1
-                (self.root / "x.o").write_text(self.text.upper() + key.get("flags", "-O2"))
-                assert cc_cache.object_put(*args[:6], args[6:]) == 0  # type: ignore[arg-type]
+                (self.root / "x.o").write_text(self.text.upper() + flags)
+                assert objcache.put(self.store, *args) == 0  # type: ignore[arg-type]
             return (self.root / "x.o").read_text()
         finally:
             os.chdir(cwd)
@@ -46,135 +55,99 @@ def trees(tmp_path: Path) -> tuple[Tree, Tree]:
     compiler = tmp_path / "tc" / "cc"
     compiler.parent.mkdir()
     compiler.write_text("cc")
-    cache = tmp_path / "host.obj"
+    store = Store()
     for name in "ab":
         (tmp_path / name).mkdir()
-    return Tree(tmp_path / "a", compiler, cache), Tree(tmp_path / "b", compiler, cache)
+    return Tree(tmp_path / "a", compiler, store), Tree(tmp_path / "b", compiler, store)
 
 
-def test_an_identical_key_hits_in_another_tree(tmp_path):
-    a, b = trees(tmp_path)
+def test_a_compile_stores_its_object(tmp_path):
+    a, _ = trees(tmp_path)
     assert a.build() == "INT A;-O2"
+    assert a.runs == 1
+    assert [kind for kind, _ in a.store.entries] == ["unit"]
+    assert a.store.counts == [("unit", False)]
+
+
+def test_the_same_input_in_another_tree_hits(tmp_path):
+    a, b = trees(tmp_path)
+    a.build()
     assert b.build() == "INT A;-O2"
     assert (a.runs, b.runs) == (1, 0)
+    assert b.store.counts[-1] == ("unit", True)
 
 
-def test_a_flag_change_misses(tmp_path):
+def test_a_changed_input_misses(tmp_path):
     a, b = trees(tmp_path)
     a.build()
-    assert b.build(flags="-O1") == "INT A;-O1"
+    (tmp_path / "d.s").write_text("one")
+    b.build(extracted=str(tmp_path / "d.s"))  # extracted files
+    b.build(program="cc x.i -DX")  # program
+    b.build(flags="-O1")  # flags
+    b.build(textsize="0x40")  # text size
+    b.text = "int b;"  # .i bytes
+    b.build()
+    assert b.runs == 5
+
+
+def test_a_changed_extracted_file_misses(tmp_path):
+    a, b = trees(tmp_path)
+    extracted = tmp_path / "d.s"
+    extracted.write_text("one")
+    a.build(extracted=str(extracted))
+    extracted.write_text("two")
+    b.build(extracted=str(extracted))
     assert b.runs == 1
-
-
-def test_an_i_change_misses(tmp_path):
-    a, b = trees(tmp_path)
-    a.build()
-    b.text = "int b;"
-    assert b.build() == "INT B;-O2"
-    assert b.runs == 1
-
-
-def test_the_text_size_the_program_and_the_extracted_files_decide_the_key(tmp_path):
-    a, b = trees(tmp_path)
-    (tmp_path / "b" / "d.s").write_text("one")
-    a.build()
-    for change in ({"textsize": "0x40"}, {"program": "cc -g x.i"}, {"extracted": "d.s"}):
-        before = b.runs
-        b.build(**change)
-        assert b.runs == before + 1, change
-    (tmp_path / "b" / "d.s").write_text("two")
-    b.build(extracted="d.s")
-    assert b.runs == 4
 
 
 def test_a_changed_compiler_misses(tmp_path):
     a, b = trees(tmp_path)
     a.build()
-    cc_cache.IDENTITIES.clear()
     b.compiler.write_text("another cc")
     b.build()
     assert b.runs == 1
 
 
-def test_the_hit_is_a_copy_the_trim_cannot_reach_the_cache_through(tmp_path):
+def test_the_hit_is_a_copy_the_trim_cannot_reach_the_store_through(tmp_path):
     a, b = trees(tmp_path)
     a.build()
     b.build()
     (tmp_path / "b" / "x.o").write_text("trimmed")  # trim_text rewrites the object in place
-    assert a.build() == "INT A;-O2"
+    assert Tree(tmp_path / "a", a.compiler, a.store).build() == "INT A;-O2"
     assert b.runs == 0
-    assert Tree(tmp_path / "a", a.compiler, a.cache).build() == "INT A;-O2"
-
-
-def test_a_cache_that_cannot_be_read_is_a_miss_and_costs_only_the_saving(tmp_path):
-    a, _ = trees(tmp_path)
-    a.cache = tmp_path / "x.o"  # a file where the directory should be
-    a.cache.write_text("")
-    assert a.build() == "INT A;-O2"
-    assert a.runs == 1
 
 
 def test_the_assembly_comes_back_with_the_object(tmp_path):
     a, b = trees(tmp_path)
     (tmp_path / "a" / "x.s").write_text("asm")
     a.build()
-    (tmp_path / "b" / "x.s").unlink(missing_ok=True)
     b.build()
     assert (tmp_path / "b" / "x.s").read_text() == "asm"
 
 
-def test_probe_skips_the_program_on_a_hit_and_runs_it_on_a_miss(tmp_path):
-    state: dict[str, object] = {"stop": False}
-    assert cc_cache.object_step(["@probe", "true"], state) == 0 and state["stop"] is True
-    assert cc_cache.object_step(["@probe", "sh", "-c", f"exit {cc_cache.OBJECT_MISS}"], state) == 0
-    assert state["stop"] is False
-    assert cc_cache.object_step(["@probe", "sh", "-c", "exit 1"], state) == 1
+def test_a_torn_entry_is_a_miss(tmp_path):
+    a, b = trees(tmp_path)
+    a.build()
+    for entry in a.store.entries:
+        a.store.entries[entry] = b"torn"
+    b.build()
+    assert b.runs == 1
 
 
-def test_local_mk_declares_the_object_cache_beside_the_host_content_cache():
-    from types import SimpleNamespace
-
-    from unbake import build
-
-    host = SimpleNamespace(workers=4, tools={}, toolchain_root=Path("/chains"), cache_dir=Path("/c/unbake/content"))
-    assert "OBJCACHE := /c/unbake/content.obj\n" in build.local_mk(SimpleNamespace(host=host)).decode()
-    bare = SimpleNamespace(workers=4, tools={}, toolchain_root=Path("/chains"))
-    assert "OBJCACHE := \n" in build.local_mk(SimpleNamespace(host=bare)).decode()
+def test_local_mk_declares_the_object_store_beside_the_host_content_cache():
+    host = SimpleNamespace(
+        workers=4, tools={}, toolchain_root=Path("/chains"), cache_dir=Path("/c/unbake/content"), cache_max_bytes=7
+    )
+    text = build.local_mk(SimpleNamespace(host=host)).decode()
+    assert f"OBJSTORE := {sys.executable} -m unbake.objcache /c/unbake/content.v" in text
+    assert "OBJCACHE" not in text
 
 
-def test_every_recipe_probes_the_cache_then_stores_what_its_program_made():
-    from unbake import build, config
-
+def test_every_recipe_probes_the_store_then_stores_what_its_program_made():
     for id in config.toolchains():
         text = build._recipe(id)
         key = build._key(id)
-        assert f"COMPILE_{key} = $(if $(OBJCACHE),@probe $(CCPY) --objget " in text
-        assert text.count("--objget") == text.count("--objput") == 1
-        assert f"'&&' $(PROGRAM_{key}) '&&' $(CCPY) --objput" in text
-        assert f",$(PROGRAM_{key}))\nPROGRAM_{key} = " in text
-
-
-def test_the_object_rule_program_skips_to_the_trim_on_a_hit(tmp_path, monkeypatch):
-    """object_file with the cache's own `--objget`/`--objput` as steps: the second tree runs no program step."""
-    import sys
-
-    script = Path(cc_cache.__file__)
-    compiler = tmp_path / "cc"
-    compiler.write_text("cc")
-    cache = tmp_path / "host.obj"
-    for name in "ab":
-        (tmp_path / name).mkdir()
-        (tmp_path / name / "x.i").write_text("int a;")
-        (tmp_path / name / "build").mkdir()
-    cmd = [sys.executable, "-I", str(script)]
-    key = [str(cache), "x.o", str(compiler), "-O2", "", "program"]
-    program = [
-        "@probe", *cmd, "--objget", *key, "&&",
-        "sh", "-c", "echo run >> ../runs; echo obj > x.o", "&&",
-        *cmd, "--objput", *key,
-    ]  # fmt: skip
-    for name in "ab":
-        monkeypatch.chdir(tmp_path / name)
-        assert cc_cache.object_file("x.o", "us", "", "", "", "-O2", "", ["--", *program]) == 0
-        assert (tmp_path / name / "x.o").read_text() == "obj\n"
-    assert (tmp_path / "runs").read_text().count("run") == 1
+        assert f"COMPILE_{key} = @probe $(OBJSTORE) get " in text
+        assert f"'&&' $(PROGRAM_{key}) '&&' $(OBJSTORE) put " in text
+        assert text.count(" get ") == text.count(" put ") == 1
+        assert f"\nPROGRAM_{key} = " in text

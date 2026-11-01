@@ -17,7 +17,6 @@ src/unbake/pool.py
 src/unbake/process.py
 src/unbake/repo.py
 src/unbake/rescore.py
-src/unbake/resources/cc_cache.py
 src/unbake/store.py
 src/unbake/symbol_names.py
 src/unbake/tree.py

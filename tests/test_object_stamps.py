@@ -162,7 +162,13 @@ def test_local_mk_names_the_venv_link_not_its_versioned_directory(tmp_path):
     other = tmp_path / "plain.dir"
     other.mkdir()
     assert build._stable(other / "x") == other / "x"
-    host = SimpleNamespace(workers=1, tools={"splat": venv / "bin/splat"}, toolchain_root=Path("/c"), cache_dir=None)
+    host = SimpleNamespace(
+        workers=1,
+        tools={"splat": venv / "bin/splat"},
+        toolchain_root=Path("/c"),
+        cache_dir=tmp_path / "c",
+        cache_max_bytes=1,
+    )
     text = build.local_mk(SimpleNamespace(host=host)).decode()
     assert str(venv) not in text
 
