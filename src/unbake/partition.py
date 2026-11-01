@@ -8,7 +8,7 @@ whose own entries straddle a foreign unit stays alone."""
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Any
 
 from unbake.mergecheck import CLASSES
@@ -92,3 +92,15 @@ def partition(units: Collection[str], seqs: Mapping[str, Sequence[Row]], order: 
         if len(parts) == len(groups):
             return parts
         groups = parts
+
+
+def fit(units: Sequence[str], accepts: Callable[[Sequence[str]], bool]) -> list[list[str]]:
+    """`units` (in link order) cut into runs, each the longest `accepts` takes: a run grows by the next unit until the
+    check the layout rules cannot model (an alignment hole, a declaration clash) refuses it, then a new run starts."""
+    runs: list[list[str]] = []
+    for unit in units:
+        if runs and accepts([*runs[-1], unit]):
+            runs[-1].append(unit)
+        else:
+            runs.append([unit])
+    return runs
