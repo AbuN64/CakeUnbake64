@@ -50,7 +50,8 @@ def signatures(group: Collection[str], live: Mapping[str, Sequence[Row]]) -> tup
                         chain.append((cls, []))
                     chain[-1][1].append(row["u"])
         for section, chain in chains.items():
-            seen, seg = set(), 0
+            seen: set[str] = set()
+            seg = 0
             for cls, units in chain:
                 if cls in seen:
                     seg, seen = seg + 1, set()
