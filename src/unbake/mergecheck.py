@@ -7,6 +7,8 @@ objects of each version. The hard findings (the module must stay separate files)
   sections    one class of the module sits in several output sections; the parts (units that share the section in every
               version where both are placed) are printed, each with its section per version, so a map row can name one
   gap         two entries of one class are not adjacent in the link order (another module's bytes sit between)
+  interleave  one output section links a unit of another class between two units of one class of the module: one
+              merged object emits a class whole, so it cannot reproduce data, pool, data
   lma         one merged object would be larger than the span the units fill in an output section (their pieces, each
               aligned as linked, packed again): it would overlap the next piece
 The soft findings (the merge can go ahead, and the source must reproduce them):
@@ -500,6 +502,20 @@ def verdicts(
                 for k in range(i + 1, j):
                     if seq[k]["k"] == "align":
                         soft[module].append(f"align: {version} {cls} ALIGN({seq[k]['a']}) before {two}")
+        for module in multi:
+            classruns: dict[str, list[tuple[str, str]]] = defaultdict(list)
+            for i in live:
+                if owner.get(seq[i]["u"]) == module:
+                    for part in seq[i]["cls"].split("+"):
+                        if not classruns[seq[i]["o"]] or classruns[seq[i]["o"]][-1][0] != part:
+                            classruns[seq[i]["o"]].append((part, seq[i]["u"]))
+            for section, chain in classruns.items():
+                again = next((cls for n, (cls, _) in enumerate(chain) if cls in {c for c, _ in chain[:n]}), None)
+                if again:
+                    order = " ".join(f"{cls}({unit})" for cls, unit in chain)
+                    hard[module].append(
+                        f"interleave: {version} {section} links {again} on both sides of another class: {order}"
+                    )
         for module, units in multi.items():
             # another module's bytes inside the span make the gap the finding: the span is not one run to compare
             for section, linked, merged, _ in [] if (module, version) in gapped else spans(seq, set(units)):

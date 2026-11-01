@@ -598,7 +598,10 @@ def test_regression_slices_of_merged_sections_that_kept_the_linked_size() -> Non
         units = {r[0] for r in rows}
         [(section, span, merged, _)] = mergecheck.spans(seq, units)
         assert (section, span, merged) == (".sec", linked, linked), name
-        assert run([(u, "M") for u in units], seq)["M"]["hard"] == [], name
+        hard = run([(u, "M") for u in units], seq)["M"]["hard"]
+        # sinf links its pool between two data units: the span is kept, the order is the interleave finding
+        assert [h for h in hard if not h.startswith("interleave:")] == [], name
+        assert any(h.startswith("interleave:") for h in hard) == (name == "sinf"), name
 
 
 def test_a_piece_the_link_aligned_keeps_its_alignment_in_the_merged_span() -> None:
@@ -743,3 +746,26 @@ def test_closure_of_a_module_with_a_far_unit_names_the_wide_gap_not_the_program(
     assert carried == {"P1", "P2"}
     [blocker, *_] = group["parts"][0]["blockers"]
     assert blocker["width"] == len(foreign) + 1 and blocker["between"] == ["P1", "P2"] and blocker["class"] == "rodata"
+
+
+def test_a_pool_linked_between_two_data_units_of_one_module_keeps_it_separate() -> None:
+    """eu-x NAV ATTACKTARGET: CLOSEATTACK .data @0x584, the pool @0x590..0x5C4, K_NAVENCODEDWORDSBLOCK6 .data @0x5C4:
+    one merged object emits all .data then the pool, so the pool and the data after it would trade places."""
+    rows = [("CLOSEATTACK", "M"), ("ATTACKTARGET", "M"), ("K_NAVENCODEDWORDSBLOCK6", "M")]
+    seq = [
+        entry("CLOSEATTACK", "data", 12, ".data"),
+        entry("ATTACKTARGET", "rodata", 52, ".data"),
+        entry("K_NAVENCODEDWORDSBLOCK6", "data", 12, ".data"),
+    ]
+    out = run(rows, seq)["M"]
+    assert out["verdict"] == "separate"
+    assert out["hard"] == [
+        "interleave: us .data links data on both sides of another class: "
+        "data(CLOSEATTACK) rodata(ATTACKTARGET) data(K_NAVENCODEDWORDSBLOCK6)"
+    ]
+
+
+def test_a_module_whose_classes_each_link_whole_has_no_interleave() -> None:
+    rows = [("a", "M"), ("b", "M")]
+    seq = [entry("a", "data", 4, ".data"), entry("b", "data", 4, ".data"), entry("b", "rodata", 8, ".data")]
+    assert run(rows, seq)["M"]["hard"] == []
