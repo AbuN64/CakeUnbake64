@@ -34,6 +34,7 @@ def build[Result](start: Callable[[str | None, bool], Result], root: Path, store
         return start(None, False)
     manifest = process.scratch(root) / f"cc-commands.{os.getpid()}"
     stamps = manifest.with_name(manifest.name + ".pp")
+    objects = manifest.with_name(manifest.name + ".obj")
     _clear(manifest, root)
     try:
         first = start(str(manifest), True)
@@ -43,9 +44,16 @@ def build[Result](start: Callable[[str | None, bool], Result], root: Path, store
                 span.add(items=len(cc_cache.commands(str(stamps))))
             stamps.unlink()
             manifest.unlink(missing_ok=True)
+            objects.unlink(missing_ok=True)
             first = start(str(manifest), False)
         if not manifest.exists():
             return first
+        if objects.exists():
+            with stages.stage("make.front.objects") as span:
+                process.objects(root, objects, workers)
+                found = _drop_stored(manifest, objects, root)
+                span.add(items=found)
+                stages.say(f"make.front: {found} objects from the store")
         with stages.stage("make.front") as span:
             process.batch(store, root, manifest, workers)
             answered, total = _answered(manifest, root)
@@ -54,6 +62,30 @@ def build[Result](start: Callable[[str | None, bool], Result], root: Path, store
         return start(None, False)
     finally:
         _clear(manifest, root)
+
+
+def _recorded(objects: Path) -> list[str]:
+    """The object each get the build recorded (the words of each, `get OUT ...`) puts in place."""
+    return [
+        row[row.index("get") + 1]
+        for row in (
+            line.rstrip("\n").split("\x1f") for line in objects.read_text(errors="surrogateescape").splitlines()
+        )
+        if "get" in row[:-1]
+    ]
+
+
+def _drop_stored(manifest: Path, objects: Path, root: Path) -> int:
+    """Remove from the recorded compiles those of the objects the store answered (`<out>.oc`): the object is taken as it
+    is, so no compile is asked for it. Returns how many objects the store answered."""
+    stored = {out.removesuffix(".o") + ".s" for out in _recorded(objects) if (root / (out + ".oc")).exists()}
+    kept = [
+        cc_cache.SEPARATOR.join([compiler, *args])
+        for compiler, args in cc_cache.commands(str(manifest))
+        if ((p := cc_cache.parse(args)) is None or p[1] not in stored)
+    ]
+    manifest.write_text("".join(f"{row}\n" for row in kept), errors="surrogateescape")
+    return len(stored)
 
 
 def _answered(manifest: Path, root: Path) -> tuple[int, int]:
@@ -68,5 +100,15 @@ def _clear(manifest: Path, root: Path) -> None:
         for _, args in cc_cache.commands(str(manifest)):
             if (parsed := cc_cache.parse(args)) is not None:
                 (root / (parsed[1] + ".cc")).unlink(missing_ok=True)
-    for name in (manifest, manifest.with_name(manifest.name + ".pp"), manifest.with_name(manifest.name + ".pp.n")):
+    objects = manifest.with_name(manifest.name + ".obj")
+    if objects.exists():
+        for out in _recorded(objects):
+            for suffix in (".oc", ".oc.s", ".oc.miss"):
+                (root / (out + suffix)).unlink(missing_ok=True)
+    for name in (
+        manifest,
+        manifest.with_name(manifest.name + ".pp"),
+        manifest.with_name(manifest.name + ".pp.n"),
+        objects,
+    ):
         name.unlink(missing_ok=True)

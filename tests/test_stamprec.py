@@ -48,8 +48,13 @@ def stamprec(tmp_path_factory) -> str:
     if cc is None:
         pytest.skip("no C compiler")
     folder = tmp_path_factory.mktemp("stamprec")
+    (folder / "probe.c").write_text("int main(void) { return 0; }\n")
+    asan = ["-O1", "-g", "-fsanitize=address"]  # a host whose address layout AddressSanitizer cannot map builds without
+    probe = subprocess.run([cc, *asan, "-o", str(folder / "probe"), str(folder / "probe.c")], capture_output=True)
+    if probe.returncode != 0 or subprocess.run([str(folder / "probe")], capture_output=True).returncode != 0:
+        asan = ["-O2"]
     done = subprocess.run(
-        [cc, "-O2", "-Wall", "-Werror", "-o", str(folder / "stamprec"), adapters.make_tool("stamprec.c")],
+        [cc, *asan, "-Wall", "-Werror", "-o", str(folder / "stamprec"), adapters.make_tool("stamprec.c")],
         capture_output=True,
         text=True,
     )
@@ -322,3 +327,28 @@ def test_a_step_that_does_not_exist_or_a_program_that_is_missing_fails_the_objec
     assert done.returncode == 64 and "no step @nothing" in done.stderr
     done, _ = both(tmp_path / "b", stamprec, "stale", "", "0x8", ["no-such-program-here"])
     assert done.returncode == 127
+
+
+PROBED = ["@probe", "false", "get", OUT, "&&", "@out", S, "echo", "text", "&&", "@nonempty", S, "&&", *MAKE]
+
+
+def test_the_probe_step_goes_on_with_a_miss_the_batch_left_and_takes_an_answer_it_left(tmp_path, stamprec):
+    miss = lambda root: (root / (OUT + ".oc.miss")).write_bytes(b"")  # noqa: E731
+    done, files = both(tmp_path / "miss", stamprec, "stale", "", "0x8", PROBED, extra=miss)
+    assert done.returncode == 0, done.stderr
+    assert files[S] == b"text\n" and OUT + ".oc.miss" not in files
+
+    def answer(root: Path) -> None:
+        (root / (OUT + ".oc")).write_bytes(elf(b"\x03\xe0\x00\x08" + bytes(8)))
+        (root / (OUT + ".oc.s")).write_text("stored asm\n")
+        os.utime(root / (OUT + ".oc"), ns=(3 * 10**9, 3 * 10**9))
+
+    done, files = both(tmp_path / "hit", stamprec, "stale", "", "0x8", PROBED, extra=answer)
+    assert done.returncode == 0, done.stderr
+    assert files[S] == b"stored asm\n" and OUT + ".oc" not in files and OUT + ".oc.s" not in files
+
+
+def test_the_probe_step_of_a_collecting_build_records_the_get_and_goes_on(tmp_path, stamprec):
+    done, files = both(tmp_path, stamprec, "stale", "", "0x8", PROBED, env={"ABU_CC_COLLECT": "collect"})
+    assert done.returncode == 0, done.stderr
+    assert files["collect.obj"] == f"false\x1fget\x1f{OUT}\n".encode()

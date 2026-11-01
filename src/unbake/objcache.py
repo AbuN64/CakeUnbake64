@@ -1,4 +1,5 @@
 """The object rule's store: `python -m unbake.objcache STORE LIMIT get|put OUT CC FLAGS SIZE PROGRAM [FILE...]`
+(a build answers all its gets in a few processes instead, `STORE LIMIT batch MANIFEST INDEX COUNT`: front.build)
 and its counts: `python -m unbake.objcache stats STORE [OFFSET]`.
 
 An object is stored in abucache's content store under abucache.compile's key: the bytes of its `.i`, the program (the
@@ -78,11 +79,19 @@ def stats(store: Path, offset: int = 0) -> dict[str, int]:
     }
 
 
+_read: dict[str, str] | None = None  # the toolchain and the passes as read once, while a batch answers its gets
+
+
 def tools(compiler: str) -> str:
     """The identity of the toolchain: every file beside the compiler (a driver such as IDO's cc runs its passes in its
     own folder)."""
+    if _read is not None and compiler in _read:
+        return _read[compiler]
     folder = Path(compiler).resolve().parent
-    return compile.identity(sorted(p for p in folder.iterdir() if p.is_file()))
+    found = compile.identity(sorted(p for p in folder.iterdir() if p.is_file()))
+    if _read is not None:
+        _read[compiler] = found
+    return found
 
 
 def _installed(text: str) -> str:
@@ -94,9 +103,13 @@ def _installed(text: str) -> str:
 
 def _passes() -> str:
     """What the passes in the program do: the digest of their text, which the place no longer says."""
+    if _read is not None and "" in _read:
+        return _read[""]
     sums = hashlib.sha256()
     for path in sorted(_PASSES.glob("*.py")):
         sums.update(path.name.encode() + b"\0" + path.read_bytes())
+    if _read is not None:
+        _read[""] = sums.hexdigest()
     return sums.hexdigest()
 
 
@@ -164,14 +177,69 @@ def put(
     return 0
 
 
+def rows(manifest: str) -> list[list[str]]:
+    """The gets the object rules recorded (resources/cc_cache.probe): each line the OBJSTORE words, `get`, then the
+    arguments of `get`."""
+    with open(manifest, encoding="utf-8", errors="surrogateescape") as handle:
+        return [line.rstrip("\n").split("\x1f") for line in handle if line.strip()]
+
+
+def answer(
+    cache: ContentCache, out: str, compiler: str, flags: str, textsize: str, program: str, extracted: Sequence[str]
+) -> bool:
+    """One recorded get, answered beside the object: the stored object in `<out>.oc` (and its assembly in
+    `<out>.oc.s`), or a miss marker `<out>.oc.miss`. The object itself stays unmade, so the rule that runs again takes
+    the answer (cc_cache.probe) and goes on with its trim and records."""
+    for name in (".oc", ".oc.s", ".oc.miss"):
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(out + name)
+    try:
+        blob = cache.get(_KIND, entry(out, compiler, flags, textsize, program, extracted))
+        obj, assembly = unframe(blob) if blob is not None else (b"", None)
+        if blob is not None:
+            if assembly is not None:
+                _replace(out + ".oc.s", assembly)
+            _replace(out + ".oc", obj)
+    except (OSError, ValueError):
+        blob = None
+    cache.count(_KIND, blob is not None)
+    if blob is None:
+        with contextlib.suppress(OSError):
+            Path(out + ".oc.miss").write_bytes(b"")
+    return blob is not None
+
+
+def batch(cache: ContentCache, manifest: str, index: int, count: int) -> int:
+    """Answer every recorded get whose number is `index` modulo `count` in this one process; how many hit."""
+    global _read
+    hits = 0
+    _read = {}  # a toolchain's files and the passes are read once for all the gets, not once per object
+    try:
+        for number, row in enumerate(rows(manifest)):
+            if number % count == index and "get" in row[:-1]:
+                at = row.index("get")
+                if len(row) >= at + 6:
+                    out, compiler, flags, textsize, program = row[at + 1 : at + 6]
+                    hits += answer(cache, out, compiler, flags, textsize, program, row[at + 6 :])
+    finally:
+        _read = None
+    return hits
+
+
 def main(argv: list[str]) -> int:
     """OBJSTORE is `objcache STORE LIMIT`; the rule appends `get|put OUT CC FLAGS SIZE PROGRAM FILE...`."""
     if len(argv) in (3, 4) and argv[1] == "stats":
         for name, value in stats(Path(argv[2]), int(argv[3]) if len(argv) == 4 else 0).items():
             sys.stdout.write(f"{name}: {value}\n")
         return 0
+    if len(argv) == 7 and argv[3] == "batch":
+        batch(open_cache(Path(argv[1]), int(argv[2]), _tally(Path(argv[1]))), argv[4], int(argv[5]), int(argv[6]))
+        return 0
     if len(argv) < 9 or argv[3] not in ("get", "put"):
-        raise SystemExit("usage: STORE LIMIT get|put OUT CC FLAGS SIZE PROGRAM [FILE...]; stats STORE [OFFSET]")
+        raise SystemExit(
+            "usage: STORE LIMIT get|put OUT CC FLAGS SIZE PROGRAM [FILE...]; STORE LIMIT batch MANIFEST INDEX COUNT; "
+            "stats STORE [OFFSET]"
+        )
     action = get if argv[3] == "get" else put
     cache = open_cache(Path(argv[1]), int(argv[2]), _tally(Path(argv[1])))
     out, compiler, flags, textsize, program = argv[4:9]

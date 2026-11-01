@@ -467,6 +467,64 @@ static int settle(Object *x, const char *assembly, const char *kept) {
     return utimensat(AT_FDCWD, x->out, 0, 0) || put(flag, "", 0);
 }
 
+/* the object store's get `OBJSTORE... get OUT ...` (objcache `batch`): while the build only collects, its words are
+   recorded in `$ABU_CC_COLLECT.obj` and it answers 3 (the program goes on and records its compile); else the batch's
+   answer is taken: OUT.oc moved over OUT, its assembly OUT.oc.s over OUT's .s (0, when the answer is not older than
+   the .i), a miss the batch left (OUT.oc.miss) is 3, and a get nobody batched is started (objcache.get). */
+static int probe(char **w, int n) {
+    const char *collect = getenv("ABU_CC_COLLECT");
+    const char *out = NULL;
+    char *ans, *base, *i_path;
+    size_t k;
+    struct stat answered, source;
+    int i, code;
+    for (i = 0; i + 1 < n; i++) if (!strcmp(w[i], "get")) { out = w[i + 1]; break; }
+    if (!out || (k = strlen(out)) < 3 || strcmp(out + k - 2, ".o")) return spawn(w, 0);
+    if (collect && *collect) {
+        size_t size = strlen(collect) + 6, at = 0;
+        char *line, *file;
+        int fd, bad;
+        for (i = 0; i < n; i++) size += strlen(w[i]) + 1;
+        line = malloc(size);
+        file = malloc(strlen(collect) + 5);
+        if (!line || !file) return 1;
+        for (i = 0; i < n; i++) {
+            if (i) line[at++] = '\037';
+            at += strlen(strcpy(line + at, w[i]));
+        }
+        line[at++] = '\n';
+        sprintf(file, "%s.obj", collect);
+        fd = open(file, O_WRONLY | O_APPEND | O_CREAT, 0666);  /* one write: lines this short never interleave */
+        bad = fd < 0 || write(fd, line, at) != (ssize_t)at;
+        if (fd >= 0) close(fd);
+        free(line);
+        free(file);
+        return bad ? 1 : 3;
+    }
+    ans = malloc(k + 16);
+    base = malloc(k + 16);
+    i_path = malloc(k + 16);
+    if (!ans || !base || !i_path) return 1;
+    sprintf(ans, "%s.oc", out);
+    sprintf(i_path, "%.*s.i", (int)(k - 2), out);
+    sprintf(base, "%s.oc.s", out);
+    code = -1;
+    if (!stat(ans, &answered) && !stat(i_path, &source) && answered.st_mtime >= source.st_mtime) {
+        char *asm_path = malloc(k + 16);
+        if (!asm_path) return 1;
+        sprintf(asm_path, "%.*s.s", (int)(k - 2), out);
+        code = (is_file(base) && rename(base, asm_path)) || rename(ans, out) ? 1 : 0;
+        free(asm_path);
+    } else {
+        sprintf(ans, "%s.oc.miss", out);
+        if (!unlink(ans)) code = 3;
+    }
+    free(ans);
+    free(base);
+    free(i_path);
+    return code < 0 ? spawn(w, 0) : code;
+}
+
 /* one step of the program (cc_cache.object_file describes them) */
 static int step(Object *x, char **w) {
     int n = 0;
@@ -484,7 +542,7 @@ static int step(Object *x, char **w) {
     if (!strcmp(w[0], "@jumptable") && n == 3) return jump_table(w[1], w[2]);
     if (!strcmp(w[0], "@settle") && n == 3) return settle(x, w[1], w[2]);
     if (!strcmp(w[0], "@probe") && n >= 2) {  /* the object cache's get: 0 = the object is in place, 3 = go on */
-        int code = spawn(w + 1, 0);
+        int code = probe(w + 1, n - 1);
         x->stop = !code;
         return code == 3 ? 0 : code;
     }

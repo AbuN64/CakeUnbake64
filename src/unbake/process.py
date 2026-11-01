@@ -319,6 +319,27 @@ def batch(store: Path, root: Path, manifest: Path, workers: int, mode: str = "--
         proc.wait()
 
 
+def objects(root: Path, manifest: Path, workers: int) -> None:
+    """Answer the object store's gets the build recorded (`manifest`: the words of each, the OBJSTORE command first) in
+    `workers` processes of that command's `batch` (unbake.objcache), instead of the one process per object the rules
+    would start. Each answer is left beside its object (`<out>.oc`, or `<out>.oc.miss`); the build takes it."""
+    with manifest.open(encoding="utf-8", errors="surrogateescape") as handle:
+        first = handle.readline().rstrip("\n").split("\x1f")
+    if "get" not in first:
+        return
+    count = max(1, workers)
+    procs = [
+        subprocess.Popen(
+            [*first[: first.index("get")], "batch", str(manifest), str(i), str(count)],
+            cwd=root,
+            stdin=subprocess.DEVNULL,
+        )
+        for i in range(count)
+    ]
+    for proc in procs:
+        proc.wait()
+
+
 def tracked(root: Path) -> set[str]:
     """The files git tracks under root; empty when root is no repository."""
     done = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=False)

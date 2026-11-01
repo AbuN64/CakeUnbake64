@@ -611,6 +611,35 @@ def compile_step(words: list[str]) -> int:
 OBJECT_MISS = 3  # `@probe` exit code: nothing is stored for the object, the program runs (0 is a hit)
 
 
+def probe(words: list[str]) -> int:
+    """The object store's get `OBJSTORE... get OUT ...` (objcache `batch`): while the build only collects, its words are
+    recorded in `$ABU_CC_COLLECT.obj` and it answers OBJECT_MISS (the program goes on and records its compile); else the
+    batch's answer is taken (OUT.oc over OUT, its assembly OUT.oc.s over OUT's .s, when the answer is not older than the
+    .i; 0), a miss the batch left (OUT.oc.miss) is OBJECT_MISS, and a get nobody batched is started."""
+    import subprocess
+
+    out = words[words.index("get") + 1] if "get" in words[:-1] else ""
+    if not out.endswith(".o"):
+        return subprocess.call(words)
+    collect = os.environ.get("ABU_CC_COLLECT")
+    if collect:
+        with open(collect + ".obj", "a", encoding="utf-8", errors="surrogateescape") as handle:
+            handle.write(SEPARATOR.join(words) + "\n")
+        return OBJECT_MISS
+    answer = out + ".oc"
+    with contextlib.suppress(OSError):
+        if os.stat(answer).st_mtime >= os.stat(out[:-2] + ".i").st_mtime:
+            if is_file(answer + ".s"):
+                os.replace(answer + ".s", out[:-2] + ".s")
+            os.replace(answer, out)
+            return 0
+    try:
+        os.unlink(answer + ".miss")
+        return OBJECT_MISS
+    except OSError:
+        return subprocess.call(words)
+
+
 def object_step(words: list[str], state: dict[str, object]) -> int:
     """One step of an object's program: a command to start, or a file operation the chain used to start a process for.
 
@@ -620,8 +649,8 @@ def object_step(words: list[str], state: dict[str, object]) -> int:
     `@out FILE COMMAND...`: the command's output goes to FILE.  `@settle S KEPT`: the object stands
     as it was when only its .i moved, its size is the wanted one and S is KEPT byte for byte (the rest of the program
     is skipped, `.same` tells the rule its trim is held); KEPT goes either way.
-    `@probe COMMAND...`: the object store's `get`: exit 0 says the object is in place (the rest of the program is
-    skipped, the trim follows), OBJECT_MISS that the program runs."""
+    `@probe COMMAND...`: the object store's `get` (probe): exit 0 says the object is in place (the rest of the program
+    is skipped, the trim follows), OBJECT_MISS that the program runs."""
     import subprocess
 
     head, rest = words[0], words[1:]
@@ -636,7 +665,7 @@ def object_step(words: list[str], state: dict[str, object]) -> int:
     if head == "@jumptable" and len(rest) == 2:
         return jump_table(*rest)
     if head == "@probe" and rest:
-        code = subprocess.call(rest)
+        code = probe(rest)
         state["stop"] = code == 0
         return 0 if code in (0, OBJECT_MISS) else code
     if head == "@compile" and rest:

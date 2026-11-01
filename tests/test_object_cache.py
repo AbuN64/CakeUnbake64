@@ -243,3 +243,122 @@ def test_another_path_that_is_not_unbake_is_the_key(tmp_path):
     a.build(program="python3 -I /opt/one/make/strip_align.py x")
     b.build(program="python3 -I /opt/two/make/strip_align.py x")
     assert b.runs == 1
+
+
+# the gets of one build, answered in one process (front.build: record, batch, answer)
+
+SLICE = [  # objects of the shape a version's build records: a C source, a split one, an assembly source
+    f"build/us/src/{name}.o"
+    for name in ("main", "game/player", "game/camera", "gfx/draw_01", "gfx/draw_02", "audio/synth", "libc/memcpy")
+]
+
+
+def record(root: Path, store: Path, compiler: Path, objects: list[str]) -> Path:
+    """The manifest the object rules write while the build collects: one line per object, its OBJSTORE words first."""
+    words = [sys.executable, "-m", "unbake.objcache", str(store), "1000000"]
+    manifest = root / "cc-commands.1.obj"
+    lines = []
+    for out in objects:
+        (root / out).parent.mkdir(parents=True, exist_ok=True)
+        (root / out.replace(".o", ".i")).write_text(f"int {Path(out).stem};")
+        lines.append("\x1f".join([*words, "get", out, str(compiler), "-O2", "", "as", "d.s"]))
+    manifest.write_text("".join(f"{line}\n" for line in lines))
+    return manifest
+
+
+def test_a_batch_answers_every_recorded_get_beside_its_object_in_one_process(tmp_path, monkeypatch):
+    a, _ = trees(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    manifest = record(tmp_path, tmp_path / "store", a.compiler, SLICE)
+    stored = SLICE[::2]
+    for out in stored:  # the store holds these (a tree that made them put them under the same key)
+        key = objcache.entry(out, str(a.compiler), "-O2", "", "as", ["d.s"])
+        a.store.put("unit", key, objcache.frame(f"obj {out}".encode(), b"asm"))
+    reads = []
+    real = objcache.compile.identity
+    monkeypatch.setattr(objcache.compile, "identity", lambda files: reads.append(files) or real(files))
+    assert objcache.batch(a.store, str(manifest), 0, 1) == len(stored)
+    assert len(reads) == 1  # the toolchain's files are read once, not per object
+    for out in SLICE:
+        object_made = (tmp_path / out).exists()
+        answered = (tmp_path / (out + ".oc")).exists()
+        assert not object_made  # the rule that runs again makes the object: the batch only answers
+        assert answered == (out in stored)
+        assert (tmp_path / (out + ".oc.miss")).exists() == (out not in stored)
+    out = stored[0]
+    assert (tmp_path / (out + ".oc")).read_bytes() == f"obj {out}".encode()
+    assert (tmp_path / (out + ".oc.s")).read_bytes() == b"asm"
+    assert a.store.counts.count(("unit", True)) == len(stored)
+    assert objcache._read is None
+
+
+def test_workers_split_the_gets_by_number(tmp_path, monkeypatch):
+    a, _ = trees(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    manifest = record(tmp_path, tmp_path / "store", a.compiler, SLICE)
+    for index in range(3):
+        objcache.batch(a.store, str(manifest), index, 3)
+    assert sum((tmp_path / (out + ".oc.miss")).exists() for out in SLICE) == len(SLICE)
+    assert len(a.store.counts) == len(SLICE)
+
+
+def cc_probe():
+    from unbake.resources import cc_cache
+
+    return cc_cache
+
+
+def test_a_collecting_build_records_the_get_and_starts_nothing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ABU_CC_COLLECT", str(tmp_path / "cc"))
+    monkeypatch.setattr("subprocess.call", lambda *a, **k: pytest.fail("a process started"))
+    words = ["py", "-m", "unbake.objcache", "store", "9", "get", "build/a.o", "cc", "-O2", "", "as", "d.s"]
+    assert cc_probe().probe(words) == cc_probe().OBJECT_MISS
+    assert (tmp_path / "cc.obj").read_text() == "\x1f".join(words) + "\n"
+
+
+def test_the_build_takes_a_batched_answer_without_starting_a_process(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ABU_CC_COLLECT", raising=False)
+    monkeypatch.setattr("subprocess.call", lambda *a, **k: pytest.fail("a process started"))
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build/a.i").write_text("i")
+    (tmp_path / "build/a.o.oc").write_text("object")
+    (tmp_path / "build/a.o.oc.s").write_text("assembly")
+    (tmp_path / "build/b.i").write_text("i")
+    (tmp_path / "build/b.o.oc.miss").write_text("")
+    words = ["py", "get", "build/a.o"]
+    assert cc_probe().probe(words) == 0
+    assert (tmp_path / "build/a.o").read_text() == "object"
+    assert (tmp_path / "build/a.s").read_text() == "assembly"
+    assert not (tmp_path / "build/a.o.oc").exists()
+    assert cc_probe().probe(["py", "get", "build/b.o"]) == cc_probe().OBJECT_MISS
+    assert not (tmp_path / "build/b.o.oc.miss").exists()  # a marker is taken once
+
+
+def test_an_answer_older_than_its_source_is_not_taken(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ABU_CC_COLLECT", raising=False)
+    (tmp_path / "a.o.oc").write_text("old object")
+    (tmp_path / "a.i").write_text("moved")
+    os.utime(tmp_path / "a.o.oc", (1, 1))
+    called = []
+    monkeypatch.setattr("subprocess.call", lambda words, **k: called.append(words) or 3)
+    assert cc_probe().probe(["py", "get", "a.o"]) == 3
+    assert called == [["py", "get", "a.o"]]  # nobody batched it: the get itself
+    assert not (tmp_path / "a.o").exists()
+
+
+def test_the_compiles_of_the_objects_the_store_answered_are_dropped(tmp_path):
+    from unbake import front
+
+    manifest = record(tmp_path, tmp_path / "store", Path("cc"), SLICE)
+    for out in SLICE[:3]:
+        (tmp_path / (out + ".oc")).write_text("object")
+    cc = tmp_path / "cc-commands.1"
+    cc.write_text("".join(f"cc\x1f-o\x1f{out[:-2]}.s\x1f{out[:-2]}.i\n" for out in SLICE))
+    assert front._drop_stored(cc, manifest, tmp_path) == 3
+    assert [args[1] for _, args in front.cc_cache.commands(str(cc))] == [out[:-2] + ".s" for out in SLICE[3:]]
+    front._clear(cc, tmp_path)
+    assert not manifest.exists()
+    assert not list(tmp_path.rglob("*.oc*"))
