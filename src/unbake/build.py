@@ -1004,7 +1004,7 @@ def _fetch_rule(folder: str, download: Json, pins: Mapping[str, str]) -> str:
 
 def _stable(path: Path) -> Path:
     """`path` spelled through the symlink that names its versioned directory: under a deployed venv
-    `~/venv-decomp.<key>/...` a sibling link `~/venv-decomp` points at the live one, and local.mk names the link, so a
+    `~/venv-unbake.<key>/...` a sibling link `~/venv-unbake` points at the live one, and local.mk names the link, so a
     deploy that switches it moves every tree at once and a tree never holds a venv path a prune may delete."""
     path = Path(path)
     for folder in path.parents:

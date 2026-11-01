@@ -3,27 +3,25 @@
 them in file order on the rig at the landed revision, from the root of the tree, with
 LANDED_Projects_AbuN64_CakeUnbake64 set and `deploy-env TOOLKIT=<live link>` in the environment; it appends its own
 landing arguments, which no step reads.
-Unbake is pinned by no other repository: the toolkit's installed `decomp tools deploy` installs the package `unbake` at
-the landed SHA and carries every other installed package over as it is. A step prints its facts and exits 0, or prints
-one line on stderr and exits 1; it calls no other tool of the close.
+This repository owns its own rig toolkit, /home/abu/venv-unbake, and no other repository names that path: AbuDecomp64
+owns the decomp toolkit, and a consumer that needs both puts both on PATH. A step prints its facts and exits 0, or
+prints one line on stderr and exits 1; it calls no other tool of the close and none of another repository's toolkit.
 
-  name       the toolkit's own `decomp tools name` (AbuDecomp64's engine owns the rule; this repository holds no copy)
-             answers the build's NAME, a digest of every package commit the new toolkit holds (the live toolkit's, with
-             unbake at the landed SHA), never the SHA alone. A live toolkit whose decomp lacks `tools name` refuses:
-             deploy AbuDecomp64 first;
-  build      the activation (`activate`, BUILD is <toolkit>.<SHA>): `decomp tools deploy --package unbake --sha SHA`
-             builds a fresh venv through a private `<toolkit>-stage` link, BUILD is linked to it, and the full test
+  name       the build's NAME, the first 12 hex digits of the sha256 of the requirement `unbake[dev] @ git+URL@SHA`
+             (every dependency is pinned in pyproject.toml, so the landed commit is the whole content);
+  build      the activation (`activate`, BUILD is <toolkit>.<SHA>): a fresh venv `<toolkit>.<NAME>` is created and
+             `pip install` installs unbake at the landed SHA into it, BUILD is linked to that venv, and the full test
              suite runs in the tree with BUILD's python and the tree's src first on the import path. A failing suite
              exits non-zero and the live link stays; on exit 0 the close switches the live link to BUILD;
   readback   the live link resolves to BUILD and the installed commit of unbake equals the landed SHA. A mismatch
              refuses (fix forward, no rollback).
 
-  deploy-env TOOLKIT=/home/abu/venv-decomp
+  deploy-env TOOLKIT=/home/abu/venv-unbake
   rig run ci/deploy_rig.py name
-  rig activate ci/deploy_rig.py /home/abu/venv-decomp build
+  rig activate ci/deploy_rig.py /home/abu/venv-unbake build
   rig run ci/deploy_rig.py readback"""
 
-import json
+import hashlib
 import os
 import re
 import subprocess
@@ -31,37 +29,23 @@ import sys
 from collections.abc import Callable
 
 ENV = "LANDED_Projects_AbuN64_CakeUnbake64"
+URL = "https://github.com/AbuN64/cake-unbake-64"
 SHA = re.compile(r"[0-9a-f]{40}")
-NAME_RE = re.compile(r"[0-9a-f]{12}")
 
 # bash(script, args) runs one of the scripts below and returns its exit code and, when captured, its stdout.
 Bash = Callable[..., "tuple[int, str]"]
 
-# NAME runs in the tree before the activation and answers the build's name: the engine's JSON envelope on stdout,
-# whose result.name is the digest of the whole content. Arguments: SHA TOOLKIT.
-NAME = r"""set -u
-sha=$1 toolkit=$2
-(cd "$HOME" && "$toolkit/bin/decomp" tools name --package unbake --sha "$sha" --carry-from "$toolkit") \
-  || { echo "name-error: decomp tools name exit $? (the live decomp needs it: deploy AbuDecomp64 first)" >&2
-       exit 1; }
-"""
-
-# BUILD runs inside the activation job with BUILD (<toolkit>.<name>) set by the close. The stage link starts at the
-# live toolkit, so the packages `decomp tools deploy` carries over are the live ones; it builds
-# `<toolkit>-stage.<name>` (or -N when that name is taken) and swaps only the stage link. BUILD becomes a link to that
-# venv: the close's switch is the only way a venv goes live. Arguments: SHA TOOLKIT NAME.
+# BUILD runs inside the activation job with BUILD (<toolkit>.<sha>) set by the close. It creates the fresh venv
+# `<toolkit>.<name>` with the python3 of the job, installs unbake at the landed commit into it with its pinned
+# dependencies, and links BUILD to it: the close's switch is the only way a venv goes live. Arguments: SHA TOOLKIT NAME URL.
 BUILD = r"""set -u
-sha=$1 toolkit=$2 name=$3
+sha=$1 toolkit=$2 name=$3 url=$4
 : "${BUILD:?the close sets BUILD for an activation}"
-stage=$toolkit-stage
-ln -sfn "$(readlink -f "$toolkit")" "$stage" || exit 1
-(cd "$HOME" && "$toolkit/bin/decomp" tools deploy --package unbake --sha "$sha" --venv "$stage") \
-  || { echo "deploy-error: decomp tools deploy exit $?" >&2; exit 1; }
-built=$(readlink -f "$stage")
-case $built in
-  "$stage.$name" | "$stage.$name"-[0-9]*) ;;
-  *) echo "deploy-error: $stage reads $built, not the build $name of $sha" >&2; exit 1 ;;
-esac
+built=$toolkit.$name
+[ -e "$built" ] && { echo "deploy-error: $built exists" >&2; exit 1; }
+python3 -m venv "$built" || { echo "deploy-error: venv exit $?" >&2; exit 1; }
+"$built/bin/python" -m pip install -q "unbake[dev] @ git+$url@$sha" \
+  || { echo "deploy-error: pip install exit $?" >&2; exit 1; }
 ln -sfn "$built" "$BUILD" || exit 1
 echo "deploy-build: $built"
 """
@@ -118,18 +102,6 @@ def last_line(text: str, default: object) -> str:
     return text.strip().splitlines()[-1] if text.strip() else str(default)
 
 
-def build_name(text: str) -> str:
-    """The name the engine answered: result.name of the JSON envelope on the name step's stdout."""
-    for line in reversed(text.splitlines()):
-        try:
-            name = json.loads(line)["result"]["name"]
-        except (ValueError, KeyError, TypeError):
-            continue
-        if isinstance(name, str) and NAME_RE.fullmatch(name):
-            return name
-    raise Refused(f"the name step answered no build name: {last_line(text, 'no output')}")
-
-
 def landed(environ: dict[str, str]) -> tuple[str, str]:
     """The landed SHA and the live toolkit link, each from its own explicit variable."""
     sha = environ.get(ENV, "")
@@ -141,22 +113,18 @@ def landed(environ: dict[str, str]) -> tuple[str, str]:
     return sha, toolkit
 
 
-def name(sha: str, toolkit: str, run: Bash) -> str:
-    code, out = run(NAME, sha, toolkit, capture=True)
-    sys.stdout.write(out)
-    if code:
-        raise Refused(f"name exit {code}: {last_line(out, 'no output')}")
-    return build_name(out)
+def name(sha: str) -> str:
+    """The build's name: a digest of its one requirement, the unbake commit (its dependencies are pinned in it)."""
+    return hashlib.sha256(f"unbake[dev] @ git+{URL}@{sha}".encode()).hexdigest()[:12]
 
 
 def step_name(sha: str, toolkit: str, run: Bash) -> None:
-    sys.stdout.write(f"name: {name(sha, toolkit, run)}\n")
+    sys.stdout.write(f"name: {name(sha)}\n")
     sys.stdout.flush()
 
 
 def step_build(sha: str, toolkit: str, run: Bash) -> None:
-    revision = name(sha, toolkit, run)
-    code, _ = run(BUILD + SUITE, sha, toolkit, revision)
+    code, _ = run(BUILD + SUITE, sha, toolkit, name(sha), URL)
     if code:
         raise Refused(f"build exit {code}, links unchanged")
 

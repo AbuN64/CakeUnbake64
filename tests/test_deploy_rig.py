@@ -1,8 +1,8 @@
 """ci/deploy_rig.py with Job Invoke, git and the log reader mocked."""
 
 import importlib.util
-import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -14,10 +14,9 @@ deploy_rig = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deploy_rig)
 
 SHA = "a" * 12 + "b" * 28
-TOOLKIT = "/home/abu/venv-decomp"
-NAME = "0123456789ab"  # the engine's digest of the whole content; never the SHA
+TOOLKIT = "/home/abu/venv-unbake"
+NAME = deploy_rig.name(SHA)  # a digest of the one requirement; never the SHA
 ENVIRON = {deploy_rig.ENV: SHA, "TOOLKIT": TOOLKIT}
-ENVELOPE = json.dumps({"result": {"name": NAME}}) + "\n"
 ARGS = ["--Subject.Board", "board1", "--Subject.Card", "card1"]  # the close appends them; no step reads them
 
 
@@ -38,31 +37,25 @@ def main(step, bash, environ=ENVIRON):
     return code
 
 
-def test_name_prints_the_engines_name(capsys):
-    bash = Bash((0, "noise\n" + ENVELOPE))
+def test_name_is_a_12_hex_digest_of_the_requirement_and_runs_no_script(capsys):
+    bash = Bash()
     assert main("name", bash) == 0
     assert f"name: {NAME}" in capsys.readouterr().out
-    assert bash.calls == [(deploy_rig.NAME, (SHA, TOOLKIT), True)]
+    assert re.fullmatch(r"[0-9a-f]{12}", NAME)
+    assert SHA[:12] != NAME and deploy_rig.name("c" * 40) != NAME
+    assert bash.calls == []
 
 
-def test_a_failed_name_refuses_and_stops_build_before_any_build(capsys):
-    assert main("name", Bash((1, "name-error\n"))) == 1
-    assert "name exit 1" in capsys.readouterr().err
-    bash = Bash((1, ""))
-    assert main("build", bash) == 1
-    assert len(bash.calls) == 1
-
-
-def test_build_names_the_build_then_runs_build_and_suite_with_the_name():
-    bash = Bash((0, ENVELOPE), (0, ""))
+def test_build_runs_build_and_suite_with_the_name_and_url():
+    bash = Bash((0, ""))
     assert main("build", bash) == 0
-    script, args, capture = bash.calls[1]
-    assert (args, capture) == ((SHA, TOOLKIT, NAME), False)
+    script, args, capture = bash.calls[0]
+    assert (args, capture) == ((SHA, TOOLKIT, NAME, deploy_rig.URL), False)
     assert script == deploy_rig.BUILD + deploy_rig.SUITE
 
 
 def test_a_failing_build_or_suite_refuses_with_the_links_unchanged(capsys):
-    assert main("build", Bash((0, ENVELOPE), (1, ""))) == 1
+    assert main("build", Bash((1, ""))) == 1
     assert "build exit 1, links unchanged" in capsys.readouterr().err
 
 
@@ -133,34 +126,48 @@ def bash(script, *args, env=None, cwd=None):
     )
 
 
-def test_the_build_script_links_build_to_the_stage_venv_and_never_touches_the_live_link():
+def test_the_build_script_installs_unbake_at_the_sha_into_a_fresh_venv_and_links_build():
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
-        live, toolkit, stage = root / "live-target", root / "venv-decomp", root / "venv-decomp-stage"
-        build = root / f"venv-decomp.{NAME}"
+        py = root / "bin/python3"
         wrapper(
-            live / "bin/decomp",
-            'test "$1 $2 $3 $4 $5 $6" = "tools deploy --package unbake --sha ' + SHA + '" || exit 7\n'
-            f'dir="$8.{NAME}"; mkdir -p "$dir/bin" && ln -sfn "$dir" "$8"',
+            py,
+            'if [ "$1 $2" = "-m venv" ]; then mkdir -p "$3/bin"; cp "$0" "$3/bin/python"; exit 0; fi\n'
+            'echo "$@" > "$(dirname "$0")/argv"',
         )
-        toolkit.symlink_to(live)
-        done = bash(deploy_rig.BUILD, SHA, str(toolkit), NAME, env={"BUILD": str(build), "HOME": str(root)})
+        toolkit, build = root / "venv-unbake", root / f"venv-unbake.{SHA}"
+        done = bash(
+            deploy_rig.BUILD,
+            SHA,
+            str(toolkit),
+            NAME,
+            "https://example.lan/u",
+            env={"BUILD": str(build), "PATH": f"{root / 'bin'}:{os.environ['PATH']}"},
+        )
         assert done.returncode == 0, done.stdout + done.stderr
-        built = root / f"venv-decomp-stage.{NAME}"
-        assert build.resolve() == built.resolve() == stage.resolve()
-        assert toolkit.resolve() == live.resolve()  # only Job Invoke's switch makes a build live
+        built = root / f"venv-unbake.{NAME}"
+        assert build.resolve() == built.resolve() and not toolkit.exists()  # only Job Invoke's switch makes it live
+        assert f"unbake[dev] @ git+https://example.lan/u@{SHA}" in (built / "bin/argv").read_text()
 
 
-def test_a_failing_engine_exits_one_and_links_nothing():
+def test_a_failing_install_exits_one_and_links_nothing():
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
-        live, toolkit = root / "live-target", root / "venv-decomp"
-        wrapper(live / "bin/decomp", "echo engine said no >&2; exit 3")
-        toolkit.symlink_to(live)
-        build = root / f"venv-decomp.{NAME}"
-        done = bash(deploy_rig.BUILD, SHA, str(toolkit), NAME, env={"BUILD": str(build), "HOME": str(root)})
-        assert done.returncode == 1
-        assert "deploy-error: decomp tools deploy exit 3" in done.stderr
+        wrapper(
+            root / "bin/python3",
+            'if [ "$1 $2" = "-m venv" ]; then mkdir -p "$3/bin"; printf "#!/bin/sh\\nexit 3\\n" > "$3/bin/python"; '
+            'chmod +x "$3/bin/python"; fi',
+        )
+        build = root / f"venv-unbake.{SHA}"
+        done = bash(
+            deploy_rig.BUILD,
+            SHA,
+            str(root / "venv-unbake"),
+            NAME,
+            "u",
+            env={"BUILD": str(build), "PATH": f"{root / 'bin'}:{os.environ['PATH']}"},
+        )
+        assert done.returncode == 1 and "deploy-error: pip install exit 3" in done.stderr
         assert not build.is_symlink()
 
 
@@ -168,7 +175,7 @@ def test_the_readback_script_checks_the_link_then_the_installed_commit():
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
         live = root / "live"
-        toolkit, other = root / "venv-decomp", root / "other"
+        toolkit, other = root / "venv-unbake", root / "other"
         other.mkdir()
         toolkit.symlink_to(live)
         live.mkdir()
@@ -176,30 +183,11 @@ def test_the_readback_script_checks_the_link_then_the_installed_commit():
         assert done.returncode == 1 and "not" in done.stderr
 
 
-def test_the_name_script_runs_the_toolkits_engine_over_the_live_link_and_a_failure_exits_one():
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        live, toolkit = root / "live-target", root / "venv-decomp"
-        wrapper(
-            live / "bin/decomp",
-            f'test "$*" = "tools name --package unbake --sha {SHA} --carry-from {toolkit}" || exit 7\n'
-            f"echo '{json.dumps({'result': {'name': NAME}})}'",
-        )
-        toolkit.symlink_to(live)
-        done = bash(deploy_rig.NAME, SHA, str(toolkit), env={"HOME": str(root)})
-        assert done.returncode == 0, done.stdout + done.stderr
-        assert deploy_rig.build_name(done.stdout) == NAME
-        wrapper(live / "bin/decomp", "exit 2")
-        failed = bash(deploy_rig.NAME, SHA, str(toolkit), env={"HOME": str(root)})
-        assert failed.returncode == 1
-        assert "deploy AbuDecomp64 first" in failed.stderr
-
-
-def test_the_build_name_is_the_envelopes_12_hex_name_and_anything_else_is_refused():
-    assert deploy_rig.build_name('noise\n{"result": {"name": "abcdef012345"}}\n') == "abcdef012345"
-    for bad in ("", "no json", '{"result": {}}', '{"result": {"name": "../x"}}'):
-        with pytest.raises(deploy_rig.Refused, match="no build name"):
-            deploy_rig.build_name(bad)
+def test_the_toolkit_path_is_this_repos_own_and_no_script_names_the_decomp_toolkit():
+    root = Path(__file__).parent.parent
+    for path in (root / ".deploy", root / "ci/deploy_rig.py"):
+        assert "venv-decomp" not in path.read_text(), path
+        assert "decomp tools" not in path.read_text(), path
 
 
 def test_the_suite_refuses_a_tree_at_another_commit_than_the_landed_one():
