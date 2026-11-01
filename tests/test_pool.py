@@ -1473,15 +1473,22 @@ def test_a_jobs_native_cpu_includes_what_a_nested_pool_record_rolled_up(monkeypa
 
 
 def test_a_waiter_woken_by_a_release_takes_its_whole_share_not_one_slot(monkeypatch):
-    """R proof 19:36: a 3-slot command woke when a holder released 4 slots and took 1, leaving 3 idle."""
+    """R proof 19:36: a 3-slot command woke when a holder released 4 slots and took 1, leaving 3 idle. The pool's own
+    release gives every slot back (an unlock wakes nobody) and then signals once; the holder here does the same.
+    Closing the writable test descriptors one by one would wake the waiter after the first (a write-close is the
+    event it sleeps on), which no pool release does, so the descriptors close only after the one signal."""
     runtime = os.environ["XDG_RUNTIME_DIR"]
     held = _peer(runtime, 90001, 12, range(12))
     thread, _, sleeping = _waiter(monkeypatch, 3)
-    assert sleeping.wait(5) and thread.is_alive()
+    sleeping.wait()
+    assert thread.is_alive()
     for f in held:
-        f.close()  # the holder ends: every slot frees at once
-    thread.join(5)
-    assert not thread.is_alive() and len(pool._slots) == 3
+        fcntl.flock(f, fcntl.LOCK_UN)  # the holder ends: every slot is free before anything wakes the waiter
+    pool._signal(_slots_dir(runtime))
+    thread.join()
+    assert len(pool._slots) == 3
+    for f in held:
+        f.close()
 
 
 _PARSES: list[int] = []
