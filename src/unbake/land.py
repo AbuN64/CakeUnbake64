@@ -12,6 +12,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from abucache import memo
+
 from unbake import (
     api,
     effort,
@@ -365,7 +367,7 @@ def drain(config: Config, only: Collection[str] | str | None = None) -> Json:
                     if not mine or not (config.project.root / f".unbake/inbox/{entry.id}.json").exists():
                         continue
                     claimed = True
-                    with effort.stage("land.entry"), store.shared(config, "structure"), effort.scoped():
+                    with effort.stage("land.entry"), store.shared(config, "structure"), memo.scoped():
                         try:
                             receipt = publish.land(config, entry)
                         except Exception as error:  # a crash must not leave the entry to fail again unseen

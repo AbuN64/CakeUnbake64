@@ -23,6 +23,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from abucache import memo
 from abucache.store import CacheFull, ContentCache, absorb_touched, everything, open_cache
 
 from unbake import effort, process
@@ -50,7 +51,7 @@ def undo(seen: dict[Path, bytes | None]) -> None:
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(before)
-    effort.forget("pin", "includes", "closure", "listing")
+    memo.forget("pin", "includes", "closure", "listing")
 
 
 def remove(path: Path) -> None:
@@ -59,7 +60,7 @@ def remove(path: Path) -> None:
     for seen in _JOURNALS:
         seen.setdefault(path, before)
     path.unlink()
-    effort.forget("pin", "includes", "closure", "listing")
+    memo.forget("pin", "includes", "closure", "listing")
 
 
 def write(path: Path, content: bytes) -> bool:
@@ -76,7 +77,7 @@ def write(path: Path, content: bytes) -> bool:
     part = path.with_name(f".{uuid.uuid4().hex}.part")  # the name alone may already sit near the 255-byte limit
     part.write_bytes(content)
     part.replace(path)
-    effort.forget("pin", "includes", "closure", "listing")  # the memoised reads of project files are stale now
+    memo.forget("pin", "includes", "closure", "listing")  # the memoised reads of project files are stale now
     return True
 
 
@@ -383,7 +384,7 @@ def _stream_path(config: Config, stream: str) -> Path:
 def listing(config: Config, folder: str) -> frozenset[str]:
     """The file names in .unbake/<folder>, read once per command: a thousand questions about files are one listing."""
     path = f"{config.project.root}/.unbake/{folder}"
-    return effort.memo(("listing", path), lambda: frozenset(os.listdir(path)) if os.path.isdir(path) else frozenset())
+    return memo.memo(("listing", path), lambda: frozenset(os.listdir(path)) if os.path.isdir(path) else frozenset())
 
 
 def append(config: Config, stream: str, row: Json) -> None:
@@ -393,7 +394,7 @@ def append(config: Config, stream: str, row: Json) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with _flock(path.with_name(path.name + ".lock"), fcntl.LOCK_EX), path.open("ab") as handle:
         handle.write(line.encode())
-    effort.forget("listing")
+    memo.forget("listing")
 
 
 def rows(config: Config, stream: str) -> list[Json]:

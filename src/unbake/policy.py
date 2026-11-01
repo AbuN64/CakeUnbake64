@@ -15,6 +15,8 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from abucache import memo
+
 from unbake import (
     blobs,
     config,
@@ -282,7 +284,7 @@ def _tree(snapshot: Snapshot) -> tree.Tree:
     if snapshot.files is not None and not snapshot.overlays:
         held: tree.Tree = snapshot.files
         return held
-    return effort.memo(("policy.tree", snapshot.digest), lambda: tree.capture(snapshot.config, snapshot.overlays))
+    return memo.memo(("policy.tree", snapshot.digest), lambda: tree.capture(snapshot.config, snapshot.overlays))
 
 
 def _module(snapshot: Snapshot, path: str) -> tree.Module | None:
@@ -314,7 +316,7 @@ def _extents(snapshot: Snapshot, version: str) -> tuple[list[int], list[int], di
         named = {name: (address, table[address]) for name, address in ver.symbols.items()}
         return starts, stops, named
 
-    return effort.memo(("extents", snapshot.digest, version), build)
+    return memo.memo(("extents", snapshot.digest, version), build)
 
 
 def _scalar(unit: str, name: str) -> bool:
@@ -787,7 +789,7 @@ def _record_index(snapshot: Snapshot) -> dict[str, list[tuple[str, str]]]:
                     index[body].append((path, name))
         return dict(index)
 
-    return effort.memo(("records", snapshot.digest), build)
+    return memo.memo(("records", snapshot.digest), build)
 
 
 def _duplicate_records(snapshot: Snapshot, path: str, code: str) -> dict[int, str]:
@@ -809,7 +811,7 @@ def _offset_headers(snapshot: Snapshot) -> Any:
         texts = {p: (snapshot.peek(p) or b"").decode(errors="replace") for p in _include_headers(snapshot)}
         return offsets.registry({p: _scopes(t)["code"] for p, t in texts.items()})
 
-    return effort.memo(("offset-headers", snapshot.digest), build)
+    return memo.memo(("offset-headers", snapshot.digest), build)
 
 
 def _offset_names(snapshot: Snapshot, scopes: Mapping[str, str]) -> dict[int, str]:
@@ -849,7 +851,7 @@ def _struct_returns(snapshot: Snapshot) -> dict[str, str]:
                     found.setdefault(m[2], path)
         return found
 
-    return effort.memo(("struct-returns", snapshot.digest), build)
+    return memo.memo(("struct-returns", snapshot.digest), build)
 
 
 def _struct_return_void(snapshot: Snapshot | None, code: str) -> dict[int, str]:
@@ -1396,7 +1398,7 @@ def unclean_rules(snapshot: Snapshot, only: Collection[str] | None = None) -> di
             )
         return {name: fired for verdict in verdicts for name, fired in verdict}
 
-    return effort.memo(("unclean", snapshot.digest, None if only is None else tuple(sorted(only))), judge)
+    return memo.memo(("unclean", snapshot.digest, None if only is None else tuple(sorted(only))), judge)
 
 
 def _unclean_unit(item: tuple[Snapshot, str, Sequence[str], Any]) -> tuple[tuple[str, tuple[str, ...]], ...]:
@@ -1523,7 +1525,7 @@ def _unclean_rows(snapshot: Snapshot, path: str) -> tuple[Any, ...]:
 
 def _unclean_context(snapshot: Snapshot) -> str:
     """What every verdict reads besides its module: each version's symbol table and segments."""
-    return effort.memo(
+    return memo.memo(
         ("unclean-context", id(snapshot.config), id(snapshot.versions)),
         lambda: digest([(v, sorted(x.symbols.items()), x.segments) for v, x in sorted(snapshot.versions.items())]),
     )

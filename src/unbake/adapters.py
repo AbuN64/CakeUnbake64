@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import sys
@@ -374,21 +375,27 @@ def tool_identity(config: Config, id: str) -> str:
 
 
 def _pin() -> str:
-    """The abucache version this unbake's installed requirement names (its wheel URL carries it)."""
+    """The abucache commit this unbake's installed requirement names (`abucache @ git+https://...@<sha>`)."""
     requirement = next(r for r in metadata.requires("unbake") or () if r.startswith("abucache"))
-    found = re.search(r"abucache-([0-9][^-]*)-", requirement)
+    found = re.search(r"@([0-9a-f]{40})$", requirement)
     return found[1] if found else ""
 
 
+def _installed() -> str:
+    """The commit the installed abucache was built from (pip records it in the distribution's direct_url.json)."""
+    text = metadata.distribution("abucache").read_text("direct_url.json")
+    return str(json.loads(text).get("vcs_info", {}).get("commit_id", "")) if text else ""
+
+
 def check_abucache() -> None:
-    """The installed abucache is the one version this unbake's own requirement names."""
-    pin = _pin()
-    if abucache.__version__ != pin:
+    """The installed abucache is the one commit this unbake's own requirement names."""
+    pin, installed = _pin(), _installed()
+    if installed != pin:
         raise Refusal(
             Finding(
                 "tool.version",
                 path="pyproject.toml:dependencies",
-                reason=f"abucache version mismatch: expected {pin}, found {abucache.__version__}",
+                reason=f"abucache commit mismatch: expected {pin[:12] or 'none'}, found {installed[:12] or 'none'}",
             )
         )
 

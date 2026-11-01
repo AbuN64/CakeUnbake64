@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from abucache import memo
+
 from unbake import config as configuration
 from unbake import effort, store, symbols
 from unbake.contracts import Config, Finding, Refusal, Version, code_identity, digest, sha256
@@ -81,7 +83,7 @@ def symbol_addrs(config: Config, version: str, reader: Callable[[str], bytes] | 
     that names the older build's addresses, loaded apart; required exactly when the version declares a window)."""
     path = symbol_file(version)
     data = reader(path) if reader else (config.project.root / path).read_bytes()
-    rows = effort.memo(("symbol_addrs", path, sha256(data)), lambda: parse_symbol_addrs(data, path))
+    rows = memo.memo(("symbol_addrs", path, sha256(data)), lambda: parse_symbol_addrs(data, path))
     earlier = symbols.earlier_path(version)
     try:
         extra = reader(earlier) if reader else (config.project.root / earlier).read_bytes()
@@ -90,7 +92,7 @@ def symbol_addrs(config: Config, version: str, reader: Callable[[str], bytes] | 
     symbols.need_earlier(config, version, extra is not None)
     if extra is None:
         return rows
-    return rows + effort.memo(("symbol_addrs", earlier, sha256(extra)), lambda: parse_symbol_addrs(extra, earlier))
+    return rows + memo.memo(("symbol_addrs", earlier, sha256(extra)), lambda: parse_symbol_addrs(extra, earlier))
 
 
 def segments(config: Config, version: str) -> tuple[tuple[str, int, int, int], ...]:
@@ -249,7 +251,7 @@ def read(
 
 def facts_digest(version: Version) -> str:
     """A version's symbol table and code names as one hash (tens of thousands of names), computed once per command."""
-    return effort.memo(
+    return memo.memo(
         ("facts", id(version.symbols), id(version.code)),
         lambda: (
             version.symbols,
@@ -266,12 +268,12 @@ def idents(data: bytes | None) -> frozenset[str]:
     """Every identifier a file spells, once per content."""
     if data is None:
         return frozenset()
-    return effort.memo(("idents", sha256(data)), lambda: frozenset(m.decode() for m in _IDENT.findall(data)))
+    return memo.memo(("idents", sha256(data)), lambda: frozenset(m.decode() for m in _IDENT.findall(data)))
 
 
 def _rom_sha(rom: Path) -> str:
     stat = rom.stat()
-    return effort.memo(("rom", str(rom), stat.st_mtime_ns, stat.st_size), lambda: sha256(rom.read_bytes()))
+    return memo.memo(("rom", str(rom), stat.st_mtime_ns, stat.st_size), lambda: sha256(rom.read_bytes()))
 
 
 def delay_slot(word: int) -> bool:  # a MIPS jump or branch: the next word is its delay slot

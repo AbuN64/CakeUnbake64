@@ -8,6 +8,8 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
+from abucache import memo as cache
+
 from unbake import (
     adapters,
     effort,
@@ -176,7 +178,7 @@ def cached(config: Config, kind: str, key: str, produce: Callable[[], bytes]) ->
 
 
 def memo[T](key: object, produce: Callable[[], T]) -> T:
-    return effort.memo(key, produce)
+    return cache.memo(key, produce)
 
 
 def make(config: Config, targets: Sequence[str]) -> tuple[str, str]:

@@ -13,6 +13,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from abucache import memo
+
 from unbake import adapters, effort, pool, store
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Recipe, Refusal, Snapshot, SourceView, UnitSpec, digest, macro, sha256
@@ -26,10 +28,10 @@ def pin(snapshot: Snapshot, path: str) -> str:
     """The hash of a project file as the snapshot reads it, hashed once per command until store.write replaces one."""
     try:
         if path in snapshot.overlays or snapshot.tree:  # the snapshot digest covers what it overlays or holds
-            return effort.memo(("pin", snapshot.digest, path), lambda: _sha(snapshot.read(path)))
+            return memo.memo(("pin", snapshot.digest, path), lambda: _sha(snapshot.read(path)))
         full = f"{snapshot.config.project.root}/{path}"
         stat = Path(full).stat()
-        return effort.memo(("pin", full, stat.st_mtime_ns, stat.st_size), lambda: _sha(Path(full).read_bytes()))
+        return memo.memo(("pin", full, stat.st_mtime_ns, stat.st_size), lambda: _sha(Path(full).read_bytes()))
     except FileNotFoundError:
         return "missing"
 
@@ -93,7 +95,7 @@ def _walked(
 ) -> tuple[tuple[tuple[str, ...], tuple[str, ...]], dict[str, str]]:
     root = str(snapshot.config.project.root)
     identity = snapshot.digest if snapshot.overlays or snapshot.tree else ""  # the live tree is checked by its pins
-    return effort.memo_valid(
+    return memo.memo_valid(
         ("closure", root, unit.path, tuple(argv), identity),
         lambda: _walk(snapshot, unit, argv),
         lambda kept: all(pin(snapshot, path) == held for path, held in kept[1].items()),
@@ -117,7 +119,7 @@ def _walk(
             return None if content is None else directives(content)
 
         held = asked[path] = pin(snapshot, path)
-        return effort.memo(("includes", str(snapshot.config.project.root), path, held), read)
+        return memo.memo(("includes", str(snapshot.config.project.root), path, held), read)
 
     dirs: dict[str, list[str]] = {"-iquote": [], "-I": [], "-isystem": []}
     forced: list[str] = []
@@ -247,7 +249,7 @@ def _identity(config: Config, recipe: Recipe) -> str:
     of the module that makes views, never the rest of the tool, so an install that leaves these alone keeps every
     stored view."""
     return str(
-        effort.memo(
+        memo.memo(
             ("view-identity", recipe.toolchain),
             lambda: digest(
                 (

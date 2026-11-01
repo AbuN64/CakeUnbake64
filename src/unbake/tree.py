@@ -21,6 +21,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from abucache import memo
+
 from unbake import adapters, effort, libasm, pool, process, recipes, store, symbols
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Refusal, sha256
@@ -198,10 +200,10 @@ def _argv(
     with the row's, the project's and the [file] row's preprocessor flags, the version macro, `include` and the file's
     folder; `extra` flags follow the flags. With `markers`, a row's -P is dropped so line markers stay."""
     project = _project(config).digest
-    recipe = effort.memo(("tree.recipe", project, path), lambda: recipes.of(config, path))
+    recipe = memo.memo(("tree.recipe", project, path), lambda: recipes.of(config, path))
     directory = path.rpartition("/")[0] or "."
     id = recipe.toolchain
-    tool = effort.memo(("tree.toolchain", project, id), lambda: adapters.toolchain(config, id))
+    tool = memo.memo(("tree.toolchain", project, id), lambda: adapters.toolchain(config, id))
     return tool.argv(
         "preprocess",
         cppflags=[*(f for f in recipe.cppflags if not (markers and f == "-P")), *extra],
@@ -1048,7 +1050,7 @@ def capture(config: Config, overlay: Mapping[str, bytes | None] = {}) -> Tree:
     with effort.stage("tree.capture"):
         blobs = _files(config, overlay)
         digest = _digest(config, blobs)
-        return _hand_marked(config, effort.memo(("tree", digest), lambda: _captured(config, blobs, digest, overlay)))
+        return _hand_marked(config, memo.memo(("tree", digest), lambda: _captured(config, blobs, digest, overlay)))
 
 
 def _hand_marked(config: Config, held: Tree) -> Tree:

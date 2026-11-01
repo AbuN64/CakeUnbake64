@@ -4,9 +4,10 @@ import os
 
 import pytest
 import tomlkit
+from abucache import memo
 from test_blobs import _config, _credits, _tree
 
-from unbake import blobs, effort, platform, report
+from unbake import blobs, platform, report
 from unbake import config as configuration
 from unbake.contracts import Refusal, sha1, sha256
 
@@ -106,7 +107,7 @@ def test_valid_document_is_read_from_the_rom_once_and_ranges_is_pure(tmp_path, m
     reads = []
     real = platform.read
     monkeypatch.setattr(platform, "read", lambda *args: reads.append(args) or real(*args))
-    effort._memo.clear()
+    memo._memo.clear()
     loaded = platform.load(config)
     platform.load(config)
     assert len(reads) == 1

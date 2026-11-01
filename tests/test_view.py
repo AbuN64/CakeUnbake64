@@ -10,6 +10,7 @@ from unittest.mock import Mock
 
 import fixture
 import pytest
+from abucache import memo
 
 from unbake import store, view
 from unbake.contracts import Config, Finding, Host, Recipe, Refusal, Snapshot, UnitSpec, digest, macro, sha256
@@ -196,7 +197,7 @@ def test_header_change_invalidates(lane, overlay):
         snapshot = _overlay(snapshot, {header: changed})
     else:
         (lane.root / header).write_bytes(changed)
-        view.effort._memo.clear()  # the next command reads the file again
+        memo._memo.clear()  # the next command reads the file again
     lane.text = lane.text.replace("typedef int active;", "typedef long active;")
     second = _get(lane, snapshot)
     assert lane.preprocess.call_count == 2
@@ -385,7 +386,7 @@ def test_header_change_invalidates_when_the_preprocessor_prints_no_line_markers(
     first = _get(lane)
     assert [path for path, _ in first.dependencies] == ["src/unit.c", "include/active.h"]
     (lane.root / "include/active.h").write_bytes(b"typedef long active;\n")
-    view.effort._memo.clear()  # the next command reads the file again
+    memo._memo.clear()  # the next command reads the file again
     assert _get(lane).key != first.key
     assert lane.preprocess.call_count == 2
 
@@ -644,7 +645,7 @@ def test_a_new_install_with_the_same_view_code_keeps_the_view_identity_and_a_vie
     identities = {}
     runs = (("one", "install-one", "same"), ("two", "install-two", "same"), ("edit", "install-two", "edited"))
     for name, code, source in runs:
-        view.effort._memo.clear()
+        memo._memo.clear()
         monkeypatch.setattr(store, "code", lambda code=code: code)
         monkeypatch.setattr(view, "_code", lambda source=source: source)
         identities[name] = view._identity(None, recipe)

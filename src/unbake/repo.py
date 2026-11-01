@@ -20,6 +20,7 @@ from typing import Any
 
 import rabbitizer
 import yaml
+from abucache import memo
 
 from unbake import (
     adapters,
@@ -1015,7 +1016,7 @@ def _sync(config: Config, params: Json) -> tuple[Json, Any]:
         for path, value in changed.items():
             if value is None:
                 (root / path).unlink()
-                effort.forget("pin", "includes", "closure", "listing")
+                memo.forget("pin", "includes", "closure", "listing")
             else:
                 if path == "Makefile":  # a rule make cannot see changing: its objects go before the next build
                     build.drop_reflagged(config, value)

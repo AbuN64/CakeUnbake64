@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import fixture
 import pytest
+from abucache import memo
 
 from unbake import effort
 from unbake.contracts import Config, Finding, Host, Origin, Refusal
@@ -291,14 +292,6 @@ def test_wait_is_charged_to_the_innermost_stage_only(tmp_path):
     assert waits == {"inner": 1.5, "outer": 0.0, "check": 0.0}
 
 
-def test_forget_drops_only_the_named_kinds():
-    with effort.command("check", []):
-        effort.memo(("a", 1), lambda: 1)
-        effort.memo(("b", 1), lambda: 2)
-        effort.forget("a")
-        assert effort.memo(("a", 1), lambda: 3) == 3 and effort.memo(("b", 1), lambda: 4) == 2
-
-
 def test_a_stage_that_fails_names_the_exception_and_the_frame_once():
     from pathlib import Path
 
@@ -348,78 +341,19 @@ def test_the_stage_log_keeps_only_its_newest_whole_lines_past_the_limit(tmp_path
     assert log.read_bytes() == before
 
 
-def _pressure(monkeypatch, resident):
-    monkeypatch.setattr(effort, "_pressure", lambda: (resident, 1000))
-
-
-@pytest.mark.parametrize(("resident", "kept"), [(400, True), (600, False)])
-def test_scoped_drops_only_what_the_scope_added_and_only_under_pressure(monkeypatch, resident, kept):
-    _pressure(monkeypatch, resident)
-    monkeypatch.setattr(effort, "_memo", {("base", 1): 1})
-    with effort.scoped():
-        effort.memo(("overlay", 1), lambda: 2)
-    assert (("overlay", 1) in effort._memo) is kept
-    assert ("base", 1) in effort._memo
-
-
-def test_scoped_records_the_trim_count(monkeypatch):
-    _pressure(monkeypatch, 900)
-    monkeypatch.setattr(effort, "_memo", {})
-    with effort.command("t", []):
-        with effort.scoped():
-            effort.memo(("a", 1), lambda: 1)
-            effort.memo(("a", 2), lambda: 2)
-        trimmed = [r for r in effort._closed if r.path[-1] == "effort.trimmed"]
-    assert [r.items for r in trimmed] == [2] and not trimmed[0].findings
-
-
-def _mock_data(monkeypatch, vmdata_kib, soft, fork):
-    reads = []
-
-    def status():
-        reads.append("status")
-        return f"Name:\tx\nRssAnon:\t500 kB\nVmData:\t{vmdata_kib} kB\nVmRSS:\t999999999 kB\n"
-
-    real = effort.Path.read_text
+def test_the_memo_pressure_of_a_parent_is_measured_against_the_host_parent_budget(monkeypatch, tmp_path):
+    """effort.bind hands the host's parent memory to abucache, whose memo trims against it."""
+    effort.bind(_config(tmp_path))
+    real = memo.Path.read_text
     monkeypatch.setattr(
-        effort.Path,
+        memo.Path,
         "read_text",
-        lambda self, *a, **k: status() if str(self) == "/proc/self/status" else real(self, *a, **k),
+        lambda self, *a, **k: (
+            "RssAnon:\t500 kB\nVmData:\t3000 kB\n" if str(self) == "/proc/self/status" else real(self, *a, **k)
+        ),
     )
-    monkeypatch.setattr(effort.resource, "getrlimit", lambda which: (soft, soft))
-    monkeypatch.setattr(effort, "_fork_data", fork)
-    return reads
-
-
-def test_a_worker_measures_data_growth_since_the_fork_never_resident_memory(monkeypatch):
-    reads = _mock_data(monkeypatch, 3000, 1_000_000 + 2_048_000, -1)
-    effort.mark_fork(2_048_000)  # forked at 2000 KiB
-    assert effort._pressure() == (3000 * 1024 - 2_048_000, 1_000_000)  # VmRSS in the status is ignored
-    assert reads == ["status"]  # one /proc read per check
-
-
-def test_a_parent_compares_its_anonymous_resident_memory_to_the_parent_budget(monkeypatch, tmp_path):
-    _mock_data(monkeypatch, 3000, 0, -1)
-    monkeypatch.setattr(effort, "_config", _config(tmp_path))
-    assert effort._pressure() == (500 * 1024, effort._config.host.memory_parent_bytes)  # RssAnon, not VmData
-
-
-@pytest.mark.parametrize(("vmdata_kib", "kept"), [(2000 + 400, True), (2000 + 600, False)])
-def test_scoped_fires_on_growth_past_half_the_worker_limit(monkeypatch, vmdata_kib, kept):
-    _mock_data(monkeypatch, vmdata_kib, 2000 * 1024 + 1000 * 1024, 2000 * 1024)
-    monkeypatch.setattr(effort, "_memo", {})
-    with effort.scoped():
-        effort.memo(("overlay", 1), lambda: 1)
-    assert (("overlay", 1) in effort._memo) is kept
-
-
-def test_a_worker_with_a_budget_trims_against_the_budget_not_the_higher_data_limit(monkeypatch):
-    _mock_data(monkeypatch, 3000, 4_000_000 + 2_048_000, -1)
-    effort.mark_fork(2_048_000, 1_000_000)
-    try:
-        assert effort._pressure() == (3000 * 1024 - 2_048_000, 1_000_000)
-    finally:
-        effort.mark_fork(-1)
+    monkeypatch.setattr(memo, "_fork_data", -1)
+    assert memo.pressure() == (500 * 1024, effort._config.host.memory_parent_bytes)  # RssAnon, not VmData
 
 
 def test_release_drops_every_value_keyed_by_a_snapshot_digest_and_the_snapshot_itself(monkeypatch):
@@ -427,7 +361,7 @@ def test_release_drops_every_value_keyed_by_a_snapshot_digest_and_the_snapshot_i
 
     laid = SimpleNamespace(digest="wave1")
     monkeypatch.setattr(
-        effort,
+        memo,
         "_memo",
         {
             ("parent", "wave1"): 1,
@@ -438,17 +372,8 @@ def test_release_drops_every_value_keyed_by_a_snapshot_digest_and_the_snapshot_i
             ("catalog", "/root", "k"): 2,
         },
     )
-    assert effort.release("wave1") == 4
-    assert set(effort._memo) == {("pin", "wave2", "a.h"), ("catalog", "/root", "k")}
-
-
-def test_a_worker_trims_to_what_it_was_forked_holding_but_keeps_content_keyed_kinds(monkeypatch):
-    monkeypatch.setattr(effort, "_memo", {("catalog", "base"): 1})
-    monkeypatch.setattr(effort, "_inherited", frozenset())
-    effort.mark_fork(0)
-    effort._memo.update({("catalog", "wave"): 2, ("words", "h"): 3, ("spellings", "wave"): 4})
-    assert effort.trim_to_fork(keep=("words",)) == 2
-    assert set(effort._memo) == {("catalog", "base"), ("words", "h")}
+    assert memo.release("wave1") == 4
+    assert set(memo._memo) == {("pin", "wave2", "a.h"), ("catalog", "/root", "k")}
 
 
 def test_the_stage_log_keeps_the_head_of_a_long_finding_and_the_record_keeps_it_whole(tmp_path, monkeypatch):

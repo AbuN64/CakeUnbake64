@@ -15,6 +15,8 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from abucache import memo
+
 from unbake import config as configuration
 from unbake import effort, journal, rnc, store, windows
 from unbake.contracts import Config, Finding, Json, Plan, Refusal, digest, sha256, sha256_file
@@ -105,7 +107,7 @@ def load(config: Config) -> Json:
         tuple(config.project.version),
         tuple(sorted((v, tuple(s)) for v, s in covered.items())),
     )
-    return effort.memo(key, lambda: retire(parse(config, data), covered))
+    return memo.memo(key, lambda: retire(parse(config, data), covered))
 
 
 def check(config: Config, document: Json, file: str | None = None) -> tuple[Finding, ...]:
@@ -477,7 +479,7 @@ class _Reads:
 
 def _rom_sha(config: Config, version: str) -> str:
     path = Path(config.project.root) / "roms" / f"baserom.{version}.z64"
-    return effort.memo(("rom-sha256", str(path)), lambda: sha256_file(path))
+    return memo.memo(("rom-sha256", str(path)), lambda: sha256_file(path))
 
 
 def superseded_ids(document: Json, packet: Json) -> list[str]:

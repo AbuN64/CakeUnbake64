@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from abucache import memo
+
 from unbake import config as configuration
-from unbake import effort
 from unbake.contracts import Config, Finding, Json, Refusal, digest, sha256
 
 RESOURCE = "rom.toml"  # the packaged platform facts a project without its own file gets
@@ -48,7 +49,7 @@ def validate(config: Config, document: Json) -> None:
     content and configured ROM identity."""
     identities = tuple((v, row.sha1) for v, row in sorted(config.project.version.items()))
     key = ("platform-valid", str(config.project.root), digest(document), identities)
-    effort.memo(key, lambda: _validate(config, document))
+    memo.memo(key, lambda: _validate(config, document))
 
 
 def _validate(config: Config, document: Json) -> bool:

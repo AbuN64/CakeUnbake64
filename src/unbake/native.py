@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import abucache
-from abucache import compile
+from abucache import compile, memo
 from elftools.common.exceptions import ELFError
 from elftools.elf.elffile import ELFFile
 from elftools.elf.relocation import RelocationSection
@@ -77,7 +77,7 @@ def stamp(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe | Non
     cfg = snapshot.config
     recipe = recipe or recipes.resolve(cfg, unit, {})
     text = view.get(snapshot, unit, version, recipe, lines=False).text
-    tools = effort.memo(("tools", recipe.toolchain), lambda: adapters.tool_identity(cfg, recipe.toolchain))
+    tools = memo.memo(("tools", recipe.toolchain), lambda: adapters.tool_identity(cfg, recipe.toolchain))
     return digest(
         (
             sha256(text.encode()),
@@ -124,7 +124,7 @@ def _compile_inputs(
         facts.unrelocated,
     )
     tools = str(
-        effort.memo(
+        memo.memo(
             ("tool-identity", recipe.toolchain), lambda: adapters.tool_identity(snapshot.config, recipe.toolchain)
         )
     )
@@ -337,14 +337,14 @@ def symbol_facts(
     the one on disk."""
     given = (overlays or {}).get(versions.symbol_file(version))
     data = given if given is not None else (cfg.project.root / versions.symbol_file(version)).read_bytes()
-    return effort.memo(("native.facts", version, sha256(data)), lambda: symbols.parse(data.decode(errors="replace")))
+    return memo.memo(("native.facts", version, sha256(data)), lambda: symbols.parse(data.decode(errors="replace")))
 
 
 def version_records(cfg: Config, overlays: Mapping[str, bytes | None] | None = None) -> dict[str, Version]:
     """The version records (ROM, segments, symbols), read once per config and per fact file an overlay replaces."""
     root = cfg.project.root
     given = {p: b for p, b in (overlays or {}).items() if b is not None and p in _fact_files(cfg)}
-    return effort.memo(
+    return memo.memo(
         ("native.versions", cfg.digest, tuple(sorted((p, sha256(b)) for p, b in given.items()))),
         lambda: versions.read(cfg, lambda p: given[p] if p in given else (root / p).read_bytes()),
     )

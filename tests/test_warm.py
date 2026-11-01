@@ -8,10 +8,11 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
+from abucache import memo
 from test_native import _outputs, _tools, case, invocation  # noqa: F401  (fixtures)
 
 from unbake import config as configuration
-from unbake import effort, native, pool, process, store, view
+from unbake import native, pool, process, store, view
 from unbake.contracts import digest
 
 
@@ -58,7 +59,7 @@ def test_a_validated_table_is_parsed_once_across_commands(cfg, monkeypatch) -> N
     monkeypatch.setattr(configuration.tomllib, "loads", lambda text: parses.append(1) or real(text))
     data = b"schema = 1\n\n[symbol]\n"
     for _ in range(2):
-        effort._memo.clear()
+        memo._memo.clear()
         configuration.toml("symbols", data, "symbols.toml", "symbols.table", store.content(cfg).cached)
     assert len(parses) == 1
 

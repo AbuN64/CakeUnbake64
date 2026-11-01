@@ -18,6 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from abucache import memo
 from test_effort import _config
 
 from unbake import config as configuration
@@ -958,16 +959,16 @@ def test_work_caps_the_share_of_a_counted_command(tmp_path, monkeypatch):
 
 
 def test_a_job_under_memory_pressure_leaves_only_the_memo_it_started_with(monkeypatch):
-    monkeypatch.setattr(effort, "_pressure", lambda: (900, 1000))
-    monkeypatch.setattr(effort, "_memo", {("base", 0): 0})
+    monkeypatch.setattr(memo, "pressure", lambda: (900, 1000))
+    monkeypatch.setattr(memo, "_memo", {("base", 0): 0})
 
     def work(value):
-        effort.memo(("overlay", value), lambda: value)
+        memo.memo(("overlay", value), lambda: value)
         return value
 
     outcomes = [pool._job(work, i) for i in (1, 2, 3)]
     assert [o[1] for o in outcomes] == [1, 2, 3]
-    assert set(effort._memo) == {("base", 0)}
+    assert set(memo._memo) == {("base", 0)}
 
 
 def test_a_refused_host_file_runs_the_command_alone(monkeypatch, tmp_path):
@@ -1248,7 +1249,7 @@ def test_a_stable_key_stores_only_clean_results(tmp_path, monkeypatch, mocked_pa
 def test_a_worker_is_refused_memory_only_well_above_the_budget_that_sizes_the_pool(monkeypatch):
     limits, marks = [], []
     monkeypatch.setattr(pool.resource, "setrlimit", lambda which, value: limits.append(value))
-    monkeypatch.setattr(pool.effort, "mark_fork", lambda data, budget=0: marks.append((data, budget)))
+    monkeypatch.setattr(pool.memo, "mark_fork", lambda data, budget=0: marks.append((data, budget)))
     monkeypatch.setattr(pool.ctypes, "CDLL", lambda name: type("L", (), {"prctl": lambda self, *a: 0})())
     monkeypatch.setattr(pool, "_slots", [])
     monkeypatch.setattr(pool, "_cmd", [])
@@ -1497,7 +1498,7 @@ _PARSES: list[int] = []
 def _parse_on(item):
     """A job that parses one shared header per content, as the views and proofs of a round do."""
     snapshot, _ = item
-    effort.memo(("words", "shared header text"), lambda: _PARSES.append(1) or 1)
+    memo.memo(("words", "shared header text"), lambda: _PARSES.append(1) or 1)
     return snapshot.digest, len(snapshot.overlays), os.getpid(), len(_PARSES)
 
 
@@ -1520,18 +1521,18 @@ def test_a_spilled_tree_carries_the_parents_indexes_so_warm_workers_never_build_
     monkeypatch.setattr(pool, "_SHARED", {})
     monkeypatch.setattr(pool, "_laid", [])
     with effort.command("check", []):
-        effort.memo(("catalog", "root", "pins-1"), lambda: {"Vec3": ("include/m.h", 1, "typedef ...")})
+        memo.memo(("catalog", "root", "pins-1"), lambda: {"Vec3": ("include/m.h", 1, "typedef ...")})
         blobs = []
         for name in ("one", "two"):
             stream = io.BytesIO()
             pool._Pickler(stream, set(), ship=True).dump(_snapshot(tmp_path, name))
             blobs.append(stream.getvalue())
             scans["text-2"] = "scan-2"  # the parent scans more before the next round's file
-        monkeypatch.setattr(effort, "_memo", {})  # a worker that holds none of it
+        monkeypatch.setattr(memo, "_memo", {})  # a worker that holds none of it
         monkeypatch.setattr(pool, "_carried", {"scans": {}})
         built = []
         pool._Unpickler(io.BytesIO(blobs[0])).load()
-        assert effort.memo(("catalog", "root", "pins-1"), lambda: built.append(1)) == {
+        assert memo.memo(("catalog", "root", "pins-1"), lambda: built.append(1)) == {
             "Vec3": ("include/m.h", 1, "typedef ...")
         }
         pool._Unpickler(io.BytesIO(blobs[1])).load()
@@ -1548,32 +1549,32 @@ def _laid_tree(item):
     "change", ["relaid", "new_capture", "same_writes_new_base", "new_middle", "large_writes", "unchanged"]
 )
 def _versions_read(item):
-    return effort.memo(("versions.read", "split"), lambda: "read now")
+    return memo.memo(("versions.read", "split"), lambda: "read now")
 
 
 def test_a_warm_worker_forgets_what_the_parent_forgot_before_the_next_dispatch(tmp_path, monkeypatch, warm):
     # setup's extract rewrote the asm and forgot versions.read in the parent; warm workers kept the facts they read
     # before and laid the next plan's overlays from them: 'an overlay laid again in a worker has digest'.
     config = _config(tmp_path)
-    monkeypatch.setattr(effort, "_epochs", {})
+    monkeypatch.setattr(memo, "_epochs", {})
     with effort.command("check", []):
-        effort.memo(("versions.read", "split"), lambda: "before extract")  # in the memo the workers fork holding
+        memo.memo(("versions.read", "split"), lambda: "before extract")  # in the memo the workers fork holding
         assert pool.map(config, "units", _versions_read, [1, 2]) == ["before extract"] * 2
-        effort.forget("versions.read")  # extract: the files these values were read from are rewritten
+        memo.forget("versions.read")  # extract: the files these values were read from are rewritten
         assert pool.map(config, "units", _versions_read, [1, 2]) == ["read now"] * 2
         assert pool.map(config, "units", _versions_read, [1, 2]) == ["read now"] * 2  # one forget, followed once
     assert warm.forks == 1 and warm.dispatches == 6
 
 
 def test_follow_forgets_only_the_kinds_the_parent_forgot_since(monkeypatch):
-    monkeypatch.setattr(effort, "_memo", {("a", 1): 1, ("b", 1): 1})
-    monkeypatch.setattr(effort, "_epochs", {"a": 2, "b": 1})
-    monkeypatch.setattr(effort, "_applied", {"a": 2, "b": 0})
-    effort.follow({"a": 2, "b": 1})
-    assert effort._memo == {("a", 1): 1} and effort._applied == {"a": 2, "b": 1}
-    effort._memo[("b", 2)] = 1
-    effort.follow({"a": 2, "b": 1})  # nothing new: nothing forgotten
-    assert ("b", 2) in effort._memo
+    monkeypatch.setattr(memo, "_memo", {("a", 1): 1, ("b", 1): 1})
+    monkeypatch.setattr(memo, "_epochs", {"a": 2, "b": 1})
+    monkeypatch.setattr(memo, "_applied", {"a": 2, "b": 0})
+    memo.follow({"a": 2, "b": 1})
+    assert memo._memo == {("a", 1): 1} and memo._applied == {"a": 2, "b": 1}
+    memo._memo[("b", 2)] = 1
+    memo.follow({"a": 2, "b": 1})  # nothing new: nothing forgotten
+    assert ("b", 2) in memo._memo
 
 
 def _two_stages(value):

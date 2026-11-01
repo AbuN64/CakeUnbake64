@@ -13,6 +13,8 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from abucache import memo
+
 from unbake import blobs, effort, fakematch, linkfill, platform, present, rescore, store
 from unbake import config as configuration
 from unbake.contracts import Finding, Json, Refusal, sha256_file
@@ -302,7 +304,7 @@ def credits(config: Any, tree: Any) -> tuple[Credit, ...]:
     def build() -> tuple[Credit, ...]:
         return _rows(config, tree, exact_versions(config, tree), rescore.rows(config, tree, facts(config)))
 
-    return effort.memo(("credits", tree.digest, platform.sha(config)), build)
+    return memo.memo(("credits", tree.digest, platform.sha(config)), build)
 
 
 def _on_platform(row: Credit, spans: Mapping[str, blobs.Spans]) -> int:
@@ -606,7 +608,7 @@ def partitions(config: Any, tree: Any) -> dict[str, Json]:
 
     sizes = tuple(_rom_size(config, v) for v in config.project.version)
     fills = tuple(linkfill.read_text(Path(config.project.root), v) for v in config.project.version)
-    return effort.memo(("partition", tree.digest, blobs.sha(config), platform.sha(config), sizes, fills), build)
+    return memo.memo(("partition", tree.digest, blobs.sha(config), platform.sha(config), sizes, fills), build)
 
 
 def accounts(config: Any, tree: Any) -> dict[str, Json]:
@@ -753,7 +755,7 @@ def _linker_fill(bucket: Json, counted: bool) -> str:
 
 def _rom_sha256(config: Any, version: str) -> str:
     path = configuration.rom(config.project, version)
-    return effort.memo(("rom-sha256", str(path)), lambda: sha256_file(path))
+    return memo.memo(("rom-sha256", str(path)), lambda: sha256_file(path))
 
 
 def readme(text: str, config: Any, report: Json) -> str:

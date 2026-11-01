@@ -296,7 +296,7 @@ def test_an_overlay_directory_name_is_not_stored_and_a_lost_chunk_is_a_miss(cfg:
 def test_finish_hands_the_host_commit_window_to_the_collect(cfg: Config, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[int] = []
     inner = store.content(cfg)._inner
-    monkeypatch.setattr(inner, "_start_collect", lambda installed, keep: seen.append(keep))
+    monkeypatch.setattr(inner, "_start_collect", lambda installed, keep, seconds: seen.append(keep))
     store.finish(cfg)
     assert seen == [cfg.host.cache_keep_commits]
 

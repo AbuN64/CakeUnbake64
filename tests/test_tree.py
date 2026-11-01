@@ -7,8 +7,9 @@ from pathlib import Path
 
 import fixture
 import pytest
+from abucache import memo
 
-from unbake import api, effort, pool, store, tree
+from unbake import api, pool, store, tree
 from unbake.contracts import Config, Refusal
 
 pytestmark = pytest.mark.usefixtures("toolchains")  # the parse runs the toolchain row's preprocess template
@@ -355,19 +356,19 @@ def test_another_tool_edit_keeps_the_parse_cache_and_a_scan_edit_rescans_without
     first = tree.capture(config)
     runs = fixture.cpp_runs(tmp_path)
     monkeypatch.setattr(store, "code", lambda: "another tool build")
-    monkeypatch.setattr(effort, "_memo", {})
+    monkeypatch.setattr(memo, "_memo", {})
     tree.capture(config)
     assert fixture.cpp_runs(tmp_path) == runs  # every file parse is a hit
     scans = []
     real = tree._scan_expanded
     monkeypatch.setattr(tree, "_scan_expanded", lambda *a: scans.append(1) or real(*a))
     monkeypatch.setattr(tree, "_code", lambda: "another scanner")
-    monkeypatch.setattr(effort, "_memo", {})
+    monkeypatch.setattr(memo, "_memo", {})
     again = tree.capture(config)
     assert scans and fixture.cpp_runs(tmp_path) == runs  # the rows are made again from the kept expansions
     assert again == first and [m.owns for m in again.modules] == [m.owns for m in first.modules]
     monkeypatch.setattr(tree, "_expansion_code", lambda: "another preprocessor step")
-    monkeypatch.setattr(effort, "_memo", {})
+    monkeypatch.setattr(memo, "_memo", {})
     tree.capture(config)
     assert fixture.cpp_runs(tmp_path) > runs
 
@@ -403,7 +404,7 @@ def test_a_command_keeps_every_expansion_reachable_though_all_its_parses_hit(
     cache = store.content(config)._inner
     cache._touched.clear()
     monkeypatch.setattr(store, "code", lambda: "another tool build")  # the tree is built again from hits alone
-    monkeypatch.setattr(effort, "_memo", {})
+    monkeypatch.setattr(memo, "_memo", {})
     tree.capture(config)
     assert fixture.cpp_runs(tmp_path) > 0
     touched = {t for t in cache._touched if t.startswith(tree.EXPANDED + ":")}
@@ -421,7 +422,7 @@ def test_a_cold_tree_and_a_tree_made_from_kept_expansions_are_the_same_tree(
         cache.delete(name)  # the rows and scans are gone, the expansions stay
     runs = fixture.cpp_runs(tmp_path)
     monkeypatch.setattr(store, "code", lambda: "another tool build")
-    monkeypatch.setattr(effort, "_memo", {})
+    monkeypatch.setattr(memo, "_memo", {})
     warm = tree.capture(config)
     assert fixture.cpp_runs(tmp_path) == runs and warm == cold
     assert [(m.path, m.owns, m.fuzzy, m.stand_ins, m.sections) for m in warm.modules] == [
@@ -449,7 +450,7 @@ def test_a_later_command_rebuilds_nothing_of_an_unchanged_tree(tmp_path: Path, m
     runs, built = fixture.cpp_runs(tmp_path), []
     real = tree._build
     monkeypatch.setattr(tree, "_build", lambda *a: built.append(1) or real(*a))
-    monkeypatch.setattr(effort, "_memo", {})  # a new command: only the durable cache is left
+    monkeypatch.setattr(memo, "_memo", {})  # a new command: only the durable cache is left
     again = tree.capture(config)
     assert again == first and again.owner("a", "c_func") == "src/main/c_func.c"
     assert not built and fixture.cpp_runs(tmp_path) == runs
@@ -462,7 +463,7 @@ def test_a_later_command_after_one_edit_parses_only_that_file(tmp_path: Path, mo
     runs, parsed = fixture.cpp_runs(tmp_path), []
     real = tree._parsed
     monkeypatch.setattr(tree, "_parsed", lambda *a, **kw: parsed.append(a[1]) or real(*a, **kw))
-    monkeypatch.setattr(effort, "_memo", {})
+    monkeypatch.setattr(memo, "_memo", {})
     tree.capture(config)
     assert set(parsed) == {"src/main/c_func.c"} and len(parsed) == 2  # one file in its two versions
     assert fixture.cpp_runs(tmp_path) - runs == 2
@@ -480,12 +481,12 @@ def test_parse_keys_are_one_function_for_a_header_read_off_disk(
     edit(config, "src/main/c_func.c", '#include "gen.h"\ns32 c_func(void) { return 1; }\n')
     tree.capture(config)
     runs = fixture.cpp_runs(tmp_path)
-    monkeypatch.setattr(effort, "_memo", {})
+    monkeypatch.setattr(memo, "_memo", {})
     monkeypatch.setattr(store, "cached_object", lambda config, kind, key, produce: produce())  # no tree entry
     tree.capture(config)
     assert fixture.cpp_runs(tmp_path) == runs  # every file parse is a hit
     (root / "asm/a/include/gen.h").write_text("#define GEN 2\n")
-    monkeypatch.setattr(effort, "_memo", {})
+    monkeypatch.setattr(memo, "_memo", {})
     tree.capture(config)
     assert fixture.cpp_runs(tmp_path) > runs  # the header is an input of the parse
 
@@ -503,11 +504,11 @@ def test_a_comment_edit_of_a_shared_header_parses_nothing_again(
     tree.capture(config)
     runs = fixture.cpp_runs(tmp_path)
     (root / "include/shared.h").write_text("typedef struct S {\n    int arena; /* +0x0: Render_StartRound */\n} S;\n")
-    monkeypatch.setattr(effort, "_memo", {})
+    monkeypatch.setattr(memo, "_memo", {})
     tree.capture(config)
     assert fixture.cpp_runs(tmp_path) == runs
     (root / "include/shared.h").write_text("typedef struct S {\n    int arena;\n} S;\nint round_tbl[2];\n")
-    monkeypatch.setattr(effort, "_memo", {})
+    monkeypatch.setattr(memo, "_memo", {})
     tree.capture(config)
     assert fixture.cpp_runs(tmp_path) > runs
 

@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import psutil
+from abucache import memo
 from abucache.store import absorb_touched, take_touched
 
 from unbake import effort, journal, store
@@ -68,6 +69,9 @@ _laid: list[str] = []  # in a worker, the overlay keys it laid again itself (not
 KEEP = ("declarations", "words", "spelled", "typed")  # memo kinds keyed by content alone: valid for every overlay
 WARM = ("catalog", "spellings", "authority", "spellers")  # content-keyed indexes the parent builds for a round's tree:
 # a spill file carries them, so warm workers read them instead of building them each (forked workers inherited them)
+memo.register_tagger(
+    lambda value: getattr(value, "digest", None)
+)  # `memo.release(digest)` drops a snapshot with its values
 _carried: dict[str, dict[Any, Any]] = {}  # name -> a module's content-keyed table a spill file carries the news of
 _sent: dict[str, set[Any]] = {}  # name -> the keys of that table a spill file of this command carried already
 _forked: set[str] = set()  # the keys of `_SHARED` the current workers were forked with
@@ -92,7 +96,7 @@ def _init(limit: int) -> None:
     )
     hard = inherited + limit * _HARD_LIMIT
     resource.setrlimit(resource.RLIMIT_DATA, (hard, hard))
-    effort.mark_fork(inherited, limit)
+    memo.mark_fork(inherited, limit)
     ctypes.CDLL(None).prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG: a worker never outlives the process that forked it
     for f in _slots + _cmd:  # the parent's locks are the parent's: a worker holding one pins it for life
         f.close()
@@ -729,7 +733,7 @@ def _job(function: Callable[[Any], Any], item: Any) -> tuple[bool, Any, Json]:
     spawned = resource.getrusage(resource.RUSAGE_CHILDREN)
     with effort.capture() as records:
         try:
-            with effort.scoped():
+            with memo.scoped():
                 value, ok = function(item), True
         except Exception as exc:
             here = [f for f in traceback.extract_tb(exc.__traceback__) if "/unbake/" in f.filename]
@@ -806,11 +810,11 @@ def _warmth() -> dict[str, Any]:
         sent = _sent.setdefault(name, set())
         news[name] = {k: v for k, v in list(table.items()) if k not in sent}
         sent.update(news[name])
-    return {"memo": effort.held(WARM), "tables": news}
+    return {"memo": memo.held(WARM), "tables": news}
 
 
 def _adopt(warmth: dict[str, Any]) -> None:
-    effort.adopt(warmth["memo"], WARM)
+    memo.adopt(warmth["memo"], WARM)
     for name, news in warmth["tables"].items():
         if name in _carried:
             for key, value in news.items():
@@ -919,13 +923,13 @@ class _Unpickler(pickle.Unpickler):
                 for old in [k for k in _laid if k not in keep]:
                     gone = _SHARED.pop(old, None)
                     if gone is not None:
-                        effort.release(gone.digest)
+                        memo.release(gone.digest)
                 _laid[:] = [k for k in _laid if k in keep]
-                effort.trim_to_fork(keep=(*KEEP, *WARM), digests={_SHARED[k].digest for k in keep if k in _SHARED})
+                memo.trim_to_fork(keep_kinds=(*KEEP, *WARM), tags={_SHARED[k].digest for k in keep if k in _SHARED})
                 # an overlay this worker laid for an earlier dispatch is never laid from its memo: the same base and
                 # writes may lay another one now (the files it reads changed on disk between dispatches, as setup
                 # writes them), and the parent's digest is the one that holds
-                effort.forget("overlay")
+                memo.forget("overlay")
             return _lay(pid)
         return _SHARED[pid]
 
@@ -971,14 +975,14 @@ def _chunk(
 
 def _header() -> bytes:
     """What every task blob starts with: the parent's forgets and the projects whose landing lock it holds now."""
-    return pickle.dumps((effort.epochs(), journal.holding()), protocol=5)
+    return pickle.dumps((memo.epochs(), journal.holding()), protocol=5)
 
 
 def _follow(stream: io.BytesIO) -> None:
     """First in a worker: forget what the parent forgot (the items lay overlays from the memo) and hold the landing
     locks the parent holds while it waits, never the ones it held when this worker was forked."""
     forgotten, held = pickle.load(stream)
-    effort.follow(forgotten)
+    memo.follow(forgotten)
     journal.adopt(held)
 
 

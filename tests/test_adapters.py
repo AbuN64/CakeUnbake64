@@ -1,5 +1,6 @@
 """Adapter contracts, with every native invocation replaced by a mock."""
 
+import json
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -416,22 +417,32 @@ def test_a_failed_chain_step_is_refused_as_the_direct_calls_refuse(adapter_confi
 _PIN = adapters._pin  # the real reading, before the autouse fixture pins it to the installed abucache
 
 
-@pytest.mark.parametrize(("installed", "refused"), [("0.3.3", False), ("0.1.0", True)])
-def test_abucache_must_be_the_version_this_unbake_requires(monkeypatch, installed, refused):
+_SHA = "e00b0f706db980da04f137118e9328b6c24b9529"
+
+
+@pytest.mark.parametrize(
+    ("installed", "refused"), [(_SHA, False), ("0123456789abcdef0123456789abcdef01234567", True), ("", True)]
+)
+def test_abucache_must_be_the_commit_this_unbake_requires(monkeypatch, installed, refused):
     """The pin comes from the requirement unbake was installed with (canned here: the runner's venv may predate a
-    pin bump), and setup refuses any other installed abucache."""
-    wheel = "abucache @ https://example.invalid/releases/download/v0.3.3/abucache-0.3.3-py3-none-any.whl"
-    requires = {"unbake": ["click==8.5.0", wheel]}
+    pin bump), the installed commit from pip's direct_url.json, and setup refuses any other installed abucache."""
+    requires = {"unbake": ["click==8.5.0", f"abucache @ git+https://example.invalid/cache-64@{_SHA}"]}
+    direct_url = json.dumps(
+        {"url": "https://example.invalid/cache-64", "vcs_info": {"vcs": "git", "commit_id": installed}}
+    )
     monkeypatch.setattr(adapters, "_pin", _PIN)
     monkeypatch.setattr(adapters.metadata, "requires", lambda name: requires[name])
-    monkeypatch.setattr(adapters.abucache, "__version__", installed)
+    monkeypatch.setattr(
+        adapters.metadata, "distribution", lambda name: SimpleNamespace(read_text=lambda file: direct_url)
+    )
     if not refused:
         adapters.check_abucache()
         return
     with pytest.raises(Refusal) as caught:
         adapters.check_abucache()
     (finding,) = caught.value.findings
-    assert (finding.key, finding.reason) == ("tool.version", "abucache version mismatch: expected 0.3.3, found 0.1.0")
+    assert finding.key == "tool.version"
+    assert finding.reason == f"abucache commit mismatch: expected {_SHA[:12]}, found {installed[:12] or 'none'}"
 
 
 def test_unused_tools_not_resolved(adapter_config, toolchains):

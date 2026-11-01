@@ -9,6 +9,7 @@ from typing import Any
 
 import fixture
 import pytest
+from abucache import memo
 from abucache.store import forget
 
 from unbake import adapters, effort, pool
@@ -78,7 +79,7 @@ def _fresh_module_state(monkeypatch, tmp_path_factory):
     monkeypatch.delenv("UNBAKE_CORES", raising=False)  # a test runner's holder is not these tests' holder
     forget()
     effort._config = None
-    effort._memo.clear()
+    memo._clear()
     effort._listeners.clear()
     pool._drop_executor()
     yield
@@ -89,7 +90,7 @@ def _pinned_abucache(monkeypatch: pytest.MonkeyPatch) -> None:
     """Setup checks the installed abucache against the unbake requirement the venv recorded at install time: a test
     venv installed before a pin bump would fail every setup test. Tests judge the code, never the runner's install;
     test_adapters checks the pin reading itself on a canned requirement."""
-    monkeypatch.setattr(adapters, "_pin", lambda: adapters.abucache.__version__)
+    monkeypatch.setattr(adapters, "_pin", adapters._installed)
 
 
 class WarmWorkers:
@@ -109,12 +110,12 @@ class WarmWorkers:
         self.forks += 1
         self.states = [
             {
-                "memo": dict(effort._memo),
-                "inherited": frozenset(effort._memo),
+                "memo": dict(memo._memo),
+                "inherited": frozenset(memo._memo),
                 "shared": dict(pool._SHARED),
                 "laid": [],
-                "epochs": dict(effort._epochs),
-                "applied": dict(effort._epochs),
+                "epochs": dict(memo._epochs),
+                "applied": dict(memo._epochs),
             }
             for _ in range(self.count)
         ]
@@ -128,10 +129,10 @@ class WarmWorkers:
         state = self.states[self.turn % self.count]
         self.turn += 1
         self.dispatches += 1
-        saved = (effort._memo, effort._inherited, pool._SHARED, pool._laid, pool._in_worker)
-        counts = (effort._epochs, effort._applied)
-        effort._memo, effort._inherited = state["memo"], state["inherited"]
-        effort._epochs, effort._applied = state["epochs"], state["applied"]
+        saved = (memo._memo, memo._inherited, pool._SHARED, pool._laid, pool._in_worker)
+        counts = (memo._epochs, memo._applied)
+        memo._memo, memo._inherited = state["memo"], state["inherited"]
+        memo._epochs, memo._applied = state["epochs"], state["applied"]
         pool._SHARED, pool._laid, pool._in_worker = state["shared"], state["laid"], True
         try:
             future.set_result(function(*args))
@@ -139,8 +140,8 @@ class WarmWorkers:
             future.set_exception(exc)
         finally:
             self.laid.update(pool._laid)
-            effort._memo, effort._inherited, pool._SHARED, pool._laid, pool._in_worker = saved
-            effort._epochs, effort._applied = counts
+            memo._memo, memo._inherited, pool._SHARED, pool._laid, pool._in_worker = saved
+            memo._epochs, memo._applied = counts
         return future
 
     def shutdown(self, **kwargs: Any) -> None:

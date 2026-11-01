@@ -54,6 +54,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import tomlkit
+from abucache import memo
 from elftools.elf.elffile import ELFFile
 
 from unbake import collapse as collapsing
@@ -641,7 +642,7 @@ def apply(config: Config, params: Json) -> Row:
         store.write(root / "config.toml", text.encode())
         if ruled:
             store.write(makefile, rules.encode())
-        effort.forget("pin", "includes", "closure", "listing")
+        memo.forget("pin", "includes", "closure", "listing")
         loaded = Config(project, config.host, digest((project.digest, config.host.digest)))
         try:
             # an existing Makefile keeps the [file] rows it was generated with, so rows that moved regenerate it
@@ -1605,7 +1606,7 @@ def merge(config: Config, params: Json) -> Row:
                 project = configuration.load_project(
                     root, lambda path: (root / path).read_bytes(), lambda: sorted(tracked)
                 )
-                effort.forget("pin", "includes", "closure", "listing")
+                memo.forget("pin", "includes", "closure", "listing")
                 loaded = Config(project, config.host, digest((project.digest, config.host.digest)))
                 # an existing Makefile keeps the [file] rows it was generated with, so rows that moved regenerate it
                 out["written"] = [*map_writes, *repo.sync(loaded, {"makefile": True} if rows_moved else {})["written"]]
@@ -1713,7 +1714,7 @@ def split(config: Config, params: Json) -> Row:
                 store.write(settings, carried.encode())
                 rows_moved = True
         project = configuration.load_project(root, lambda path: (root / path).read_bytes(), lambda: sorted(tracked))
-        effort.forget("pin", "includes", "closure", "listing")
+        memo.forget("pin", "includes", "closure", "listing")
         loaded = Config(project, config.host, digest((project.digest, config.host.digest)))
         out: Row = {
             "action": "split",

@@ -5,6 +5,7 @@ from itertools import count
 from pathlib import Path
 
 import pytest
+from abucache import memo
 from test_effort import _config
 
 from unbake import effort, pool, process, repo
@@ -64,9 +65,9 @@ def test_memo_computes_once_per_command_and_resets(cfg):
         return len(calls)
 
     with effort.command("check", []):
-        assert [effort.memo("k", produce), effort.memo("k", produce)] == [1, 1]
+        assert [memo.memo("k", produce), memo.memo("k", produce)] == [1, 1]
     with effort.command("check", []):
-        assert effort.memo("k", produce) == 2
+        assert memo.memo("k", produce) == 2
 
 
 def _budgeted(cfg, *changes):
