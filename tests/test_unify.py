@@ -498,6 +498,92 @@ def test_a_type_that_is_not_the_one_field_struct_of_the_other_rewrites_no_reads(
     assert isinstance(got, typeplan.Plan) and got.reads == ()
 
 
+def test_reads_of_a_scalar_become_reads_of_the_first_element_of_the_array_it_is_unified_to(tmp_path: Path) -> None:
+    """g_persistedOptionUnlockFlags: `int g[4]` is defined, a reading unit's `extern int g` reads it as a scalar.
+    Only the reads change: not a string, a member of that name, the declaration, a comment or an element read."""
+    files = {
+        "src/a.CPP": "int g_flags[4] = { 1 };\nint f(void) { return g_flags[2]; }\n",
+        "src/b.CPP": (
+            "extern int g_flags;\n"
+            'int k(void) { /* g_flags */ g_flags = 3; return g_flags + s.g_flags + p->g_flags + sizeof("g_flags"); }\n'
+        ),
+    }
+    got, src = _plan_of(tmp_path, files, "g_flags")
+    assert isinstance(got, typeplan.Plan) and got.ctext == "int g_flags[]"
+    assert got.reads == (("src/b.CPP", "first", "0"),)
+    assert typeplan.render("src/b.CPP", [got], src) == (
+        "extern int g_flags[];\n"
+        'int k(void) { /* g_flags */ g_flags[0] = 3; return g_flags[0] + s.g_flags + p->g_flags + sizeof("g_flags"); }'
+        "\n"
+    )
+    assert typeplan.render("src/a.CPP", [got], src) == files["src/a.CPP"]
+
+
+def test_a_source_that_reads_the_scalar_through_a_header_reads_the_first_element_too(tmp_path: Path) -> None:
+    """g_frontendSavedVideoModeIndex: the header and PLAYEROPTION.CPP declare `u8`, two sources an array of it. The
+    source with no declaration of its own reads what the header declares, so its reads change with the header's."""
+    files = {
+        "include/h.H": "extern unsigned char g_mode;\n",
+        "src/a.CPP": '#include "h.H"\nvoid f(void) { g_mode = 1; }\n',
+        "src/b.CPP": "extern unsigned char g_mode[];\nint k(void) { return g_mode[1]; }\n",
+        "src/c.CPP": "extern unsigned char g_mode[];\nint m(void) { return g_mode[2]; }\n",
+        "src/d.CPP": "int unrelated(void) { return 4; }\n",
+    }
+    world = World(tmp_path, files, ["src/a.CPP", "src/b.CPP", "src/c.CPP", "src/d.CPP"])
+    census = typeunify.collect(world.found(), world.read)
+    src = typeplan.Sources(lambda p: (tmp_path / p).read_text())
+    sites = typeplan.sites_of(census.per, "g_mode")
+    got = typeplan.plan("g_mode", sites, 0, src, census.norm)
+    assert isinstance(got, typeplan.Plan) and got.ctext == "unsigned char g_mode[]"
+    assert got.reads == (("include/h.H", "first", "0"),)
+    closures = [census.closure[u] for u in typeunify.touched(census, got)]
+    both = typeplan.readers(got, sites, closures, src)
+    assert both.reads == (("include/h.H", "first", "0"), ("src/a.CPP", "first", "0"))
+    assert "src/a.CPP" in both.files and "src/d.CPP" not in both.files
+    assert typeplan.render("src/a.CPP", [both], src) == '#include "h.H"\nvoid f(void) { g_mode[0] = 1; }\n'
+    assert typeplan.render("src/b.CPP", [both], src) == files["src/b.CPP"]
+
+
+def test_reads_of_an_array_stay_when_the_scalar_is_the_type_it_is_unified_to(tmp_path: Path) -> None:
+    files = {
+        "src/a.CPP": "int g_flags = 1;\n",
+        "src/b.CPP": "extern int g_flags[];\nint k(void) { return g_flags[1]; }\n",
+    }
+    got, _ = _plan_of(tmp_path, files, "g_flags")
+    assert isinstance(got, typeplan.Plan) and got.ctext == "int g_flags" and got.reads == ()
+
+
+def test_reads_of_a_pointer_become_the_pointer_stored_at_the_array_it_is_unified_to(tmp_path: Path) -> None:
+    """g_pakDefaultPreviewTypeLabel: `char g[]` is defined, a reading unit's `extern u8 *g` loads the pointer."""
+    files = {
+        "src/a.CPP": 'char g_label[] = "ab";\n',
+        "src/b.CPP": (
+            "extern char *g_other, *g_label;\nvoid* k(void) { return &g_label; }\nchar* m(void) { return g_label; }\n"
+        ),
+    }
+    got, src = _plan_of(tmp_path, files, "g_label")
+    assert isinstance(got, typeplan.Plan) and got.ctext == "char g_label[]"
+    assert got.reads == (("src/b.CPP", "held", "char"),)
+    assert typeplan.render("src/b.CPP", [got], src) == (
+        "extern char *g_other;\nextern char g_label[];\n"
+        "void* k(void) { return &(*(char **)g_label); }\n"
+        "char* m(void) { return (*(char **)g_label); }\n"
+    )
+
+
+def test_reads_of_an_array_become_its_address_when_the_pointer_is_the_type_it_is_unified_to(tmp_path: Path) -> None:
+    files = {
+        "src/a.CPP": "char *g_label = 0;\n",
+        "src/b.CPP": "extern char g_label[];\nvoid* k(void) { return &g_label; }\nchar* m(void) { return g_label; }\n",
+    }
+    got, src = _plan_of(tmp_path, files, "g_label")
+    assert isinstance(got, typeplan.Plan) and got.ctext == "char *g_label"
+    assert got.reads == (("src/b.CPP", "address", "char"),)
+    assert typeplan.render("src/b.CPP", [got], src) == (
+        "extern char *g_label;\nvoid* k(void) { return &g_label; }\nchar* m(void) { return ((char *)&g_label); }\n"
+    )
+
+
 def test_an_anonymous_struct_definition_is_the_type_of_every_extern(tmp_path: Path) -> None:
     """g_pakControllerRecord: the definition is `struct { u16 value; }`, an extern spells a scalar."""
     files = {"include/h.H": "extern int g_rec;\n", "src/a.CPP": "struct { unsigned short value; } g_rec = { 1 };\n"}

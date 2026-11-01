@@ -31,7 +31,7 @@ from unbake import build, pool, process, store, tree
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Host, Json, Refusal
 from unbake.typecensus import Decl, Norm, Stmt, clashes, declarations, files_of, index, scan, table, tkey
-from unbake.typeplan import EXHAUSTED, Plan, Sources, plan, render, sites_of
+from unbake.typeplan import EXHAUSTED, Plan, Sources, plan, readers, render, sites_of
 
 Unit = tuple[str, str]  # (version, source path)
 Facts = tuple[list[str], list[Stmt], frozenset[str], frozenset[str]]  # (typedefs, project statements, files, words)
@@ -294,7 +294,8 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
             with stages.stage("unify.plan"):
                 got = plan(name, sites_of(census.per, name), rank[name], src, census.norm)
             if isinstance(got, Plan):
-                plans[name] = got
+                closures = [census.closure[u] for u in touched(census, got)] if got.reads else []
+                plans[name] = readers(got, sites_of(census.per, name), closures, src) if closures else got
             else:
                 if rank[name] == 0 or got != EXHAUSTED:  # running out of candidates is how a rotation ends
                     failed[name][""] = got

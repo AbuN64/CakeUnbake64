@@ -4,7 +4,10 @@ A name's candidates are the types it is declared with, the most declared first (
 of equal count, then the longer spelling last); a definition with a body or an initialiser decides alone. `rank` picks
 the next candidate when the one before it failed to keep an object identical. A file whose declaration changes from a
 scalar to a one-field struct of that scalar (or back) also has its reads of the name rewritten to the new type
-(`x` as `x.value`, `x.value` as `x`), by the one rule for every name of this shape. A function whose chosen
+(`x` as `x.value`, `x.value` as `x`), and one that changes from a scalar to an array of it has its reads of the name
+rewritten as `x[0]`, and one that changes between a pointer and an array of the type it points to has its reads of the
+name rewritten as the pointer stored at the array (`*(T **)x`) or the address the array stands for (`(T *)&x`), by the
+one rule for every name of these shapes. A function whose chosen
 declaration takes more parameters than a call in a file that declares it passes has the call completed with the
 enclosing function's own parameters at the missing positions (the registers the call leaves untouched, so the bytes
 stay), and a rewritten declaration whose parameter list names a struct or union tag is preceded, on its line, by a
@@ -19,7 +22,7 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from unbake.typecensus import Norm, decimal_bounds, split_top, tkey, ws
 
@@ -180,13 +183,17 @@ _PRIM = re.compile(r"^(?:unsigned |signed )?(?:char|short|int|long|long long|flo
 
 def _shape(decl: str, name: str, norm: Norm) -> tuple[str, str, str] | None:
     """("scalar", type, "") for a plain variable of a primitive type, ("array", element type, "") for an unsized array
-    of one, ("box", field type, field) for a one-field struct variable, ("record", type, "") for any other type."""
+    of one, ("pointer", pointee type, "") for a pointer to one, ("box", field type, field) for a one-field struct
+    variable, ("record", type, "") for any other type."""
     m = re.match(r"^(.*?)\s*\b" + re.escape(name) + r"\s*(\[\s*\])?$", ws(decl))
     base = m[1].strip() if m else ""
     if not m or not base:
         return None
     if box := _BOX.match(base):
         return ("box", norm.prim(box[1]), box[2]) if not m[2] else None
+    if base.endswith("*") and not m[2] and not re.search(r"[{}\[\]()*]", base[:-1]):
+        pointee = norm.prim(base[:-1].strip())
+        return ("pointer", pointee, "") if _PRIM.match(pointee) else None
     if re.search(r"[{}\[\]()*]", base):
         return None
     kind = norm.prim(base)
@@ -197,9 +204,18 @@ def _shape(decl: str, name: str, norm: Norm) -> tuple[str, str, str] | None:
 
 def _direction(canon: tuple[str, str, str] | None, was: tuple[str, str, str] | None) -> tuple[str, str] | None:
     """How reads written for the type `was` are written for `canon`: one is the one-field struct of the other, or
-    `canon` is a record that `was` (a primitive or an array of one) views by its address."""
+    `canon` is a record that `was` (a primitive or an array of one) views by its address, or `canon` is the unsized
+    array of the primitive `was` (its reads of the scalar are reads of the first element), or one of `canon` and `was`
+    is an unsized array and the other a pointer (the array's own address is what the pointer holds, so a read of the
+    pointer is the pointer stored at the array and a read of the array is the address of the pointer)."""
     if not canon or not was:
         return None
+    if (canon[0], was[0]) == ("array", "scalar") and canon[1] == was[1]:
+        return ("first", "0")
+    if (canon[0], was[0]) == ("array", "pointer"):
+        return ("held", was[1])
+    if (canon[0], was[0]) == ("pointer", "array"):
+        return ("address", canon[1])
     if canon[0] == "record" and was[0] in ("scalar", "array"):
         return ("view" if was[0] == "scalar" else "views", was[1])
     if canon[1] != was[1] or canon[0] == was[0] or "record" in (canon[0], was[0]) or "array" in (canon[0], was[0]):
@@ -266,6 +282,24 @@ def plan(name: str, sites: Mapping[str, Site], rank: int, src: Sources, norm: No
     return Plan(name, canon, why, ctext, tuple(edits), files, reads, keep, params, callers)
 
 
+def readers(found: Plan, sites: Mapping[str, Site], closures: Iterable[frozenset[str]], src: Sources) -> Plan:
+    """`found` with the reads of the files that see a changed declaration through a file that holds it: in a unit whose
+    files hold changed declarations of one way, every other file that names the name without declaring it reads as they
+    do (a header declares, the sources that include it read)."""
+    ways = {f: (w, m) for f, w, m in found.reads}
+    declaring = {loc.rsplit(":", 1)[0] for loc in sites}
+    seen: dict[str, set[tuple[str, str]]] = defaultdict(set)
+    for files in closures:
+        held = {ways[f] for f in files if f in ways}
+        if len(held) != 1:
+            continue
+        for f in files - declaring:
+            if re.search(rf"\b{re.escape(found.name)}\b", src.text(f)[1]):
+                seen[f] |= held
+    extra = tuple((f, *next(iter(w))) for f, w in sorted(seen.items()) if len(w) == 1)
+    return replace(found, reads=found.reads + extra, files=found.files | {f for f, _, _ in extra})
+
+
 _LITERAL = re.compile(r"\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'")
 
 
@@ -282,11 +316,18 @@ def _reads(b: str, path: str, found: Plan) -> list[tuple[int, int, str]]:
             if way == "into"
             else rf"(?<![\w.])(?<!->){word}\s*\.\s*{member}\b"
             if way == "out"
+            else rf"(?<![\w.])(?<!->){word}\b(?!\s*\[)"
+            if way == "first"
+            else rf"(?<![\w.&])(?<!->){word}\b"
+            if way == "address"
             else rf"(?<![\w.])(?<!->){word}\b"
         )
         spelled = {
             "into": f"{found.name}.{member}",
             "out": found.name,
+            "first": f"{found.name}[{member}]",
+            "held": f"(*({member} **){found.name})",
+            "address": f"(({member} *)&{found.name})",
             "view": f"(*({member} *)&{found.name})",
             "views": f"(({member} *)&{found.name})",
         }[way]
