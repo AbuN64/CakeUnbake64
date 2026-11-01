@@ -334,6 +334,8 @@ class Host:
     run_slice: str | None = None  # resources.run_slice: the systemd user slice `unbake-run` starts itself in, if any
     cache_keep_commits: int = 20  # cache.keep_commits: how many commits of a clone's HEAD keep their cache entries live
     cache_gc_bytes: int = 8 * 10**9  # cache.gc_bytes: `python -m unbake.cachegc` trim size (8 GB)
+    abucache_url: str | None = None  # abucache.url: where setup fetches the abucache commit this unbake pins
+    abucache_clone: Path | None = None  # abucache.clone: the bare clone setup fetches it into and installs it from
 
 
 @dataclass(frozen=True)

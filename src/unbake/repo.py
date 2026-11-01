@@ -1676,6 +1676,7 @@ def setup(config: Config, params: Json) -> Json:
     makes again, so it runs under the tree lock held exclusively: a tree copied from this one (a stamp or lane seed
     holds the lock shared) never gets a half-written extraction (10-25: a seed copied during a pool refresh lacked
     build/de/undefined_syms_auto.txt and every link of the stamp failed). The tree lock comes before the store lock."""
+    adapters.ensure_abucache(config)
     if not _extracting(config):
         return _setup(config, params)
     with treelock.hold(config.project.root, exclusive=True, who="unbake setup (extracting)"):
@@ -1685,7 +1686,6 @@ def setup(config: Config, params: Json) -> Json:
 def _setup(config: Config, params: Json) -> Json:
     wait_s = config.host.move_wait_s
     with stages.stage("repo.setup"), store.exclusive(config, "structure", wait=True, wait_s=wait_s) as held:
-        adapters.check_abucache()
         if not held:
             raise Refusal(Finding("setup.busy", configuration.sentence("setup.busy")))
         journal.recover(config)

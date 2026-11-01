@@ -15,6 +15,12 @@ move_wait_s = 600
 dir = "${cache_dir}"
 max_bytes = ${cache_max_bytes}
 
+# Optional: where `unbake setup` fetches the abucache commit pyproject.toml pins when the installed one differs,
+# and the bare clone it fetches into and installs from (an absolute path). Without it a differing abucache refuses.
+# [abucache]
+# url = "https://git.example.lan/AbuCache64.git"
+# clone = "/var/lib/unbake/abucache.git"
+
 [toolchains]
 root = "${toolchain_root}"
 

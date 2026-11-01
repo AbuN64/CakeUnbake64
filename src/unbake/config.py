@@ -372,6 +372,9 @@ def load_host(path: Path) -> Host:
         text = document["toolchains"]["root"]
         problems.append(_bad("host", "toolchains.root", f"{text} is not an absolute path", origins))
     catalog: Path | None = None
+    abucache = document.get("abucache")
+    if abucache and not Path(abucache["clone"]).is_absolute():
+        problems.append(_bad("host", "abucache.clone", f"{abucache['clone']} is not an absolute path", origins))
     if "sdk" in document:
         catalog = Path(document["sdk"]["catalog"])
         if not catalog.is_file():
@@ -419,6 +422,8 @@ def load_host(path: Path) -> Host:
         cache_dir=Path(document["cache"]["dir"]),
         cache_max_bytes=document["cache"]["max_bytes"],
         cache_keep_commits=document["cache"].get("keep_commits", 20),
+        abucache_url=abucache["url"] if abucache else None,
+        abucache_clone=Path(abucache["clone"]) if abucache else None,
         cache_gc_bytes=document["cache"].get("gc_bytes", Host.cache_gc_bytes),
         toolchain_root=Path(document["toolchains"]["root"]),
         tools=tools,

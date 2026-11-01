@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Rig proof for `unbake setup`'s abucache step: a venv whose abucache is OLD_SHA (an older commit) is healed to the
+# commit pyproject.toml pins, fetched from the URL a host config names (the URL pyproject pins abucache from; the host
+# config is $UNBAKE_HOST or ~/.config/unbake/unbake.toml plus an [abucache] table). Exits 0 when the pin is installed.
+# usage: ci/abucache-pin-proof OLD_SHA     (scratch under $TMPDIR)
+set -euo pipefail
+old=${1:?usage: ci/abucache-pin-proof OLD_SHA}
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+work=$(mktemp -d "${TMPDIR:?TMPDIR names the scratch directory}/abucache-pin-proof.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+url=$(sed -n 's/.*abucache @ git+\([^@]*\)@[0-9a-f]\{40\}.*/\1/p' "$root/pyproject.toml")
+[[ -n "$url" ]] || { echo "pyproject.toml pins no abucache url" >&2; exit 1; }
+{ cat "${UNBAKE_HOST:-$HOME/.config/unbake/unbake.toml}"; printf '\n[abucache]\nurl = "%s"\nclone = "%s"\n' "$url" "$work/abucache.git"; } > "$work/host.toml"
+python3 -m venv "$work/venv"
+"$work/venv/bin/pip" install -q -e "$root"
+"$work/venv/bin/pip" install -q --no-deps --force-reinstall "abucache @ git+$url@$old"
+cat > "$work/proof.py" <<'PY'
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+from unbake import adapters, config
+from unbake.contracts import Config
+
+host_path, scratch = Path(sys.argv[1]), Path(sys.argv[2])
+print(f"installed {adapters._installed()}, pin {adapters._pin()}", flush=True)
+started = scratch / "started"
+if not started.exists():  # the first run only: the venv begins on the older abucache
+    assert adapters._installed() != adapters._pin(), "the venv must start on an older abucache"
+    started.touch()
+# the first run installs the pin and starts this script again (the modules imported are the old ones); the second
+# run finds it installed
+adapters.ensure_abucache(Config(SimpleNamespace(root=scratch, digest="proof"), config.load_host(host_path), "proof"))  # type: ignore[arg-type]
+sys.exit(0 if adapters._installed() == adapters._pin() else 1)
+PY
+"$work/venv/bin/python" "$work/proof.py" "$work/host.toml" "$work"

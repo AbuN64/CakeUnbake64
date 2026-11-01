@@ -431,6 +431,7 @@ def test_abucache_must_be_the_commit_this_unbake_requires(monkeypatch, installed
         {"url": "https://example.invalid/cache-64", "vcs_info": {"vcs": "git", "commit_id": installed}}
     )
     monkeypatch.setattr(adapters, "_pin", _PIN)
+    monkeypatch.setattr(adapters, "_SOURCE_ROOT", Path("/nonexistent"))  # no pyproject.toml beside the source
     monkeypatch.setattr(adapters.metadata, "requires", lambda name: requires[name])
     monkeypatch.setattr(
         adapters.metadata, "distribution", lambda name: SimpleNamespace(read_text=lambda file: direct_url)
@@ -502,3 +503,12 @@ def test_a_row_that_leaves_rdata_unallocated_gets_the_makefiles_objcopy_step(ada
     assert flags[1:] == ("--set-section-flags", ".rdata=alloc,load,readonly,data,contents", "{in}", "{out}")
     assert flags[0] == str(adapter_config.host.tools["mips_objcopy"])
     assert adapter_config.host.tools["mips_objcopy"] in adapters.toolchain(adapter_config, "fake-9").tool_files()
+
+
+def test_the_pin_is_read_from_the_pyproject_beside_the_source(monkeypatch, tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        f'[project]\nname = "unbake"\ndependencies = ["click==8.5.0", "abucache @ git+https://example.invalid/c@{_SHA}"]\n'
+    )
+    monkeypatch.setattr(adapters, "_SOURCE_ROOT", tmp_path)
+    monkeypatch.setattr(adapters.metadata, "requires", Mock(side_effect=AssertionError("metadata is not read")))
+    assert _PIN() == _SHA
