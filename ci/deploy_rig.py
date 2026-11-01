@@ -3,8 +3,9 @@
 them in file order on the rig at the landed revision, from the root of the tree, with
 LANDED_Projects_AbuN64_CakeUnbake64 set and `deploy-env TOOLKIT=<live link>` in the environment; it appends its own
 landing arguments, which no step reads.
-This repository owns its own rig toolkit, /home/abu/venv-unbake, and no other repository names that path: AbuDecomp64
-owns the decomp toolkit, and a consumer that needs both puts both on PATH. A step prints its facts and exits 0, or
+This repository owns its own rig toolkit, the live link `deploy-env TOOLKIT=` names, and no other repository names it.
+Its commands (unbake, unbake-run) are published by name into the one command directory `commands` beside the toolkit
+link, the directory the rig job PATH holds; a consumer calls them by name only. A step prints its facts and exits 0, or
 prints one line on stderr and exits 1; it calls no other tool of the close and none of another repository's toolkit.
 
   name       the build's NAME, the first 12 hex digits of the sha256 of the requirement `unbake[dev] @ git+URL@SHA`
@@ -15,19 +16,19 @@ prints one line on stderr and exits 1; it calls no other tool of the close and n
              exits non-zero, the live link stays and the failed build's folder and link are removed at once; on exit 0
              the close switches the live link to BUILD;
   readback   the live link resolves to BUILD and the installed commit of unbake equals the landed SHA. A mismatch
-             refuses (fix forward, no rollback). After it holds, the deploy prunes: only the live and the previous
-             build stay (their links and folders); every other `<toolkit>.*` link or folder is removed.
+             refuses (fix forward, no rollback). After it holds, each command is linked into the command directory
+             (`commands/unbake` -> `<toolkit>/bin/unbake`, through the live link, so it follows every later switch) and
+             read back: it resolves into the live toolkit. The deploy removes nothing: pruning old builds belongs to
+             the activation alone.
 
-  deploy-env TOOLKIT=/home/abu/venv-unbake
+  deploy-env TOOLKIT=<live link>
   rig run ci/deploy_rig.py name
-  rig activate ci/deploy_rig.py /home/abu/venv-unbake build
+  rig activate ci/deploy_rig.py <live link> build
   rig run ci/deploy_rig.py readback"""
 
 import hashlib
 import os
 import re
-import shutil
-import stat
 import subprocess
 import sys
 from collections.abc import Callable
@@ -35,6 +36,8 @@ from collections.abc import Callable
 ENV = "LANDED_Projects_AbuN64_CakeUnbake64"
 URL = "https://github.com/AbuN64/cake-unbake-64"
 SHA = re.compile(r"[0-9a-f]{40}")
+COMMANDS = "commands"  # the command directory beside the toolkit link
+PUBLISHED = ("unbake", "unbake-run")  # this repository's [project.scripts]
 
 # bash(script, args) runs one of the scripts below and returns its exit code and, when captured, its stdout.
 Bash = Callable[..., "tuple[int, str]"]
@@ -102,37 +105,25 @@ def bash(script: str, *args: str, capture: bool = False) -> tuple[int, str]:
     return done.returncode, done.stdout or ""
 
 
-def force_remove(path: str) -> None:
-    """Remove a link (never followed) or a folder; a built tree is sealed read-only, so owner write returns first."""
-    if os.path.islink(path) or not os.path.isdir(path):
-        os.unlink(path)
-        return
-    for here, _dirs, _ in os.walk(path):
-        os.chmod(here, os.stat(here).st_mode | stat.S_IWUSR)
-    shutil.rmtree(path)
+def commands(toolkit: str) -> str:
+    """The one command directory, beside the live toolkit link: the folder the rig job PATH holds."""
+    return os.path.join(os.path.dirname(toolkit), COMMANDS)
 
 
-def prune(toolkit: str) -> list[str]:
-    """Keep only the live and the previous build of TOOLKIT and remove the rest of its own litter: every
-    `<toolkit>.<x>` link or folder and every `<toolkit>-stage` / `<toolkit>-stage.<x>` (the scratch of builds before
-    the build linked itself). Kept are the live link, `<toolkit>.previous`, each link of their chains and the folder
-    they end at; a sibling toolkit that merely shares the prefix (`<toolkit>-w3`) is never touched. Returns the
-    removed names."""
-    home, base = os.path.split(toolkit)
-    keep = set()
-    for link in (toolkit, toolkit + ".previous"):
-        path = link
-        while os.path.islink(path):
-            keep.add(path)
-            path = os.path.normpath(os.path.join(os.path.dirname(path), os.readlink(path)))
-        keep.add(path)
-    removed = []
-    for entry in sorted(os.listdir(home)):
-        own = entry.startswith((base + ".", base + "-stage.")) or entry == base + "-stage"
-        if own and os.path.join(home, entry) not in keep:
-            force_remove(os.path.join(home, entry))
-            removed.append(entry)
-    return removed
+def publish(toolkit: str) -> list[str]:
+    """Link each command of this repository into the command directory by name, through the live toolkit link, and
+    read each back: it must resolve into the live toolkit. Returns the names published."""
+    folder = commands(toolkit)
+    os.makedirs(folder, exist_ok=True)
+    live = os.path.realpath(toolkit)
+    for command in PUBLISHED:
+        link = os.path.join(folder, command)
+        tmp = f"{link}.{os.getpid()}.new"
+        os.symlink(os.path.join(toolkit, "bin", command), tmp)
+        os.replace(tmp, link)
+        if os.path.commonpath([os.path.realpath(link), live]) != live:
+            raise Refused(f"{link} resolves to {os.path.realpath(link)}, outside the live toolkit {live}")
+    return list(PUBLISHED)
 
 
 def last_line(text: str, default: object) -> str:
@@ -163,7 +154,6 @@ def step_name(sha: str, toolkit: str, run: Bash) -> None:
 def step_build(sha: str, toolkit: str, run: Bash) -> None:
     code, _ = run(BUILD + SUITE, sha, toolkit, name(sha), URL)
     if code:
-        prune(toolkit)  # live and previous are still the old ones: the failed build and its link go at once
         raise Refused(f"build exit {code}, links unchanged")
 
 
@@ -171,8 +161,7 @@ def step_readback(sha: str, toolkit: str, run: Bash) -> None:
     code, _ = run(READBACK, sha, toolkit, f"{toolkit}.{sha}")
     if code:
         raise Refused(f"readback exit {code}")
-    removed = prune(toolkit)  # the swap held: only the live and the previous build stay
-    sys.stdout.write(f"prune: removed {len(removed)}, kept the live and the previous build\n")
+    sys.stdout.write(f"publish: {', '.join(publish(toolkit))} -> {commands(toolkit)}\n")
 
 
 STEPS = {"name": step_name, "build": step_build, "readback": step_readback}

@@ -16,10 +16,9 @@ deploy_rig = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deploy_rig)
 
 SHA = "a" * 12 + "b" * 28
-HOME = tempfile.mkdtemp(prefix="deploy-rig-home-")  # a step prunes its toolkit's home: always a mocked one
+HOME = tempfile.mkdtemp(prefix="deploy-rig-home-")  # a step publishes beside its toolkit: always a mocked home
 atexit.register(shutil.rmtree, HOME, ignore_errors=True)
 TOOLKIT = f"{HOME}/venv-unbake"
-RIG_TOOLKIT = "/home/abu/venv-unbake"  # the .deploy line; no step ever runs on it
 NAME = deploy_rig.name(SHA)  # a digest of the one requirement; never the SHA
 ENVIRON = {deploy_rig.ENV: SHA, "TOOLKIT": TOOLKIT}
 ARGS = ["--Subject.Board", "board1", "--Subject.Card", "card1"]  # the close appends them; no step reads them
@@ -105,12 +104,15 @@ def test_the_orchestrator_is_gone():
 def test_the_deploy_file_is_the_step_grammar():
     root = Path(__file__).parent.parent
     lines = (root / ".deploy").read_text().splitlines()
+    toolkit = lines[0].removeprefix("deploy-env TOOLKIT=")  # the activation needs the live link absolute: only here
+    assert toolkit.startswith("/") and toolkit.endswith("/venv-unbake")
     assert lines == [
-        f"deploy-env TOOLKIT={RIG_TOOLKIT}",
+        f"deploy-env TOOLKIT={toolkit}",
         "rig run ci/deploy_rig.py name",
-        f"rig activate ci/deploy_rig.py {RIG_TOOLKIT} build",
+        f"rig activate ci/deploy_rig.py {toolkit} build",
         "rig run ci/deploy_rig.py readback",
     ]
+    assert "/home" not in (root / "ci" / "deploy_rig.py").read_text()
     assert os.access(root / "ci" / "deploy_rig.py", os.X_OK)
 
 
@@ -207,105 +209,37 @@ def test_the_suite_refuses_a_tree_at_another_commit_than_the_landed_one():
         assert "suite-sha:" in done.stdout
 
 
-class Home:
-    """A mocked rig home with a live unbake build, a stale one and a sibling toolkit; deploys run on it."""
-
-    def __init__(self, path):
-        self.path = Path(path)
-        self.toolkit = str(self.path / "venv-unbake")
-        for name in ("old1", "old2", "live0"):
-            self.folder(f"venv-unbake.{name}")
-            os.symlink(self.path / f"venv-unbake.{name}", self.path / f"venv-unbake.{name * 3}")
-        os.symlink(self.path / f"venv-unbake.{'live0' * 3}", self.toolkit)
-        self.folder("venv-unbake-w3.361f")  # shares the prefix, is not this toolkit's
-        self.folder("venv-decomp.dafd")
-        self.others = ["venv-unbake-w3.361f", "venv-decomp.dafd"]
-
-    def folder(self, name):
-        path = self.path / name
-        (path / "lib").mkdir(parents=True)
-        (path / "lib" / "mod.py").write_text("x = 1\n")
-        os.chmod(path / "lib" / "mod.py", 0o444)
-        os.chmod(path / "lib", 0o555)  # sealed like a built tree
-        os.chmod(path, 0o555)
-
-    def listing(self):
-        return sorted(os.listdir(self.path))
-
-    def bash(self, fail=False):
-        def run(script, *args, capture=False):
-            if script.startswith(deploy_rig.BUILD):
-                sha, toolkit, name, _ = args
-                self.folder(f"venv-unbake.{name}")
-                os.symlink(f"{toolkit}.{name}", f"{toolkit}.{sha}")
-                return (1 if fail else 0), ""
-            return 0, ""
-
-        return run
-
-    def deploy(self, sha, fail=False):
-        environ = {deploy_rig.ENV: sha, "TOOLKIT": self.toolkit}
-        run = self.bash(fail)
-        if deploy_rig.main(["build"], environ, run):
-            return 1
-        previous = os.readlink(self.toolkit)  # the close's switch: live becomes BUILD, the replaced one previous
-        for link, target in ((self.toolkit + ".previous", previous), (self.toolkit, f"{self.toolkit}.{sha}")):
-            os.symlink(target, link + ".new")
-            os.replace(link + ".new", link)
-        return deploy_rig.main(["readback"], environ, run)
+def test_publish_links_each_command_into_the_command_dir_through_the_live_link(tmp_path):
+    build = tmp_path / "venv-unbake.abc"
+    for command in deploy_rig.PUBLISHED:
+        wrapper(build / "bin" / command, "exit 0")
+    toolkit = tmp_path / "venv-unbake"
+    toolkit.symlink_to(build)
+    assert deploy_rig.publish(str(toolkit)) == ["unbake", "unbake-run"]
+    folder = tmp_path / deploy_rig.COMMANDS
+    for command in deploy_rig.PUBLISHED:
+        assert os.readlink(folder / command) == f"{toolkit}/bin/{command}"  # the stable link, not the build
+        assert (folder / command).resolve() == (build / "bin" / command).resolve()
+    other = tmp_path / "venv-unbake.def"
+    for command in deploy_rig.PUBLISHED:
+        wrapper(other / "bin" / command, "exit 0")
+    toolkit.unlink()
+    toolkit.symlink_to(other)  # a later switch is followed without a second publish
+    assert (folder / "unbake").resolve() == (other / "bin" / "unbake").resolve()
+    assert deploy_rig.publish(str(toolkit)) == ["unbake", "unbake-run"]  # idempotent
 
 
-@pytest.fixture
-def home(tmp_path):
-    yield Home(tmp_path)
-    subprocess.run(["chmod", "-R", "u+w", str(tmp_path)], check=False)  # the sealed trees the prune kept
+def test_publish_refuses_a_command_that_resolves_outside_the_live_toolkit(tmp_path):
+    (tmp_path / "venv-unbake.abc" / "bin").mkdir(parents=True)
+    (tmp_path / "venv-unbake").symlink_to(tmp_path / "venv-unbake.abc")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "venv-unbake.abc" / "bin" / "unbake").symlink_to(elsewhere / "unbake")
+    with pytest.raises(deploy_rig.Refused, match="outside the live toolkit"):
+        deploy_rig.publish(str(tmp_path / "venv-unbake"))
 
 
-def test_after_two_deploys_only_live_and_previous_remain(home):
-    tmp_path = home.path
-    one, two = "1" * 40, "2" * 40
-    n1, n2 = deploy_rig.name(one), deploy_rig.name(two)
-    assert home.deploy(one) == 0
-    assert home.listing() == sorted(
-        [
-            *home.others,
-            "venv-unbake",
-            "venv-unbake.previous",
-            "venv-unbake.live0live0live0",
-            "venv-unbake.live0",
-            f"venv-unbake.{one}",
-            f"venv-unbake.{n1}",
-        ]
-    )
-    assert home.deploy(two) == 0
-    assert home.listing() == sorted(
-        [
-            *home.others,
-            "venv-unbake",
-            "venv-unbake.previous",
-            f"venv-unbake.{one}",
-            f"venv-unbake.{n1}",
-            f"venv-unbake.{two}",
-            f"venv-unbake.{n2}",
-        ]
-    )
-    assert os.path.realpath(home.toolkit) == str(tmp_path / f"venv-unbake.{n2}")
-    assert os.path.realpath(home.toolkit + ".previous") == str(tmp_path / f"venv-unbake.{n1}")
-
-
-def test_a_failed_build_removes_its_folder_and_link_at_once(home):
-    bad = "1" * 40
-    assert home.deploy(bad, fail=True) == 1
-    assert home.listing() == sorted([*home.others, "venv-unbake", "venv-unbake.live0live0live0", "venv-unbake.live0"])
-
-
-def test_the_prune_touches_only_its_own_toolkit_and_is_a_noop_when_clean(home):
-    # no previous link: only the live build is kept
-    assert deploy_rig.prune(home.toolkit) == [
-        "venv-unbake.old1",
-        "venv-unbake.old1old1old1",
-        "venv-unbake.old2",
-        "venv-unbake.old2old2old2",
-    ]
-    assert deploy_rig.prune(home.toolkit) == []
-    assert set(home.others) <= set(home.listing())
+def test_the_deploy_removes_nothing_pruning_is_the_activations():
+    text = (Path(__file__).parent.parent / "ci" / "deploy_rig.py").read_text()
+    for gone in ("def prune", "def force_remove", "rmtree", "os.unlink"):
+        assert gone not in text, gone
