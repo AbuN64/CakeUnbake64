@@ -54,7 +54,7 @@ def test_build_runs_build_and_suite_with_the_name_and_url():
     bash = Bash((0, ""))
     assert main("build", bash) == 0
     script, args, capture = bash.calls[0]
-    assert (args, capture) == ((SHA, TOOLKIT, NAME, deploy_rig.URL), False)
+    assert (args, capture) == ((SHA, TOOLKIT, NAME), False)
     assert script == deploy_rig.BUILD + deploy_rig.SUITE
 
 
@@ -147,13 +147,14 @@ def test_the_build_script_installs_unbake_at_the_sha_into_a_fresh_venv_and_links
             SHA,
             str(toolkit),
             NAME,
-            "https://example.lan/u",
+            cwd=root,
             env={"BUILD": str(build), "PATH": f"{root / 'bin'}:{os.environ['PATH']}"},
         )
         assert done.returncode == 0, done.stdout + done.stderr
         built = root / f"venv-unbake.{NAME}"
         assert build.resolve() == built.resolve() and not toolkit.exists()  # only Job Invoke's switch makes it live
-        assert f"unbake[dev] @ git+https://example.lan/u@{SHA}" in (built / "bin/argv").read_text()
+        # the landed tree (the job's working directory) is the source, never a mirror
+        assert f"unbake[dev] @ git+file://{root.resolve()}@{SHA}" in (built / "bin/argv").read_text()
 
 
 def test_a_failing_install_exits_one_and_links_nothing():
@@ -170,11 +171,13 @@ def test_a_failing_install_exits_one_and_links_nothing():
             SHA,
             str(root / "venv-unbake"),
             NAME,
-            "u",
+            cwd=root,
             env={"BUILD": str(build), "PATH": f"{root / 'bin'}:{os.environ['PATH']}"},
         )
         assert done.returncode == 1 and "deploy-error: pip install exit 3" in done.stderr
         assert not build.is_symlink()
+        assert not (root / f"venv-unbake.{NAME}").exists()  # a failed build leaves no <toolkit>.<name>
+        assert sorted(p.name for p in root.iterdir()) == ["bin"]  # nor its temporary sibling
 
 
 def test_the_readback_script_checks_the_link_then_the_installed_commit():
@@ -238,7 +241,107 @@ def test_publish_refuses_a_command_that_resolves_outside_the_live_toolkit(tmp_pa
         deploy_rig.publish(str(tmp_path / "venv-unbake"))
 
 
-def test_the_deploy_removes_nothing_pruning_is_the_activations():
+def test_only_the_readback_prunes_after_it_holds():
     text = (Path(__file__).parent.parent / "ci" / "deploy_rig.py").read_text()
-    for gone in ("def prune", "def force_remove", "rmtree", "os.unlink"):
+    for gone in ("def force_remove", "unseal"):
         assert gone not in text, gone
+    assert text.count("prune(toolkit)") == 1 and text.index("prune(toolkit)") > text.index("def step_readback")
+
+
+def fake_python(root):
+    """A python3 whose venv has a bin/python that fails `-m pip` while root/fail exists, else records it."""
+    wrapper(
+        root / "bin/python3",
+        'if [ "$1 $2" = "-m venv" ]; then mkdir -p "$3/bin"; cp "$0" "$3/bin/python"; '
+        'printf "#!%s/bin/python\\n" "$3" > "$3/bin/unbake"; chmod +x "$3/bin/unbake"; '
+        'printf "VIRTUAL_ENV=%s\\n" "$3" > "$3/bin/activate"; exit 0; fi\n'
+        '[ -e "$(dirname "$0")/../../fail" ] && exit 3\n'
+        'echo "$@" > "$(dirname "$0")/argv"',
+    )
+
+
+def deploy_build(root):
+    return bash(
+        deploy_rig.BUILD,
+        SHA,
+        str(root / "venv-unbake"),
+        NAME,
+        cwd=root,
+        env={"BUILD": str(root / f"venv-unbake.{SHA}"), "PATH": f"{root / 'bin'}:{os.environ['PATH']}"},
+    )
+
+
+def test_the_1102_sequence_a_mirror_without_the_sha_cannot_fail_and_a_failed_pip_blocks_nothing(tmp_path):
+    """11-02: pip failed fetching a commit the GitHub mirror lacked and left venv-unbake.<name>; the next two deploys
+    refused 'exists'. Now the source is the landed tree, and a failed install leaves nothing."""
+    fake_python(tmp_path / "pyroot")
+    root = tmp_path / "pyroot"
+    assert "github" not in deploy_rig.BUILD.lower() and not hasattr(deploy_rig, "URL")
+    (root / "fail").write_text("")
+    first = deploy_build(root)
+    assert first.returncode == 1 and "pip install exit 3" in first.stderr
+    assert not (root / f"venv-unbake.{NAME}").exists()
+    assert not (root / f"venv-unbake.{SHA}").is_symlink()
+    (root / "fail").unlink()
+    second = deploy_build(root)  # the same sha proceeds
+    assert second.returncode == 0, second.stderr
+    built = root / f"venv-unbake.{NAME}"
+    assert (root / f"venv-unbake.{SHA}").resolve() == built.resolve()
+    again = deploy_build(root)  # a finished build of the sha is never overwritten
+    assert again.returncode == 1 and "exists" in again.stderr
+
+
+def test_the_renamed_venv_scripts_name_the_final_path_not_the_temporary_sibling(tmp_path):
+    fake_python(tmp_path)
+    done = deploy_build(tmp_path)
+    assert done.returncode == 0, done.stderr
+    built = tmp_path / f"venv-unbake.{NAME}"
+    assert (built / "bin/unbake").read_text() == f"#!{built}/bin/python\n"
+    assert (built / "bin/activate").read_text() == f"VIRTUAL_ENV={built}\n"
+    assert ".tmp." not in "".join(p.read_text() for p in (built / "bin").iterdir() if p.name != "python")
+    assert os.access(built / "bin/unbake", os.X_OK)
+
+
+def test_prune_keeps_the_live_and_previous_builds_and_removes_the_rest(tmp_path):
+    names = {k: f"{i:012x}" for i, k in enumerate(["live", "previous", "old1", "old2", "new"])}
+    for name in names.values():
+        (tmp_path / f"venv-unbake.{name}" / "bin").mkdir(parents=True)
+    (tmp_path / f"venv-unbake.{names['old1']}.tmp.AbC123").mkdir()  # a build killed before its rename
+    (tmp_path / "venv-unbake").symlink_to(f"venv-unbake.{names['live']}")
+    (tmp_path / "venv-unbake.previous").symlink_to(f"venv-unbake.{names['previous']}")
+    (tmp_path / f"venv-unbake.{'1' * 40}").symlink_to(f"venv-unbake.{names['old1']}")  # a BUILD link, dangling after
+    (tmp_path / f"venv-unbake.{'2' * 40}").symlink_to(f"venv-unbake.{names['live']}")  # still resolves: kept
+    for other in ("venv-unbake-stage", "venv-decomp." + "a" * 12, "venv-unbake.pins"):
+        (tmp_path / other).mkdir()
+    removed = deploy_rig.prune(str(tmp_path / "venv-unbake"))
+    assert sorted(removed) == sorted(
+        [f"venv-unbake.{names[k]}" for k in ("old1", "old2", "new")]
+        + [f"venv-unbake.{names['old1']}.tmp.AbC123", f"venv-unbake.{'1' * 40}"]
+    )
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
+        [
+            "venv-unbake",
+            "venv-unbake.previous",
+            f"venv-unbake.{names['live']}",
+            f"venv-unbake.{names['previous']}",
+            f"venv-unbake.{'2' * 40}",
+            "venv-unbake-stage",
+            "venv-decomp." + "a" * 12,
+            "venv-unbake.pins",
+        ]
+    )
+
+
+def test_readback_prunes_only_after_the_readback_holds(tmp_path, capsys):
+    toolkit = tmp_path / "venv-unbake"
+    live, old = tmp_path / f"venv-unbake.{'1' * 12}", tmp_path / f"venv-unbake.{'2' * 12}"
+    for build in (live, old):
+        for command in deploy_rig.PUBLISHED:
+            wrapper(build / "bin" / command, "exit 0")
+    toolkit.symlink_to(live)
+    environ = {deploy_rig.ENV: SHA, "TOOLKIT": str(toolkit)}
+    assert deploy_rig.main(["readback"], environ, Bash((1, ""))) == 1
+    assert old.exists()  # a refused readback removes nothing
+    assert deploy_rig.main(["readback"], environ, Bash((0, ""))) == 0
+    assert not old.exists() and live.exists()
+    assert "prune: venv-unbake." + "2" * 12 in capsys.readouterr().out
