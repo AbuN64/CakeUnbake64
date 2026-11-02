@@ -1,7 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-[[ -x .venv/bin/python ]] || { echo "run bin/dev-setup first" >&2; exit 1; }
+# venv records its absolute creation target; moved checkouts retain stale pip shebangs.
+# Check before invoking any environment code, including dependency refreshes.
+if [[ ! -x .venv/bin/python || ! -f .venv/pyvenv.cfg || ! -r .venv/pyvenv.cfg ]]; then
+    echo "run bin/dev-setup first (missing or unreadable checkout environment)" >&2
+    exit 1
+fi
+venv_command=$(sed -n 's/^command = //p' .venv/pyvenv.cfg) || {
+    echo "run bin/dev-setup first (cannot read checkout environment)" >&2
+    exit 1
+}
+# Python writes the target without quoting, including when the checkout contains spaces.
+if [[ "$venv_command" != *" -m venv "* || "$venv_command" != *" $(pwd -P)/.venv" ]]; then
+    echo "run bin/dev-setup first (environment was created for another checkout or has no command target)" >&2
+    exit 1
+fi
 export PYTHONPATH=src
 lock="${XDG_RUNTIME_DIR:-${TMPDIR:?TMPDIR or XDG_RUNTIME_DIR names the test lock directory}}/abu-tests.lock"
 if [[ -z "${ABU_TESTS_LOCKED:-}" ]]; then mkdir -p "$(dirname "$lock")"; ABU_TESTS_LOCKED=1 exec flock "$lock" "$PWD/bin/$(basename "$0")" "$@"; fi
