@@ -83,6 +83,12 @@ def _accounted(config: Config, version: str) -> list[tuple[int, int]]:
     return spans
 
 
+def _current(config: Config, version: str) -> list[tuple[int, int]]:
+    """`blob_stale.current_spans` of a version."""
+    spans: list[tuple[int, int]] = _shared(("current", version), lambda: blob_stale.current_spans(config, version))
+    return spans
+
+
 def _baserom(config: Config, version: str) -> bytes:
     """One version's ROM bytes."""
     path = Path(config.project.root) / "roms" / f"baserom.{version}.z64"
@@ -151,10 +157,70 @@ def string_leaf(data: bytes) -> Json:
     }
 
 
+RAM = (0x80000000, 0x80800000)  # the address window of a data pointer
+
+
+def relocated(data: bytes, windows: object) -> tuple[bytes, int]:
+    """`data` (word aligned, a whole number of words) as the older link laid it out: every big-endian word in the RAM
+    window moves by the delta of the window (`[low, high, delta]`, the current target address) that holds it; a pointer
+    outside every window refuses, as does a window that moves no word. Returns the bytes and how many words moved."""
+    if not isinstance(windows, list) or not windows:
+        raise ValueError("relocate needs a list of [low, high, delta] windows")
+    spans = []
+    for window in windows:
+        if not isinstance(window, list) or len(window) != 3 or any(type(x) is not int for x in window):
+            raise ValueError("a relocate window is [low, high, delta]")
+        low, high, delta = window
+        if not RAM[0] <= low < high <= RAM[1] or not RAM[0] <= low + delta < high + delta <= RAM[1] or delta % 4:
+            raise ValueError("a relocate window lies inside RAM and moves by whole words")
+        spans.append((low, high, delta))
+    if any(a[1] > b[0] for a, b in zip(sorted(spans), sorted(spans)[1:], strict=False)):
+        raise ValueError("relocate windows overlap")
+    out, moved = bytearray(data), 0
+    for at in range(0, len(data) - 3, 4):
+        word = int.from_bytes(data[at : at + 4], "big")
+        if not RAM[0] <= word < RAM[1]:
+            continue
+        for low, high, delta in spans:
+            if low <= word < high:
+                out[at : at + 4] = (word + delta).to_bytes(4, "big")
+                moved += 1
+                break
+        else:
+            raise ValueError(f"pointer {word:#x} at +{at:#x} is in no relocate window")
+    if not moved:
+        raise ValueError("relocate moves no word")
+    return bytes(out), moved
+
+
+def _older_layout(
+    config: Config,
+    row: Json,
+    version: str,
+    other: bytes,
+    source: tuple[int, int],
+    copy: tuple[int, int],
+    windows: object,
+) -> tuple[bytes, int]:
+    """The bytes the older link holds for a relocated copy: the current source (code or data, never a blob) with its
+    pointers moved. A copy may begin or end inside a pointer word: the whole word of the source is moved, then cut."""
+    if "source_blob" in row:
+        raise ValueError("a relocated copy has its current source in code or data, not in a blob")
+    if (source[0] - copy[0]) % 4:
+        raise ValueError("a relocated copy keeps the word phase of its source")
+    head, tail = copy[0] % 4, -copy[1] % 4
+    low, high = source[0] - head, source[1] + tail
+    if low < 0 or high > len(other) or blobs.subtract([(low, high)], _current(config, version)):
+        raise ValueError("relocated copy source, with the words it cuts, is not code or data of the current source")
+    whole, moved = relocated(other[low:high], windows)
+    return whole[head : len(whole) - tail], moved
+
+
 def _copy(config: Config, row: Json, rom: bytes, document: Json, start: int, end: int) -> Json:
     """`rom[start:end]` is a byte-for-byte copy of `source` in the ROM of `source_version` (default: the row's own),
     and those source bytes are already accounted: covered by the decoded blob `source_blob`, or, with none named, code,
-    data or a decoded or identified blob of that version."""
+    data or a decoded or identified blob of that version. With `relocate`, the copy is the older link's layout of
+    current source: the source must be code or data, and its pointers move by the declared window deltas."""
     version = row.get("source_version", row["version"])
     if version not in config.project.version:
         raise ValueError(f"copy source version {version} is unknown")
@@ -165,17 +231,24 @@ def _copy(config: Config, row: Json, rom: bytes, document: Json, start: int, end
     source_end = source + end - start
     if version == row["version"] and source < end and start < source_end:
         raise ValueError("copy source overlaps its copy")
-    if "source_blob" in row:
-        owner = document["blob"][row["source_blob"]]
-        if owner["state"] != "decoded" or blobs.subtract(
-            [(source, source_end)], blobs.merge(owner.get("rom", {}).get(version, []))
-        ):
-            raise ValueError("copy source is not covered by its decoded owner")
-    elif blobs.subtract([(source, source_end)], _accounted(config, version)):
-        raise ValueError("copy source is not code, data or a decoded blob of its version")
-    if other[source:source_end] != rom[start:end]:
+    windows = row.get("relocate")
+    if windows is not None:
+        older, moved = _older_layout(config, row, version, other, (source, source_end), (start, end), windows)
+    else:
+        moved, older = 0, other[source:source_end]
+        if "source_blob" in row:
+            owner = document["blob"][row["source_blob"]]
+            if owner["state"] != "decoded" or blobs.subtract(
+                [(source, source_end)], blobs.merge(owner.get("rom", {}).get(version, []))
+            ):
+                raise ValueError("copy source is not covered by its decoded owner")
+        elif blobs.subtract([(source, source_end)], _accounted(config, version)):
+            raise ValueError("copy source is not code, data or a decoded blob of its version")
+    if older != rom[start:end]:
         raise ValueError("stale copy differs from decoded source")
     out: Json = {"source": [source, source_end], "sha256": sha256(rom[start:end])}
+    if windows is not None:
+        out = {**out, "relocate": windows, "relocated_words": moved}
     if "source_blob" in row:
         out = {**out, "source_blob": row["source_blob"]}
     if version != row["version"]:

@@ -40,11 +40,23 @@ STREAM_REACH = 16384  # how far past an unknown span a code stream is searched (
 MIN_DISTINCT = 4  # a window of fewer distinct byte values (fill, a repeated word) names no source
 Spans = list[tuple[int, int]]
 _ACCOUNTED = ("code", "data", "decoded", "identified")
+_CURRENT = ("code", "data")
 
 
 def accounted(parts: Json) -> Spans:
     """The bytes of one version's partition that a copy may be a copy of."""
     return blobs.merge([tuple(s) for k in _ACCOUNTED for s in parts["spans"][k]])
+
+
+def current(parts: Json) -> Spans:
+    """The bytes of one version's partition that the current source builds: code and data, no stale blob."""
+    return blobs.merge([tuple(s) for k in _CURRENT for s in parts["spans"][k]])
+
+
+def current_spans(config: Config, version: str) -> Spans:
+    """`current` for one version of a project."""
+    tree = import_module("unbake.tree").capture(config)
+    return current(import_module("unbake.report").partitions(config, tree)[version])
 
 
 def source_spans(config: Config, version: str) -> Spans:

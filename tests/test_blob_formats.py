@@ -356,3 +356,61 @@ def test_sn_head_reader_finds_the_dialect_of_the_witness(tmp_path):
     assert (got["dialect"], got["source_version"], got["bytes"]) == ("obj", "b", 9)
     with pytest.raises(ValueError):
         blob_formats.prove(config, dict(row("sn-head", [64, 73]), dialect="sym"), rom, {"blob": {}})
+
+
+def test_relocated_copy_moves_pointers_by_their_window_and_nothing_else(tmp_path, monkeypatch):
+    source = words(0x20, 1, 0x800EE7EC, 0x800E3544, 0xFFFFFFFF)
+    older = words(0x20, 1, 0x800EF1EC, 0x800E3F48, 0xFFFFFFFF)
+    windows = [[0x800E0000, 0x800E4000, 0xA04], [0x800EE000, 0x800F3000, 0xA00]]
+    config = copy_config(tmp_path, b"")
+    rom = bytes(8) + older + bytes(68)
+    monkeypatch.setattr(blob_stale, "current_spans", lambda config, version: [(32, 52)])
+    spec = row("copy", [8, 28], source=32, relocate=windows)
+    rom = rom[:32] + source + rom[52:]
+    done = blob_proof.prove_one(config, spec, rom, {"blob": {}}, [])["decoded"]
+    assert done["relocate"] == windows and done["relocated_words"] == 2 and done["source"] == [32, 52]
+    with pytest.raises(ValueError, match="differs"):
+        moved = [[*windows[0][:2], 0xA08], windows[1]]
+        blob_proof.prove_one(config, row("copy", [8, 28], source=32, relocate=moved), rom, {"blob": {}}, [])
+    with pytest.raises(ValueError, match="no relocate window"):
+        blob_proof.prove_one(config, row("copy", [8, 28], source=32, relocate=windows[:1]), rom, {"blob": {}}, [])
+    with pytest.raises(ValueError, match="moves no word"):
+        blob_formats.relocated(words(1, 2), windows)
+    with pytest.raises(ValueError, match="overlap"):
+        blob_formats.relocated(source, [windows[0], [0x800E3000, 0x800E5000, 4]])
+    monkeypatch.setattr(blob_stale, "current_spans", lambda config, version: [(32, 51)])
+    with pytest.raises(ValueError, match="not code or data of the current source"):
+        blob_proof.prove_one(config, spec, rom, {"blob": {}}, [])
+    with pytest.raises(ValueError, match="not in a blob"):
+        blob_proof.prove_one(config, dict(spec, source_blob="b"), rom, {"blob": {}}, [])
+
+
+def test_relocated_copy_may_begin_and_end_inside_a_word(tmp_path, monkeypatch):
+    source = words(0x11223344, 0x800EE7EC, 0x55667788)
+    older = words(0x11223344, 0x800EF1EC, 0x55667788)
+    windows = [[0x800EE000, 0x800F3000, 0xA00]]
+    rom = bytes(16) + older + bytes(16) + source + bytes(4)
+    config = copy_config(tmp_path, b"")
+    monkeypatch.setattr(blob_stale, "current_spans", lambda config, version: [(44, 56)])
+    spec = row("copy", [18, 26], source=46, relocate=windows)
+    done = blob_proof.prove_one(config, spec, rom, {"blob": {}}, [])["decoded"]
+    assert done["relocated_words"] == 1 and done["source"] == [46, 54]
+    with pytest.raises(ValueError, match="word phase"):
+        blob_proof.prove_one(config, row("copy", [18, 26], source=45, relocate=windows), rom, {"blob": {}}, [])
+    assert blob_formats.relocated(source, windows) == (older, 1)
+
+
+def test_relocated_copy_may_cut_a_pointer_word(tmp_path, monkeypatch):
+    source = words(0x11223344, 0x800EE7EC, 0x55667788, 0x800EE7F0)
+    older = words(0x11223344, 0x800EF1EC, 0x55667788, 0x800EF1F0)
+    windows = [[0x800EE000, 0x800F3000, 0xA00]]
+    rom = bytes(16) + older + bytes(16) + source + bytes(4)
+    config = copy_config(tmp_path, b"")
+    # the copy covers the last 3 bytes of the first pointer word and the first byte of the second
+    monkeypatch.setattr(blob_stale, "current_spans", lambda config, version: [(48, 64)])
+    spec = row("copy", [21, 29], source=53, relocate=windows)
+    done = blob_proof.prove_one(config, spec, rom, {"blob": {}}, [])["decoded"]
+    assert done["relocated_words"] == 2 and done["source"] == [53, 61]
+    monkeypatch.setattr(blob_stale, "current_spans", lambda config, version: [(53, 64)])
+    with pytest.raises(ValueError, match="with the words it cuts"):
+        blob_proof.prove_one(config, spec, rom, {"blob": {}}, [])
