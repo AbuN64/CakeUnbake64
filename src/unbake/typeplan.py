@@ -58,6 +58,53 @@ class Plan:
         tuple[str, str], ...
     ] = ()  # (source file, header): the header that defines the chosen tag, which the file's unit does not read
 
+    def owned(
+        self, sites: Mapping[str, Site], src: Sources, norm: Norm, header: str, users: Iterable[str]
+    ) -> Plan | str:
+        """One physical definition owns the declaration; no alternate type is attempted."""
+        definitions = {loc for loc, (kind, _, _) in sites.items() if kind in ("fdef", "vdef")}
+        if not definitions:
+            return "no definition"
+        if len(definitions) != 1:
+            return "multiple definitions"
+        got, name = self, self.name
+        defining = next(iter(definitions))
+        file, line = defining.rsplit(":", 1)
+        span = _span(src, file, int(line), name)
+        ctext = _decl_text(src.text(file)[1][span[0] : span[1]], name) if span else None
+        if not ctext:
+            return "no source text for the definition"
+        if re.search(r"\b(?:struct|union)\s*\{", ctext):
+            return "cannot retain anonymous definition type in a separate declaration"
+        ctext = _spell(ctext, norm)
+        if sites[defining][0] == "vdef":
+            ctext = "extern " + ctext
+        edits = []
+        for loc, (kind, _, _) in sorted(sites.items()):
+            if kind in ("fdef", "vdef"):
+                continue
+            file, line = loc.rsplit(":", 1)
+            span = _span(src, file, int(line), name)
+            if not span:
+                return f"no source statement at {loc}"
+            edits.append((file, *span))
+        users = set(users) | {loc.rsplit(":", 1)[0] for loc in sites}
+        includes = set(got.includes) | {(f, header) for f in users if f != header}
+        try:
+            src.text(header)
+        except FileNotFoundError:
+            src.missing.add(header)
+            src._text[header] = ("", "")
+        return replace(
+            got,
+            header=header,
+            ctext=ctext,
+            bodies=(),
+            edits=tuple(edits),
+            includes=tuple(sorted(includes)),
+            files=got.files | users | {header},
+        )
+
 
 @dataclass
 class Sources:
@@ -73,6 +120,22 @@ class Sources:
             b = re.sub(r"/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m[0]), t, flags=re.S)
             self._text[path] = (t, re.sub(r"//[^\n]*", lambda m: " " * len(m[0]), b))
         return self._text[path]
+
+    def header(self, owner: str, text: str, headers: Sequence[str], root: str) -> str:
+        """The owning module's header, including an existing header not yet included by its source."""
+        stem = posixpath.splitext(posixpath.basename(owner))[0]
+        for included in re.finditer(r'^[ \t]*#[ \t]*include[ \t]*"([^"\n]+)"', text, re.M):
+            name = included[1]
+            if root + name in headers and posixpath.splitext(posixpath.basename(name))[0].casefold() == stem.casefold():
+                return root + name
+        folder = posixpath.basename(posixpath.dirname(owner))
+        existing = next(
+            (posixpath.dirname(h) for h in headers if posixpath.basename(posixpath.dirname(h)) == folder), None
+        )
+        suffix = ".H" if posixpath.splitext(owner)[1].isupper() else ".h"
+        path = posixpath.join(existing or posixpath.join(root.rstrip("/"), folder), stem + suffix)
+        matches = [h for h in headers if posixpath.splitext(posixpath.basename(h))[0].casefold() == stem.casefold()]
+        return matches[0] if path not in headers and len(matches) == 1 else path
 
 
 def sites_of(per: Mapping[str, Mapping[str, Sequence[tuple[str, str, str, int]]]], name: str) -> dict[str, Site]:
@@ -496,63 +559,6 @@ def plan(
     return Plan(name, canon, why, ctext, tuple(edits), files, reads, keep, params, callers, bodies, includes=includes)
 
 
-def definition_plan(
-    name: str,
-    sites: Mapping[str, Site],
-    src: Sources,
-    norm: Norm,
-    header: str,
-    users: Iterable[str],
-    scope: Iterable[str],
-    closures: Iterable[frozenset[str]],
-) -> Plan | str:
-    """One physical definition owns the declaration; no alternate type is attempted."""
-    definitions = {loc for loc, (kind, _, _) in sites.items() if kind in ("fdef", "vdef")}
-    if not definitions:
-        return "no definition"
-    if len(definitions) != 1:
-        return "multiple definitions"
-    got = plan(name, sites, 0, src, norm, scope, closures)
-    if not isinstance(got, Plan):
-        return got
-    defining = next(iter(definitions))
-    file, line = defining.rsplit(":", 1)
-    span = _span(src, file, int(line), name)
-    ctext = _decl_text(src.text(file)[1][span[0] : span[1]], name) if span else None
-    if not ctext:
-        return "no source text for the definition"
-    if re.search(r"\b(?:struct|union)\s*\{", ctext):
-        return "cannot retain anonymous definition type in a separate declaration"
-    ctext = _spell(ctext, norm)
-    if sites[defining][0] == "vdef":
-        ctext = "extern " + ctext
-    edits = []
-    for loc, (kind, _, _) in sorted(sites.items()):
-        if kind in ("fdef", "vdef"):
-            continue
-        file, line = loc.rsplit(":", 1)
-        span = _span(src, file, int(line), name)
-        if not span:
-            return f"no source statement at {loc}"
-        edits.append((file, *span))
-    users = set(users) | {loc.rsplit(":", 1)[0] for loc in sites}
-    includes = set(got.includes) | {(f, header) for f in users if f != header}
-    try:
-        src.text(header)
-    except FileNotFoundError:
-        src.missing.add(header)
-        src._text[header] = ("", "")
-    return replace(
-        got,
-        header=header,
-        ctext=ctext,
-        bodies=(),
-        edits=tuple(edits),
-        includes=tuple(sorted(includes)),
-        files=got.files | users | {header},
-    )
-
-
 def readers(found: Plan, sites: Mapping[str, Site], closures: Iterable[frozenset[str]], src: Sources) -> Plan:
     """`found` with the reads of the files that see a changed declaration through a file that holds it: in a unit whose
     files hold changed declarations of one way, every other file that names the name without declaring it reads as they
@@ -758,11 +764,18 @@ def render(path: str, plans: Iterable[Plan], src: Sources) -> str:
         b = b[:s] + " " * len(new) + b[e:]  # offsets of the lower spans, edited next, stay valid
     declarations = [p for p in plans if p.header == path]
     if declarations:
-        from unbake import hoist
+        from unbake import guards
 
         lines: list[str] = []
         for p in sorted(declarations, key=lambda p: p.name):
             lines.extend(f"{tag};" for tag in _tags(p.ctext))
             lines.append(p.ctext + ";")
-        t = hoist._compose(t, path, (), list(dict.fromkeys(lines)))
+        block = "".join(line + "\n" for line in dict.fromkeys(lines))
+        if not t:
+            guard = guards.name(path)
+            t = f"#ifndef {guard}\n#define {guard}\n{block}#endif\n"
+        else:
+            ends = list(re.finditer(r"^[ \t]*#[ \t]*endif\b", t, re.M))
+            at = ends[-1].start() if ends and guards.binding(t) else len(t)
+            t = t[:at] + ("" if not at or t[at - 1] == "\n" else "\n") + block + t[at:]
     return t

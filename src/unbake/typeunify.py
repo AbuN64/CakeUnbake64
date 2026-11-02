@@ -16,7 +16,7 @@ from unbake import build, hoist, mergecheck, process, store, tree
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Host, Json, Refusal
 from unbake.typecensus import Decl, Norm, Stmt, clashes, declarations, files_of, index, scan, table, tkey
-from unbake.typeplan import Plan, Sources, definition_plan, readers, render, sites_of
+from unbake.typeplan import Plan, Sources, plan, readers, render, sites_of
 
 Unit = tuple[str, str]  # (version, source path)
 Facts = tuple[list[str], list[Stmt], frozenset[str], frozenset[str]]  # (typedefs, project statements, files, words)
@@ -345,15 +345,12 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
             continue
         defining = definitions[0].rsplit(":", 1)[0]
         owner = owners.get(defining, defining)
-        owner_texts = {**texts, owner: texts.get(owner, texts[defining])}
-        header = hoist._header_path(owner, owner_texts, headers, include_root)
-        # Reuse an existing matching module header even if the definition has not included it yet.
-        matches = [h for h in headers if Path(h).stem.casefold() == Path(owner).stem.casefold()]
-        if header not in headers and len(matches) == 1:
-            header = matches[0]
+        header = src.header(owner, texts.get(owner, texts[defining]), headers, include_root)
         users = set(users_of.get(name, ()))
         with stages.stage("unify.plan"):
-            got = definition_plan(name, held, src, census.norm, header, users, paths, census.closure.values())
+            got = plan(name, held, 0, src, census.norm, paths, census.closure.values())
+            if isinstance(got, Plan):
+                got = got.owned(held, src, census.norm, header, users)
         if isinstance(got, Plan):
             closures = [census.closure[u] for u in touched(census, got)] if got.reads else []
             plans[name] = readers(got, held, closures, src) if closures else got
