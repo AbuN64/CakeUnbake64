@@ -25,6 +25,7 @@ import csv
 import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -229,12 +230,36 @@ def _linked_align(at: int, align: int) -> int:
     return min(align, at & -at) if at else align
 
 
+@dataclass
+class Run:
+    """A run of consecutive pieces of one class in the link order, and the `MAX(., offset)` pin before its first."""
+
+    cls: str
+    pin: int | None
+    pieces: list[tuple[int, int, int]] = field(default_factory=list)
+    origin: int | None = None  # where the link put the run's first piece: the merged object's offsets count from it
+
+
+def _run(runs: list[Run], cls: str, pad: bool = False, pin: int | None = None) -> Run:
+    """The run a piece of `cls` joins: the open one while the link keeps the class, else a new one behind it, so a class
+    the link places again after another class stays a run of its own, where the link put it. A pad joins the last run
+    of its class (the open one behind a piece of that class), a run of its own when the module has none."""
+    if pad:
+        found = next((r for r in reversed(runs) if r.cls == cls), None)
+        if found:
+            return found
+    elif runs and runs[-1].cls == cls:
+        return runs[-1]
+    runs.append(Run(cls, pin))
+    return runs[-1]
+
+
 def _pad(
     inside: bool,
     size: int,
     last: Row | None,
     section: str,
-    classes: dict[str, list[tuple[int, int, int]]],
+    classes: list[Run],
     pads: list[tuple[str, str, str, int]] | None,
 ) -> None:
     """A pad of `size` bytes the link script makes behind `last` inside the span: the merged source holds it as a zero
@@ -242,7 +267,7 @@ def _pad(
     class. Only a unit whose data is one class that holds storage can carry it."""
     if not inside or size <= 0 or last is None or last["cls"] not in classwise.STORED:
         return
-    classes[last["cls"]].append((size, 1, last.get("subalign") or 0))
+    _run(classes, last["cls"], True).pieces.append((size, 1, last.get("subalign") or 0))
     if pads is not None:
         pads.append((section, last["u"], last["cls"], size))
 
@@ -258,8 +283,9 @@ def spans(
     spans, offset in the section where the module starts). The linked span walks the section from the module's first
     entry to its last (the module's pieces aligned as linked, ALIGN directives and `MAX(., offset)` pins between
     them); the bytes of other modules between two entries are the `gap` finding's, so they are not walked and the
-    pins after them are not read. The merged span packs the module's pieces of each class again, each at the alignment
-    the link kept for it (`_linked_align`), class after class as the link places the sections; a class the link pinned
+    pins after them are not read. The merged span packs the module's pieces again, each at the alignment the link
+    kept for it (`_linked_align`), run after run of one class as the link places them: a class the link places again
+    after another class is a run of its own (the merge keeps the link's interleave), and a run the link pinned
     (`MAX(., offset)` right before its first piece) starts no earlier than that offset, as the merged object's does.
     `built` holds the merged object's own sections (name -> (size, alignment) pieces, `object_facts`): a class it
     holds is measured on those pieces, so the in-object padding the model cannot see is part of the span. `holes`, when
@@ -274,8 +300,8 @@ def spans(
         mine = [i for i, e in rows if e["k"] == "entry" and e["u"] in units]
         position, start, foreign = 0, 0, False
         last: Row | None = None  # the module's last entry before the row in hand
-        classes: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
-        pin, pins = None, {}  # the `MAX(., offset)` before an entry, and per class the pin before its first piece
+        classes: list[Run] = []  # the module's pieces as runs of one class, in link order
+        pin = None  # the `MAX(., offset)` before an entry
         for i, row in rows:
             if i > mine[-1]:
                 break
@@ -315,18 +341,21 @@ def spans(
                         holes.append((section, at))
                     position = at + size
                     if i >= mine[0]:
-                        if cls not in pins:
-                            pins[cls] = pin
-                        classes[cls].append((size, _linked_align(at, align), row.get("subalign") or 0))
+                        run = _run(classes, cls, pin=pin)
+                        if run.origin is None:
+                            run.origin = at
+                        # a piece keeps the alignment of its offset in the run: the compiler counts from the object's
+                        # start, which SUBALIGN lets sit at any address, so the link's own address proves nothing more
+                        run.pieces.append((size, _linked_align(at - run.origin, align), row.get("subalign") or 0))
         merged = 0
-        for cls, pieces in classes.items():
-            if built is not None:
-                own = [p for name, found in built.items() if _section_class(name) == cls for p in found]
+        for run in classes:
+            pieces = run.pieces
+            if built is not None and sum(r.cls == run.cls for r in classes) == 1:
+                own = [p for name, found in built.items() if _section_class(name) == run.cls for p in found]
                 if own:
                     pieces = [(size, align, pieces[0][2]) for size, align in own]
-            pin = pins.get(cls)
-            if pin is not None:  # the link script pins each class where it linked: the merged object keeps it
-                merged = max(merged, pin - start)
+            if run.pin is not None:  # the link script pins each run where it linked: the merged object keeps it
+                merged = max(merged, run.pin - start)
             # the object's section starts at an address that is a multiple of its alignment (the link counts from the
             # output section's start, not from the module's first byte), after the pin as the script orders them
             merged = _up(start + merged, pieces[0][2] or max(a for _, a, _ in pieces)) - start

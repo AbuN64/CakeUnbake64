@@ -142,12 +142,12 @@ def with_parts(row: dict[str, Any], **parts: list[tuple[int, int]]) -> dict[str,
 def test_pieces_that_pack_longer_in_one_object_are_a_hard_lma_finding() -> None:
     rows = [("a", "M"), ("b", "M")]
     seq = [
-        with_parts(entry("a", "rodata", 2, ".rodata"), rodata=piece(1, 1), data=piece(1, 1)),
+        with_parts(entry("a", "rodata", 2, ".rodata"), data=piece(1, 1), rodata=piece(1, 1)),
         with_parts(entry("b", "rodata", 4, ".rodata"), rodata=piece(4, 4)),
     ]
     out = run(rows, seq)["M"]
     assert out["verdict"] == "separate"
-    assert out["hard"] == ["lma: us .rodata merged 9 B against linked 8 B: overlaps the next section"]
+    assert out["hard"] == ["lma: us .rodata merged 12 B against linked 8 B: overlaps the next section"]
 
 
 def verdict_of(rows, seqs, module="M"):
@@ -780,3 +780,67 @@ def test_a_module_whose_classes_each_link_whole_has_no_interleave() -> None:
     rows = [("a", "M"), ("b", "M")]
     seq = [entry("a", "data", 4, ".data"), entry("b", "data", 4, ".data"), entry("b", "rodata", 8, ".data")]
     assert run(rows, seq)["M"]["hard"] == []
+
+
+def test_a_link_that_interleaves_rodata_and_data_keeps_its_runs_in_the_merged_span() -> None:
+    """initialize.c .game_data (de, eu, eu-x, us-rev1): the link places rodata 3 and 15, data 13, rodata 3 and 16, data
+    220 under SUBALIGN(1) with a pin before each piece, 272 B. One object that grouped the classes padded to 276 B and
+    would move the data; the span keeps each run where the link put it."""
+
+    def at(unit: str, cls: str, size: int, align: int) -> dict[str, Any]:
+        return {**with_parts(entry(unit, cls, size, ".game_data"), **{cls: piece(size, align)}), "subalign": 1}
+
+    def pin(offset: int) -> dict[str, Any]:
+        return {"o": ".game_data", "k": "minimum", "offset": offset}
+
+    seq = [
+        pin(24608),
+        at("read", "rodata", 3, 4),
+        pin(24612),
+        at("raw", "rodata", 15, 1),
+        pin(24627),
+        at("raw", "data", 13, 16),
+        pin(24640),
+        at("write", "rodata", 3, 4),
+        pin(24644),
+        at("init", "rodata", 16, 4),
+        pin(24660),
+        at("decode", "data", 220, 16),
+    ]
+    units = {"read", "raw", "write", "init", "decode"}
+    assert mergecheck.spans(seq, units) == [(".game_data", 272, 272, 24608)]
+    rows = [(u, "M") for u in sorted(units)]
+    assert not [h for h in run(rows, seq)["M"]["hard"] if h.startswith("lma:")]
+
+
+def test_pieces_the_link_packs_from_a_misaligned_run_start_keep_their_offsets_in_the_merged_span() -> None:
+    """initialize.c .game_data in us-rev1: data 1 at 24979 and data 12 at 24980, each aligned 16 in its object, follow
+    rodata 3, 15 and precede rodata 3, 16 and data 220 (272 B linked). SUBALIGN(1) starts the data run at 24979; the
+    12 B follows it at offset 1, as the link has it, not padded to the 4 of its address (275 B)."""
+
+    def at(unit: str, cls: str, size: int, align: int) -> dict[str, Any]:
+        return {**with_parts(entry(unit, cls, size, ".game_data"), **{cls: piece(size, align)}), "subalign": 1}
+
+    def pin(offset: int) -> dict[str, Any]:
+        return {"o": ".game_data", "k": "minimum", "offset": offset}
+
+    seq = [
+        pin(24960),
+        at("read", "rodata", 3, 4),
+        pin(24964),
+        at("raw", "rodata", 15, 1),
+        pin(24979),
+        at("raw", "data", 1, 16),
+        pin(24980),
+        at("block", "data", 12, 16),
+        pin(24992),
+        at("write", "rodata", 3, 4),
+        pin(24996),
+        at("init", "rodata", 16, 4),
+        pin(25012),
+        at("tables", "data", 220, 16),
+    ]
+    units = {"read", "raw", "block", "write", "init", "tables"}
+    assert mergecheck.spans(seq, units) == [(".game_data", 272, 272, 24960)]
+    rows = [(u, "M") for u in sorted(units)]
+    assert not [h for h in run(rows, seq)["M"]["hard"] if h.startswith("lma:")]
