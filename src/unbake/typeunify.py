@@ -292,7 +292,11 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
         plans: dict[str, Plan] = {}
         for name in pending:
             with stages.stage("unify.plan"):
-                got = plan(name, sites_of(census.per, name), rank[name], src, census.norm)
+                held = sites_of(census.per, name)
+                scope = {
+                    f for c in census.closure.values() if any(loc.rsplit(":", 1)[0] in c for loc in held) for f in c
+                }
+                got = plan(name, held, rank[name], src, census.norm, scope)
             if isinstance(got, Plan):
                 closures = [census.closure[u] for u in touched(census, got)] if got.reads else []
                 plans[name] = readers(got, sites_of(census.per, name), closures, src) if closures else got

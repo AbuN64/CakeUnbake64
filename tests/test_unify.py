@@ -618,7 +618,8 @@ def _plan_of(tmp_path: Path, files: dict[str, str], name: str) -> tuple[typeplan
     world = World(tmp_path, files, sorted(f for f in files if f.startswith("src/")))
     census = typeunify.collect(world.found(), world.read)
     src = typeplan.Sources(lambda p: (tmp_path / p).read_text())
-    return typeplan.plan(name, typeplan.sites_of(census.per, name), 0, src, census.norm), src
+    scope = {f for c in census.closure.values() for f in c}
+    return typeplan.plan(name, typeplan.sites_of(census.per, name), 0, src, census.norm, scope), src
 
 
 def test_a_definition_typed_by_a_typedef_array_is_the_type_of_the_char_externs(tmp_path: Path) -> None:
@@ -819,3 +820,58 @@ def test_a_failing_name_among_names_that_share_units_rotates_alone(tmp_path: Pat
     assert sorted(result["unified"]) == sorted(TIMER_NAMES) and result["unresolved"] == {}
     assert result["unified"]["g_gameSettings"]["type"] != first  # rotated to the next candidate
     assert result["rounds"] >= 2 and result["batches"] >= 3  # the round, the suspects one by one, the rotation
+
+def test_records_that_overlap_by_offset_are_merged_into_the_chosen_ones_unnamed_unions(tmp_path: Path) -> None:
+    """g_pakControllerRecord: one unit's `struct PakRecord { Saved values[4]; }`, another's `struct { u16 value; }`."""
+    files = {
+        "include/h.H": "typedef unsigned short Saved;\nstruct PakRecord { Saved values[4]; };\n",
+        "src/a.CPP": "extern struct PakRecord g_rec;\nint f(void) { return g_rec.values[1]; }\n",
+        "src/b.CPP": "extern struct { unsigned short value; } g_rec;\nint k(void) { return g_rec.value; }\n",
+        "src/c.CPP": "extern struct PakRecord g_rec;\nint m(void) { return g_rec.values[0]; }\n",
+    }
+    got, src = _plan_of(tmp_path, files, "g_rec")
+    assert isinstance(got, typeplan.Plan), got
+    assert got.ctext == "struct PakRecord g_rec"
+    head = typeplan.render("include/h.H", [got], src)
+    assert head.endswith("struct PakRecord { union { Saved values[4]; unsigned short value; }; };\n")
+    # the unit that wrote the anonymous record now declares the tag, and still reads `value`
+    assert (
+        typeplan.render("src/b.CPP", [got], src)
+        == "extern struct PakRecord g_rec;\nint k(void) { return g_rec.value; }\n"
+    )
+
+
+def test_members_at_other_offsets_stay_beside_the_union_of_the_overlapping_ones(tmp_path: Path) -> None:
+    files = {
+        "include/h.H": "struct Rec { int head; short a[2]; };\n",
+        "src/a.CPP": "extern struct Rec g_rec;\nint f(void) { return g_rec.a[0]; }\n",
+        "src/b.CPP": "extern struct { int head; int whole; } g_rec;\nint k(void) { return g_rec.whole; }\n",
+        "src/c.CPP": "extern struct Rec g_rec;\n",
+    }
+    got, src = _plan_of(tmp_path, files, "g_rec")
+    assert isinstance(got, typeplan.Plan), got
+    assert typeplan.render("include/h.H", [got], src) == (
+        "struct Rec { int head; union { short a[2]; int whole; }; };\n"
+    )
+
+
+def test_an_anonymous_chosen_record_takes_the_merged_body_at_every_site(tmp_path: Path) -> None:
+    files = {
+        "include/h.H": "",
+        "src/a.CPP": "extern struct { short a[2]; } g_rec;\n",
+        "src/b.CPP": "extern struct { int whole; } g_rec;\n",
+        "src/c.CPP": "extern struct { short a[2]; } g_rec;\n",
+    }
+    got, _src = _plan_of(tmp_path, files, "g_rec")
+    assert isinstance(got, typeplan.Plan), got
+    assert got.ctext == "struct { union { short a[2]; int whole; }; } g_rec"
+
+
+def test_records_that_do_not_read_are_left_to_the_plain_plan(tmp_path: Path) -> None:
+    files = {
+        "include/h.H": "struct Rec { int v; };\n",
+        "src/a.CPP": "extern struct Rec g_rec;\n",
+        "src/b.CPP": "extern struct { Unknown u[2]; } g_rec;\n",
+    }
+    got, _src = _plan_of(tmp_path, files, "g_rec")
+    assert isinstance(got, typeplan.Plan) and got.bodies == ()

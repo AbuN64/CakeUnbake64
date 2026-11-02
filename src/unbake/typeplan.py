@@ -14,7 +14,11 @@ stay), and a rewritten declaration whose parameter list names a struct or union 
 declaration of that tag (else the tag is born inside the parameter list and conflicts with the file's own).
 The edit of a declaration replaces the
 whole source statement that holds it (a multi-declarator statement keeps its other names) by the canonical declaration
-text, written from a declaration of the chosen type that is in the sources. Comments are blanked before any statement
+text, written from a declaration of the chosen type that is in the sources. A name whose candidates are records (a
+struct tag or an anonymous body, or a pointer to or array of one) has each unit's own definition read through cheaders
+(offsets and sizes) and the members merged by offset into the chosen candidate's definition: members that overlap
+become the alternatives of an unnamed union, so every unit still reads the member it wrote, at its offset. Comments are
+blanked before any statement
 is cut, so offsets are those of the original text."""
 
 from __future__ import annotations
@@ -23,12 +27,15 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from itertools import pairwise
 
+from unbake.cheaders import Field, Headers, Struct
 from unbake.typecensus import Norm, decimal_bounds, split_top, tkey, ws
 
 EXHAUSTED = "no further candidate type"  # the plan of a rank past the last candidate
 Site = tuple[str, str, int]  # (kind, type key, declarators) of one declaration by its loc "file:line"
 Edit = tuple[str, int, int]  # (file, start, end) of the source statement to replace
+Body = tuple[str, int, int, str]  # (file, start, end, text): a record's `{ .. }` and the merged members that replace it
 Read = tuple[str, str, str]  # (file, "into" | "out", field): its reads of the name become `name.field` or `name`
 
 
@@ -44,6 +51,7 @@ class Plan:
     keep: tuple[Edit, ...] = ()  # the declarations of the name in a file of `reads`: not reads
     params: tuple[str, ...] = ()  # the parameters of a function's chosen declaration
     callers: frozenset[str] = frozenset()  # the files whose calls of the name pass fewer arguments than `params`
+    bodies: tuple[Body, ...] = ()  # the chosen record's definitions, their members merged with every candidate's
 
 
 @dataclass
@@ -174,7 +182,10 @@ def _spell(text: str, norm: Norm) -> str:
         )
         prev = t.strip() or prev
     spelled = decimal_bounds("".join(out))  # a bound copied from another declaration is decimal, as the audit demands
-    return re.sub(r"\[[^\]]+\]", "[]", spelled, count=1) if "(" not in spelled else spelled
+    if "(" in spelled:
+        return spelled
+    cut = spelled.rfind("}") + 1  # a member's bound inside a record body stays
+    return spelled[:cut] + re.sub(r"\[[^\]]+\]", "[]", spelled[cut:], count=1)
 
 
 _BOX = re.compile(r"^(?:struct|union)\s*\w*\s*\{\s*([^;{}]+?)\s*\b(\w+)\s*;\s*\}$")
@@ -223,8 +234,165 @@ def _direction(canon: tuple[str, str, str] | None, was: tuple[str, str, str] | N
     return ("into", canon[2]) if canon[0] == "box" else ("out", was[2])
 
 
-def plan(name: str, sites: Mapping[str, Site], rank: int, src: Sources, norm: Norm) -> Plan | str:
-    """The plan of `name` at candidate `rank`, or the reason it has none (a string)."""
+_RECORD = re.compile(r"^((?:struct|union)\b.*?)\s*(\*+|\[\])?$")
+_ANON = re.compile(r"^(?:struct|union)\s*(?:\{|__anonymous$)")  # the census names every anonymous record alike
+
+
+def _blanked(src: Sources, file: str) -> str:
+    """The comment-blanked text of `file`; empty when it cannot be read (a file a unit's markers name only)."""
+    try:
+        return src.text(file)[1]
+    except OSError:
+        return ""
+
+
+def _close(b: str, i: int) -> int:
+    """The index after the `}` that closes the `{` at `i` in `b`; -1 when it never closes."""
+    depth = 0
+    for j in range(i, len(b)):
+        depth += (b[j] == "{") - (b[j] == "}")
+        if depth == 0:
+            return j + 1
+    return -1
+
+
+def _definitions(
+    key: str, sites: Mapping[str, Site], name: str, src: Sources, scope: Iterable[str]
+) -> list[tuple[str, int, int]]:
+    """(file, start, end) of each `{ .. }` that defines the record of `key`: the body written at each site of an
+    anonymous record, the body of the tag in the first file of the sites and `scope` (the files a unit that declares
+    the name reads) that defines it, headers first."""
+    base = _RECORD.match(key)[1]  # type: ignore[index]
+    out: list[tuple[str, int, int]] = []
+    if _ANON.match(base):
+        for loc, (_, k, _) in sorted(sites.items()):
+            file, line = loc.rsplit(":", 1)
+            span = _span(src, file, int(line), name) if k == key else None
+            b = src.text(file)[1]
+            i = b.find("{", *span) if span else -1
+            if i >= 0 and (j := _close(b, i)) > 0:
+                out.append((file, i, j))
+        return out
+    tag = None if _ANON.match(base) else re.match(r"^(?:struct|union)\s+(\w+)$", base)
+    for file in sorted(
+        {loc.rsplit(":", 1)[0] for loc in sites} | set(scope), key=lambda f: (not f.startswith("include/"), f)
+    ):
+        b = _blanked(src, file)
+        m = re.search(rf"\b(?:struct|union)\s+{tag[1]}\s*\{{", b) if tag else None
+        if m and (j := _close(b, m.end() - 1)) > 0:
+            return [(file, m.end() - 1, j)]
+    return out
+
+
+def _layouts(
+    key: str, name: str, sites: Mapping[str, Site], src: Sources, base_headers: Headers, scope: Iterable[str]
+) -> list[Struct | None]:
+    """The struct each definition of the record of `key` is (None when it does not size), read through cheaders: the
+    body at every site of an anonymous record, the one body of a tag."""
+    base = _RECORD.match(key)[1]  # type: ignore[index]
+    tag = None if _ANON.match(base) else re.match(r"^(?:struct|union)\s+(\w+)$", base)
+    out: list[Struct | None] = []
+    for file, s, e in _definitions(key, sites, name, src, scope):
+        h = base_headers.copy()
+        h.add(src.text(file)[1], file)
+        if not tag:
+            h.add(f"{base.split()[0]} __rec {src.text(file)[1][s:e]};")
+        got = h.struct(tag[1] if tag else "__rec")
+        out.append(got if got and got.complete and not got.union and got.size is not None else None)
+    return out or [None]
+
+
+def _spelled(f: Field) -> str:
+    base, _, dims = f.type.text.partition("[")  # cheaders spells tokens apart: `short [ 2 ]`
+    return (
+        f"{base.strip()}{'' if base.strip().endswith('*') else ' '}{f.name}"
+        + ("[" + re.sub(r"\s+", "", dims) if dims else "")
+        + ";"
+    )
+
+
+def _alternative(members: Sequence[Field], at: int) -> str:
+    """The members of one record laid out from offset `at`: a gap the compiler would not insert is an `unsigned char`
+    array; one member at `at` stands alone."""
+    parts, pos = [], at
+    for f in members:
+        align = max(f.type.align, 1)
+        if f.offset != (pos + align - 1) // align * align:
+            parts.append(f"unsigned char _gap{f.offset}[{f.offset - pos}];")
+        parts.append(_spelled(f))
+        pos = f.offset + (f.type.size or 0)
+    return parts[0] if len(parts) == 1 and members[0].offset == at else "struct { " + " ".join(parts) + " };"
+
+
+def _union(layouts: Sequence[Struct]) -> str | None:
+    """The members of `layouts` merged by offset, the chosen record's first: members of different records that overlap
+    are the alternatives of an unnamed union. None when a record's own members overlap (it holds a union already)."""
+    owned = [sorted(s.fields, key=lambda f: f.offset) for s in layouts]
+    if any(a.offset + (a.type.size or 0) > b.offset for fs in owned for a, b in pairwise(fs)):
+        return None
+    ends: dict[int, int] = {}
+    for fs in owned:
+        for f in fs:
+            ends[f.offset] = max(ends.get(f.offset, 0), f.offset + max(f.type.size or 0, 1))
+    clusters: list[tuple[int, int]] = []
+    for at in sorted(ends):
+        if clusters and at < clusters[-1][1]:
+            clusters[-1] = (clusters[-1][0], max(clusters[-1][1], ends[at]))
+        else:
+            clusters.append((at, ends[at]))
+    out, pos = [], 0
+    for start, end in clusters:
+        alts: dict[tuple[tuple[str, int, str], ...], str] = {}
+        for fs in owned:
+            held = [f for f in fs if start <= f.offset < end]
+            if held:
+                alts.setdefault(tuple((f.name, f.offset, f.type.text) for f in held), _alternative(held, start))
+        out.append(next(iter(alts.values())) if len(alts) == 1 else "union { " + " ".join(alts.values()) + " };")
+        pos = end
+    size = max(s.size or 0 for s in layouts)
+    align = max((f.type.align for s in layouts for f in s.fields), default=1)
+    if (pos + align - 1) // align * align != size:
+        out.append(f"unsigned char _tail[{size - pos}];")
+    return " ".join(out)
+
+
+def _rebody(ctext: str, body: str) -> str:
+    """`ctext` with the members of its first `{ .. }` replaced by `body`."""
+    i = ctext.index("{")
+    return ctext[: i + 1] + " " + body + " " + ctext[_close(ctext, i) - 1 :]
+
+
+def _merged(
+    name: str,
+    order: Sequence[str],
+    canon: str,
+    sites: Mapping[str, Site],
+    src: Sources,
+    norm: Norm,
+    scope: Iterable[str],
+) -> tuple[str, list[tuple[str, int, int]]] | None:
+    """(merged members, the definitions of the chosen record they replace) when the name's candidates are records of
+    one suffix (`*` or `[]`) whose definitions differ in layout and all read; else None."""
+    cut = [_RECORD.match(k) for k in order]
+    if not all(cut) or len({m[2] for m in cut if m}) != 1:
+        return None
+    base = Headers(typedefs=dict(norm.typedefs))
+    for file in sorted(set(scope)):
+        base.add(_blanked(src, file), file)
+    found = [s for k in [canon, *(k for k in order if k != canon)] for s in _layouts(k, name, sites, src, base, scope)]
+    layouts = {tuple((f.name, f.offset, f.type.text) for f in s.fields): s for s in found if s}
+    if not all(found) or len(layouts) < 2:
+        return None
+    body = _union(list(layouts.values()))
+    spans = _definitions(canon, sites, name, src, scope)
+    return (body, spans) if body and spans else None
+
+
+def plan(
+    name: str, sites: Mapping[str, Site], rank: int, src: Sources, norm: Norm, scope: Iterable[str] = ()
+) -> Plan | str:
+    """The plan of `name` at candidate `rank`, or the reason it has none (a string). `scope` is every file a unit that
+    declares the name reads: where the definition of a record tag is looked for."""
     order = candidates(sites)
     defkeys = {key for kind, key, _ in sites.values() if kind in ("fdef", "vdef")}
     if len(defkeys) > 1:
@@ -272,14 +440,19 @@ def plan(name: str, sites: Mapping[str, Site], rank: int, src: Sources, norm: No
         for file in [loc.rsplit(":", 1)[0]]
         if any(file == r[0] for r in reads) and (span := _span(src, file, int(loc.rsplit(":", 1)[1]), name))
     )
+    bodies: tuple[Body, ...] = ()
+    if merged := _merged(name, order, canon, sites, src, norm, scope):
+        body, spans = merged
+        bodies = tuple((f, s, e, "{ " + body + " }") for f, s, e in spans)
+        ctext = _rebody(ctext, body) if _ANON.match(canon) else ctext
     params = _params(ctext, name)
     callers = frozenset(
         file
         for file in {loc.rsplit(":", 1)[0] for loc in sites}
         if params and _calls(src.text(file)[1], name, params, [(s, e) for f, s, e in edits if f == file])
     )
-    files = frozenset({e[0] for e in edits} | {cloc.rsplit(":", 1)[0]} | callers)
-    return Plan(name, canon, why, ctext, tuple(edits), files, reads, keep, params, callers)
+    files = frozenset({e[0] for e in edits} | {cloc.rsplit(":", 1)[0]} | callers | {b[0] for b in bodies})
+    return Plan(name, canon, why, ctext, tuple(edits), files, reads, keep, params, callers, bodies)
 
 
 def readers(found: Plan, sites: Mapping[str, Site], closures: Iterable[frozenset[str]], src: Sources) -> Plan:
@@ -433,6 +606,7 @@ def render(path: str, plans: Iterable[Plan], src: Sources) -> str:
         ops += _reads(b, path, p)
         if path in p.callers:
             ops += _calls(b, p.name, p.params, [(s, e) for f, s, e in p.edits if f == path])
+    ops += [(s, e, body) for f, s, e, body in (b for p in plans for b in p.bodies) if f == path]
     for s, e, held in sorted(ops, key=lambda o: (o[0], o[1]), reverse=True):
         if isinstance(held, str):
             t, b = t[:s] + held + t[e:], b[:s] + held + b[e:]
