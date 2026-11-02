@@ -648,12 +648,47 @@ def test_interior_fills_are_the_stale_link_bytes_and_zero_pads_between_two_units
             row["parts"] = {"rodata": [(4, 4)]}
     assert [r["data"] for r in seq if r["k"] == "fill"] == [bytes([0x24, 0x63, 0]), bytes([1])]
     found = mergecheck.interior_fills(["src/a.CPP", "src/b.CPP"], {"de": seq})
-    assert found == [
-        {"after": "src/a.CPP", "cls": "rodata", "data": bytes(1), "versions": ["de"]},
-        {"after": "src/a.CPP", "cls": "rodata", "data": bytes([0x24, 0x63, 0]), "versions": ["de"]},
-    ]
-    # the stale bytes and the pad behind them are both in the merged span: it fills the span the pieces linked in
+    # the pad behind the stale bytes is only the alignment of src/b.CPP (4), which the compiler gives it: no array
+    assert found == [{"after": "src/a.CPP", "cls": "rodata", "data": bytes([0x24, 0x63, 0]), "versions": ["de"]}]
+    # the stale bytes and the alignment behind them are in the merged span: it fills the span the pieces linked in
     assert [s[1:] for s in mergecheck.spans(seq, {"src/a.CPP", "src/b.CPP"})] == [(12, 12, 0)]
+
+
+def _rodata_link(pad: int, second: int) -> list[dict[str, Any]]:
+    """A 3 byte piece of a.CPP, the link's `MAX(., offset)` pad of `pad` bytes, then a piece of b.CPP of `second`
+    bytes (SYNTHESIZER_DATA.CPP, `s_synthesizerExText[3]` before synthesizer_data.c, CakeUnbake64 aa0b039)."""
+    link = (
+        "  .rodata : {\n"
+        "        src/a.CPP.o(.rodata .rdata);\n"
+        f"        . = MAX(., 0x{3 + pad:X});\n"
+        "        src/b.CPP.o(.rodata .rdata);\n"
+        "  }\n"
+    )
+    seq = mergecheck.parse_link(link)
+    for row in seq:
+        if row["k"] == "entry":
+            size = 3 if row["u"] == "src/a.CPP" else second
+            row["n"], row["cls"] = size, "+".join(row["cls"])
+            row["parts"] = {"rodata": [(size, 4)]}
+    return seq
+
+
+def test_a_link_pad_that_is_the_next_pieces_alignment_is_no_array_for_the_merged_source() -> None:
+    """The merged source declares every global on a word (`.align 2`): a one byte `unbake_fill` after the 3 byte text
+    stood a word wide and the merged object was 4 bytes larger than the 40 linked, `cannot move location counter
+    backwards` on us and us-rev1."""
+    seq = _rodata_link(1, 36)
+    both = {"src/a.CPP", "src/b.CPP"}
+    assert mergecheck.interior_fills(sorted(both), {"us": seq}) == []
+    assert [s[1:] for s in mergecheck.spans(seq, both)] == [(40, 40, 0)]
+
+
+def test_a_link_pad_longer_than_the_next_pieces_alignment_stays_a_zero_array() -> None:
+    seq = _rodata_link(5, 36)
+    both = sorted({"src/a.CPP", "src/b.CPP"})
+    assert mergecheck.interior_fills(both, {"us": seq}) == [
+        {"after": "src/a.CPP", "cls": "rodata", "data": bytes(5), "versions": ["us"]}
+    ]
 
 
 def _cluster() -> tuple[list[tuple[str, str]], dict[str, list[dict[str, Any]]]]:

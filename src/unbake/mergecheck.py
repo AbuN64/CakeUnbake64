@@ -272,6 +272,26 @@ def _pad(
         pads.append((section, last["u"], last["cls"], size))
 
 
+def _implicit(
+    rows: Sequence[tuple[int, Row]], units: set[str], at: int, before: int, after: int, last: Row | None
+) -> bool:
+    """Whether the zero pad that took the section from `before` to `after` is only the alignment of the module's next
+    piece (of the class of the entry before the pad), which the compiler gives that piece wherever it stands in the
+    merged source: the pad then needs no array of its own, and an array of one byte would stand a word wide there."""
+    if last is None or after <= before:
+        return False
+    for i, row in rows:
+        if i <= at:
+            continue
+        if row["k"] != "entry" or row["u"] not in units or row.get("subalign"):
+            return False
+        for cls, pieces in row.get("parts", {}).items():
+            if pieces:
+                aligned = _linked_align(after, pieces[0][1])
+                return cls == last["cls"] and aligned > 1 and _up(before, aligned) == after
+    return False
+
+
 def spans(
     seq: Sequence[Row],
     units: set[str],
@@ -316,6 +336,8 @@ def spans(
                 continue
             if row["k"] == "align":
                 before, position = position, _up(position, row["a"])
+                if _implicit(rows, units, i, before, position, last):
+                    continue
                 if holes is not None and i > mine[0] and position > before:
                     holes.append((section, position))
                 _pad(i > mine[0], position - before, last, section, classes, pads)
@@ -324,6 +346,8 @@ def spans(
                 before = position
                 position = position if foreign else max(position, row["offset"])
                 pin = None if foreign else row["offset"]
+                if _implicit(rows, units, i, before, position, last):
+                    continue
                 if holes is not None and i > mine[0] and position > before:
                     holes.append((section, position))
                 _pad(i > mine[0], position - before, last, section, classes, pads)
