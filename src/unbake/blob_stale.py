@@ -48,7 +48,7 @@ def accounted(parts: Json) -> Spans:
     return blobs.merge([tuple(s) for k in _ACCOUNTED for s in parts["spans"][k]])
 
 
-def current(parts: Json) -> Spans:
+def _current(parts: Json) -> Spans:
     """The bytes of one version's partition that the current source builds: code and data, no stale blob."""
     return blobs.merge([tuple(s) for k in _CURRENT for s in parts["spans"][k]])
 
@@ -56,7 +56,7 @@ def current(parts: Json) -> Spans:
 def current_spans(config: Config, version: str) -> Spans:
     """`current` for one version of a project."""
     tree = import_module("unbake.tree").capture(config)
-    return current(import_module("unbake.report").partitions(config, tree)[version])
+    return _current(import_module("unbake.report").partitions(config, tree)[version])
 
 
 def source_spans(config: Config, version: str) -> Spans:
