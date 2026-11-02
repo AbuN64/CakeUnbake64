@@ -844,3 +844,20 @@ def test_pieces_the_link_packs_from_a_misaligned_run_start_keep_their_offsets_in
     assert mergecheck.spans(seq, units) == [(".game_data", 272, 272, 24960)]
     rows = [(u, "M") for u in sorted(units)]
     assert not [h for h in run(rows, seq)["M"]["hard"] if h.startswith("lma:")]
+
+
+def test_regression_slice_vimgr_de_game_data_keeps_the_linked_size_when_the_module_starts_off_the_alignment() -> None:
+    """de .game_data of sdk/libultra/io/VIMGR/VIMGR.CPP.c: the module's two 8 B pieces (AUDIO_ABORTDISKTRANSFER_DATA and
+    CREATEMESGQUEUE_DATA, object alignment 16) link under SUBALIGN(1) at 80024 and 80032. The second sits 16 aligned in
+    the address only because the module starts 8 off it: one object starts at 80024 and packs it at 8, so the merged
+    span is the linked 16 B, not 24 (MERGE-LMA-PAD missed the module start)."""
+    unit = "src/DATA/OVERLAYS/SEVEN/LINKTABLES/"
+    rows = [
+        (unit + "AUDIO_ABORTDISKTRANSFER_DATA.CPP", "data", 8, 16, 80024),
+        (unit + "CREATEMESGQUEUE_DATA.CPP", "data", 8, 16, 80032),
+    ]
+    seq = _slice(rows, ".game_data")
+    units = {r[0] for r in rows}
+    [(section, span, merged, start)] = mergecheck.spans(seq, units)
+    assert (section, span, merged, start) == (".game_data", 16, 16, 80024)
+    assert run([(u, "VIMGR") for u in units], seq)["VIMGR"]["hard"] == []
