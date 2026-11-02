@@ -8,9 +8,12 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from test_build import CCPY, _pp, _write_makefile, make_config
 
 from unbake import adapters, build
+
+REAL_MAKE = "the object rules of the generated Makefile are the code under test: make runs them on stub tools"
 
 
 class Tree:
@@ -101,6 +104,7 @@ class Tree:
         (self.root / "src/a.c").write_text(text)
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_a_flags_change_remakes_the_object_and_an_unchanged_row_does_not(tmp_path):
     tree = Tree(tmp_path)
     tree.write("int a;\n")
@@ -115,6 +119,7 @@ def test_a_flags_change_remakes_the_object_and_an_unchanged_row_does_not(tmp_pat
     assert "-DY" in (tmp_path / "build/us/src/a.c.i.ok.flags").read_text()
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_an_object_without_a_flags_stamp_is_trusted(tmp_path):
     tree = Tree(tmp_path)
     tree.write("int a;\n")
@@ -125,6 +130,7 @@ def test_an_object_without_a_flags_stamp_is_trusted(tmp_path):
     assert tree.make(cflags="-O3") == (0, 0)
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_a_failed_compile_does_not_leave_a_stale_object_to_the_next_good_one(tmp_path):
     tree = Tree(tmp_path)
     tree.write("int a;\n")
@@ -140,6 +146,7 @@ def test_a_failed_compile_does_not_leave_a_stale_object_to_the_next_good_one(tmp
     assert not (tmp_path / "build/us/src/a.c.s.prev").exists()
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_a_failed_compile_never_makes_a_partial_assembly_the_last_one(tmp_path):
     tree = Tree(tmp_path)
     tree.write("int a;\n")
@@ -177,6 +184,7 @@ def _old(path: Path) -> None:
     os.utime(path, ns=(10**18, 10**18))
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_a_header_changed_under_a_newer_stamp_remakes_the_stamp(tmp_path):
     """Dates lie after a copy or a fast-forward: a stamp is newer than a header whose bytes it never saw."""
     tree = Tree(tmp_path)
@@ -195,6 +203,7 @@ def test_a_header_changed_under_a_newer_stamp_remakes_the_stamp(tmp_path):
     assert (tmp_path / "preprocessed").read_text() == ""
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_an_extracted_file_changed_under_a_newer_object_remakes_the_object(tmp_path):
     tree = Tree(tmp_path)
     asm = tmp_path / "asm/us/nonmatchings/seg/f.s"
@@ -210,6 +219,7 @@ def test_an_extracted_file_changed_under_a_newer_object_remakes_the_object(tmp_p
     assert tree.make(deps=True) == (1, 1)
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_an_included_asm_naming_a_renamed_callee_remakes_the_object_under_an_older_date(tmp_path):
     """After a rebase the extracted .s of a renamed callee is older than the object built before it: the object that
     includes it is keyed on the file's bytes, so it is assembled again and no link keeps the old name."""
@@ -230,6 +240,7 @@ def test_an_included_asm_naming_a_renamed_callee_remakes_the_object_under_an_old
     assert tree.make(deps=True) == (0, 0)
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_an_extraction_inside_the_make_that_renamed_an_included_asm_remakes_the_object(tmp_path):
     """A make that extracts while it builds has read the file's old date (no sweep runs in a sub-make, level 1), and the
     object's other prerequisite is a newer .i: the shortcuts would keep the object that names the old callee."""
@@ -249,6 +260,7 @@ def test_an_extraction_inside_the_make_that_renamed_an_included_asm_remakes_the_
     assert tree.make(deps=True, level=1) == (0, 0)
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_a_tree_without_recorded_inputs_is_trusted(tmp_path):
     tree = Tree(tmp_path)
     (tmp_path / "src/h.h").write_text("one\n")
@@ -263,6 +275,7 @@ def test_a_tree_without_recorded_inputs_is_trusted(tmp_path):
     assert (tmp_path / "preprocessed").read_text() == ""
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_records_append_without_a_lock_and_the_sweep_folds_them_in(tmp_path):
     """A record was a global flock + rewrite of the whole state (6.5 MB on a full tree): a cold make -j12 of all
     versions ran one record at a time (POOL-SRC refresh 21+ min at 11 s make CPU). A record now appends one line."""
@@ -281,6 +294,7 @@ def test_records_append_without_a_lock_and_the_sweep_folds_them_in(tmp_path):
     assert any(k.endswith(".i.ok") for k in state)
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_the_c_record_writes_the_python_record_and_a_tree_without_a_compiler_still_records(tmp_path):
     """A python record per output was 20 ms (two per unit: 70% of a no-op header rebuild). build/stamprec writes the
     same line; without a host compiler the python record runs."""
@@ -328,6 +342,7 @@ def test_the_c_record_writes_the_python_record_and_a_tree_without_a_compiler_sti
     assert any(".i.ok" in x for x in (bare.root / "build/.inputs.log").read_text().splitlines())
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_asm_deps_is_replaced_whole(tmp_path):
     """REV1-ONE-40: `build/asm.deps:157: missing separator`: a make -included asm.deps another make of the same tree was
     rewriting in place (shell redirect). It is now written to a temporary file and replaced."""
@@ -345,6 +360,7 @@ def test_asm_deps_is_replaced_whole(tmp_path):
     assert not list((tmp_path / "build").glob("asm.deps.*"))
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_a_sweep_with_nothing_moved_does_not_walk_or_rewrite_the_state(tmp_path):
     """WATCH-0153: every make ran a full walk and rehash (two cores held across trees). With every input and output as
     the
@@ -369,6 +385,7 @@ def test_a_sweep_with_nothing_moved_does_not_walk_or_rewrite_the_state(tmp_path)
     assert (tmp_path / "preprocessed").read_text() == "p\n"
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_a_recursive_make_never_sweeps_the_objects_its_parent_is_about_to_link(tmp_path):
     tree = Tree(tmp_path)
     asm = tmp_path / "asm/us/nonmatchings/seg/f.s"
@@ -384,6 +401,7 @@ def test_a_recursive_make_never_sweeps_the_objects_its_parent_is_about_to_link(t
     assert tree.make(deps=True) == (1, 1)  # the top-level make's sweep still drops it
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_a_stamp_signed_under_the_new_header_bytes_survives_the_sweep(tmp_path):
     """hdrnarrow.sign: a unit the narrowing proved unreachable keeps its stamp and object when a later make skips the
     header by date (`make -o`); unsigned, the sweep drops it (same date, other bytes) and it is preprocessed again."""
@@ -413,6 +431,7 @@ def test_a_stamp_signed_under_the_new_header_bytes_survives_the_sweep(tmp_path):
     assert (tmp_path / "preprocessed").read_text() == "p\n"
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_narrow_apply_lets_make_skip_the_header_and_rebuild_only_what_the_edit_reaches(tmp_path):
     """`unbake narrow --against REV --apply` (the train's check): a unit whose key names nothing the header edit
     changed is signed, and `make -o HEADER` leaves it; an edit it names dates it for a rebuild."""

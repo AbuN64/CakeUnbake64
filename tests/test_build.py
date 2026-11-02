@@ -11,12 +11,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import fixture
 import pytest
 
 from unbake import __version__, adapters, build
 from unbake.contracts import FileFacts, Refusal, Segment
 from unbake.resources import cc_cache
 from unbake.tree import Module, Tree
+
+REAL_BINUTILS = "nm_pick compares real MIPS objects: binutils (as, objcopy, ld) make and read them"
+
+
+REAL_MAKE = "the generated Makefile is the code under test: make runs its rules on stub tools"
 
 SHA = {"us": "a" * 40, "eu-1": "b" * 40}
 
@@ -586,6 +592,7 @@ def test_splat_yaml_starts_no_data_piece_off_a_word_boundary(tmp_path):
     assert "main/d_1]" in text and "main/d_3]" in text and "d_2" not in text
 
 
+@pytest.mark.integration(REAL_MAKE)
 @pytest.mark.parametrize("suffix", [".c", ".s"])
 @pytest.mark.parametrize("before,after", [("0x10", "0x14"), ("0x10", None), (None, "0x10")])
 def test_text_size_changes_rebuild_only_the_affected_object(tmp_path, suffix, before, after):
@@ -647,6 +654,7 @@ def test_text_size_changes_rebuild_only_the_affected_object(tmp_path, suffix, be
     assert make() == targets[:1]  # restoring an older value must rebuild too
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_an_object_compiles_again_only_when_its_preprocessed_text_changes(tmp_path):
     """The generated rules with a stub preprocessor that drops comment lines: a comment edit preprocesses the source
     again and compiles nothing; a code edit compiles that one object; nothing changed runs nothing."""
@@ -724,6 +732,7 @@ def test_an_object_compiles_again_only_when_its_preprocessed_text_changes(tmp_pa
     assert make() == ([], [])
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_an_extraction_that_changes_nothing_keeps_every_date(tmp_path):
     """splat writes every file again. Unchanged bytes keep their dates; a changed file takes a new date but the stamp
     (every object's input) keeps its own, as each object naming the file follows it (asm.deps); an object that named a
@@ -799,6 +808,7 @@ def test_an_extraction_that_changes_nothing_keeps_every_date(tmp_path):
     assert extract()[stamp] > old
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_an_object_follows_the_extracted_files_its_include_lines_name(tmp_path):
     """The compiler's assembly holds only an `.include` of each INCLUDE_ASM/RODATA/DATA file; the assembler reads its
     content. A stub compiler appends the named files' text to the object, as the assembler does: a file edited in place
@@ -916,6 +926,7 @@ def test_folded_data_symbols_have_a_finding_and_report_line(tmp_path, monkeypatc
         assert "main/tail" not in text
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_code_sed_keeps_the_relocation_of_a_64_bit_load_and_words_the_rest(tmp_path):
     """CODE_SED of the generated Makefile, run by make and sed on extracted lines."""
     import subprocess
@@ -938,6 +949,7 @@ def test_code_sed_keeps_the_relocation_of_a_64_bit_load_and_words_the_rest(tmp_p
     ]
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_code_sed_words_a_handwritten_line_but_keeps_one_that_carries_a_relocation(tmp_path):
     """A handwritten lui/lw pair on a symbol keeps %hi/%lo for the link; one with no symbol is its word."""
     import subprocess
@@ -962,8 +974,6 @@ def test_code_sed_words_a_handwritten_line_but_keeps_one_that_carries_a_relocati
 
 def test_extract_rewrites_each_data_piece_as_its_rom_slice_keeping_labels(tmp_path):
     """FILL_DATA of the generated Makefile: splat's short data file becomes the ROM bytes up to the next row."""
-    import subprocess
-    import sys
 
     work = tmp_path / "work"
     (work / "roms").mkdir(parents=True)
@@ -978,7 +988,7 @@ def test_extract_rewrites_each_data_piece_as_its_rom_slice_keeping_labels(tmp_pa
         '.include "macro.inc"\n\ndlabel d_1\n/* 1010 80200410 10111213 */ .word 0x10111213\ndlabel d_2\n'
         "/* 1014 80200414 1415 */ .short 0x1415\n"
     )
-    subprocess.run([sys.executable, "-I", adapters.make_tool("fill_data.py"), "us"], cwd=work, check=True)
+    assert fixture.program([adapters.make_tool("fill_data.py"), "us"], work).returncode == 0
     assert (work / "asm/us/data/main/d_1.s").read_text().splitlines() == [
         '.include "macro.inc"',
         "dlabel d_1",
@@ -990,8 +1000,6 @@ def test_extract_rewrites_each_data_piece_as_its_rom_slice_keeping_labels(tmp_pa
 
 def test_an_object_whose_data_starts_off_a_word_gets_noalign_and_its_alignment_dropped(tmp_path):
     """text_sizes.mk marks the object (tree facts); STRIP_ALIGN of the generated Makefile drops data alignment."""
-    import subprocess
-    import sys
 
     held = make_tree(both("src/a.c", "f_1", "d_2"), both("src/b.c", "d_3"))
     table = {v: dict(rows) for v, rows in held.symbols.items()}
@@ -1003,14 +1011,12 @@ def test_an_object_whose_data_starts_off_a_word_gets_noalign_and_its_alignment_d
     assert "$(if $(NOALIGN),'&&' $(PASS)strip_align.py $(@:.o=.s) $(NOALIGN))" in build._recipe("gcc-2.8.1-sn64")
     source = tmp_path / "x.s"
     source.write_text(".text\n.align 2\nf:\n.section .rodata\n.align 3\n.word 1\n.half 2\n.text\n.align 2\n")
-    subprocess.run([sys.executable, "-I", adapters.make_tool("strip_align.py"), str(source), "2"], check=True)
+    assert fixture.program([adapters.make_tool("strip_align.py"), str(source), "2"]).returncode == 0
     assert source.read_text() == ".text\n.align 2\nf:\n.section .rodata\n.4byte 1\n.2byte 2\n.text\n.align 2\n"
 
 
 def test_data_starting_word_aligned_but_off_eight_loses_only_the_eight_alignment(tmp_path):
     """A unit's .rodata at 4 mod 8 (a jump table behind `.align 3`): the ROM pads by address, gas by section start."""
-    import subprocess
-    import sys
 
     held = make_tree(both("src/a.c", "f_1", "d_2"), both("src/b.c", "d_3"))
     table = {v: dict(rows) for v, rows in held.symbols.items()}
@@ -1022,7 +1028,7 @@ def test_data_starting_word_aligned_but_off_eight_loses_only_the_eight_alignment
     )  # the Makefile keeps its own
     source = tmp_path / "x.s"
     source.write_text(".text\n.align 3\nf:\n.section .rodata\n.word 1\n.align 2\n.align 3\n.word 2\n.half 3\n")
-    subprocess.run([sys.executable, "-I", adapters.make_tool("strip_align.py"), str(source), "4"], check=True)
+    assert fixture.program([adapters.make_tool("strip_align.py"), str(source), "4"]).returncode == 0
     assert source.read_text() == ".text\n.align 3\nf:\n.section .rodata\n.word 1\n.align 2\n.word 2\n.half 3\n"
 
 
@@ -1030,8 +1036,6 @@ def test_a_merged_objects_word_aligned_rodata_keeps_its_alignment_beside_data_pa
     """de pirawread + sirawdma: read-only data from an 8-aligned address (`EX\\0`, then a string behind `.align 2`) and
     data at the odd 0x...83 (the pin 0x5FC3). NOALIGN once stripped the alignment of the whole object, so the string
     sat 1 B early in the ROM; now only `.data` loses it."""
-    import subprocess
-    import sys
 
     held = make_tree(
         both("src/a.c", "f_1", "d_2"),
@@ -1049,7 +1053,7 @@ def test_a_merged_objects_word_aligned_rodata_keeps_its_alignment_beside_data_pa
     assert "build/us/src/c.c.o: NOALIGN := 1:data" in rows
     source = tmp_path / "x.s"
     source.write_text(".section .rodata\n.align 2\n.word 1\n.section .data\n.align 2\n.word 2\n.text\n")
-    subprocess.run([sys.executable, "-I", adapters.make_tool("strip_align.py"), str(source), "1:data"], check=True)
+    assert fixture.program([adapters.make_tool("strip_align.py"), str(source), "1:data"]).returncode == 0
     assert source.read_text() == ".section .rodata\n.align 2\n.word 1\n.section .data\n.4byte 2\n.text\n"
 
 
@@ -1069,8 +1073,6 @@ def test_a_toolchain_row_biases_jump_tables_and_allocates_rdata():
 
 def test_a_file_row_pads_hilo_hazards_the_way_the_rom_assembler_did(tmp_path):
     """A file row's hilo_nops: two nops between an mfhi/mflo and an adjacent mult/div (gas pads only the gap of one)."""
-    import subprocess
-    import sys
 
     recipe = build._recipe("gcc-2.8.1-sn64").splitlines()[-1]
     assert "$(if $(HILO),'&&' $(PASS)hilo_hazard.py $(@:.o=.s))" in recipe
@@ -1081,7 +1083,7 @@ def test_a_file_row_pads_hilo_hazards_the_way_the_rom_assembler_did(tmp_path):
         "\t.set\tnoreorder\n\tmflo\t$6\n\tmult\t$4,$5\n\t.set\treorder\n"  # noreorder: untouched
         "\tmfhi\t$3 # c\n$L1:\n\t#nop\n\tmthi\t$4\n\tmfhi\t$3\n\tdivu\t$2,$4,$5\n"  # label ignored; 3-operand div
     )
-    subprocess.run([sys.executable, "-I", adapters.make_tool("hilo_hazard.py"), str(source)], check=True)
+    assert fixture.program([adapters.make_tool("hilo_hazard.py"), str(source)]).returncode == 0
     assert source.read_text() == (
         "f:\n\tmfhi\t$3\n\tnop\n\tnop\n\tmult\t$4,$5\n\tmflo\t$6\n\tandi\t$2,$3,1\n\tdivu\t$4,$5\n"
         "\t.set\tnoreorder\n\tmflo\t$6\n\tmult\t$4,$5\n\t.set\treorder\n"
@@ -1089,6 +1091,7 @@ def test_a_file_row_pads_hilo_hazards_the_way_the_rom_assembler_did(tmp_path):
     )
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_undefined_syms_provide_the_aliases_too(tmp_path):
     """make build/us/undefined_syms.ld PROVIDEs aliases.txt rows next to symbol_addrs.txt ones."""
     import subprocess
@@ -1457,6 +1460,7 @@ def test_drop_including_rebuilds_objects_whose_output_includes_a_name(tmp_path):
     assert sorted(p.name for p in (tmp_path / "build/us").glob("*.o")) == ["b.c.o"]
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_the_extraction_mark_holds_the_facts_hash_and_a_compile_against_other_facts_refuses(tmp_path):
     """REV1-ONE-43B: stale asm/ linked old names. The mark names the facts the extraction was made from; an object of a
     tree whose facts moved on without an extraction is refused with the cause named, not compiled."""
@@ -1524,6 +1528,7 @@ def test_the_extraction_mark_holds_the_facts_hash_and_a_compile_against_other_fa
     assert "was extracted from other" not in run.stderr
 
 
+@pytest.mark.integration(REAL_MAKE)
 @pytest.mark.parametrize("tool", ["c", "python"])
 def test_an_object_is_not_assembled_again_when_the_compilers_assembly_is_the_last_ones(tmp_path, tool):
     """The generated recipe of the real toolchain with stub tools: a preprocessed text that changed but compiles to the
@@ -1656,6 +1661,7 @@ def elf(sections: dict[str, int], symbols: list[tuple[str, str, int]], fill: int
     return bytes(out)
 
 
+@pytest.mark.integration(REAL_BINUTILS)
 @pytest.mark.parametrize(
     "raw,verdict",
     [
@@ -1706,6 +1712,7 @@ def test_an_nm_object_replaces_the_matching_one_only_when_the_layout_stays(tmp_p
         assert (tmp_path / "out.o").read_bytes() == (raw if verdict == "draft" else matching)
 
 
+@pytest.mark.integration(REAL_BINUTILS)
 def test_the_nm_object_of_a_unit_builds_with_the_define_and_is_picked_against_the_matching_one(tmp_path):
     """make -n on the generated rules: the raw object compiles the same source with -DNON_MATCHING (the matching one
     without it), and the NM object is the pick between the two."""
@@ -1738,6 +1745,7 @@ def test_the_nm_object_of_a_unit_builds_with_the_define_and_is_picked_against_th
     assert "build/nmraw/us/src/a.c.o: TEXTSIZE := 0x10" in (tmp_path / "build/text_sizes_nmraw.mk").read_text()
 
 
+@pytest.mark.integration(REAL_BINUTILS)
 def test_a_padded_nm_object_keeps_its_relocations(tmp_path):
     """Padding must not drop .rel.text: a draft whose calls lose their relocations links to jal 0."""
     import shutil
@@ -1838,6 +1846,7 @@ def _extract_world(tmp_path):
     return splat
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_two_makes_extracting_one_version_split_it_once(tmp_path):
     """`make -j extract` and the build's own .extracted rule reach one recipe: the second waits, then sees the key."""
     import subprocess
@@ -1853,6 +1862,7 @@ def test_two_makes_extracting_one_version_split_it_once(tmp_path):
     assert (tmp_path / "runs.log").read_text() == "split\n"
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_a_rebase_that_changed_the_facts_extracts_again_on_the_next_build(tmp_path):
     """asm/<v>/.extracted had only the ROM as prerequisite: symbol_addrs.txt changed and the build linked stale asm."""
     import subprocess
@@ -1994,12 +2004,9 @@ def test_a_function_with_no_pool_row_of_its_own_has_its_pool_kept_with_the_funct
 
 
 def _fsplit(tmp_path, text: str, *phases: str) -> list[str]:
-    import subprocess
-    import sys
-
     (tmp_path / "in.s").write_text(text)
     script = adapters.make_tool("fsplit_pass.py")
-    subprocess.run([sys.executable, "-I", script, str(tmp_path / "in.s"), str(tmp_path / "out.s"), *phases], check=True)
+    assert fixture.program([script, str(tmp_path / "in.s"), str(tmp_path / "out.s"), *phases]).returncode == 0
     return (tmp_path / "out.s").read_text().splitlines()
 
 
@@ -2137,6 +2144,7 @@ def _stamprec_make(tmp_path: Path) -> subprocess.CompletedProcess:
     )  # fmt: skip
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_a_stamprec_of_an_older_unbake_is_refused_naming_both_versions_and_the_fix_not_as_no_step_probe(tmp_path):
     """The lane case: an older unbake left build/stamprec, which knows no `@probe` step (the object recipe's first
     step), and this tree's Makefile is newer: make stops at once, before any recipe runs the tool."""
@@ -2156,6 +2164,7 @@ def test_a_stamprec_of_an_older_unbake_is_refused_naming_both_versions_and_the_f
     assert "run the published unbake" in done.stderr
 
 
+@pytest.mark.integration(REAL_MAKE)
 def test_a_stamprec_of_another_unbake_version_is_refused_and_one_built_by_the_makefile_is_not(tmp_path):
     if shutil.which("cc") is None:
         pytest.skip("no C compiler")

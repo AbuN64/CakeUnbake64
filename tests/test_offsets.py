@@ -9,6 +9,8 @@ import pytest
 from unbake import offsets, policy, tree
 from unbake.contracts import Config, Project, Snapshot
 
+REAL_GIT = "the audit compares two commits of a real git repository"
+
 RIGHT = """typedef struct Voice {
     s32 a;
     char pad4[0x4];
@@ -134,6 +136,7 @@ def _repo(tmp_path, monkeypatch, text):
         subprocess.run([*git, *args], check=True)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_refuses_a_record_the_tree_adds_off_by_four(tmp_path, monkeypatch):
     _repo(tmp_path, monkeypatch, RIGHT)
     (tmp_path / "src/v.c").write_text(OFF_BY_FOUR)
@@ -144,6 +147,7 @@ def test_audit_refuses_a_record_the_tree_adds_off_by_four(tmp_path, monkeypatch)
     assert (finding.path, finding.line) == ("src/v.c", 7)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_allows_a_correct_record_and_a_site_the_base_already_held(tmp_path, monkeypatch):
     _repo(tmp_path, monkeypatch, OFF_BY_FOUR)
     (tmp_path / "src/v.c").write_text("/* touched */\n" + OFF_BY_FOUR)
@@ -154,6 +158,7 @@ def test_audit_allows_a_correct_record_and_a_site_the_base_already_held(tmp_path
     assert "source.offset-name" not in after
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_judges_a_source_by_the_header_the_change_edits(tmp_path, monkeypatch):
     (tmp_path / "include").mkdir()
     (tmp_path / "include/p.h").write_text("typedef struct Pair { s32 x; s32 y; } Pair;\n")

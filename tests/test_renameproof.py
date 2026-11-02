@@ -11,6 +11,8 @@ import pytest
 from unbake import renameproof
 from unbake.contracts import Refusal
 
+REAL_GIT = "the proof reads a real git repository: its base tree, a private index the edits go into, diff and grep"
+
 ASM = (
     '#define INCLUDE_ASM(SEG, NAME) \\\n    __asm__(".include \\"nonmatchings/" SEG "/" #NAME ".s\\"\\n")\n'
     "#define STR(x) #x\n#define CAT(a, b) a##b\n"
@@ -69,6 +71,7 @@ def _refused(root: Path, **extra: object) -> str:
     return " | ".join(f.reason for f in refused.value.findings)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_rename_in_headers_sources_symbols_and_assembly_text_is_proved(repo: Path) -> None:
     _rename(repo, "func_80100000_de", "Game_Init")
     _rename(repo, "func_80100100_de", "Game_Step")
@@ -77,6 +80,7 @@ def test_a_rename_in_headers_sources_symbols_and_assembly_text_is_proved(repo: P
     assert result["files"] == 3 and result["renames"] == 2
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_patch_is_proved_in_a_private_index_without_touching_the_tree(repo: Path) -> None:
     _rename(repo, "func_80100000_de", "Game_Init")
     patch = repo / "rename.patch"
@@ -88,6 +92,7 @@ def test_a_patch_is_proved_in_a_private_index_without_touching_the_tree(repo: Pa
     assert (repo / "src/a.c").read_text() == FILES["src/a.c"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_comments_and_spacing_are_free_but_a_changed_token_is_not(repo: Path) -> None:
     (repo / "src/a.c").write_text(FILES["src/a.c"].replace("return", "/* sum */  return") + "\n")
     assert _prove(repo)["renames"] == 0
@@ -95,16 +100,19 @@ def test_comments_and_spacing_are_free_but_a_changed_token_is_not(repo: Path) ->
     assert "not an identifier" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_name_left_behind_in_one_place_is_not_a_rename(repo: Path) -> None:
     _rename(repo, "func_80100000_de", "Game_Init", only=("include/api.h", "src/a.c"))
     assert "left in another" in _refused(repo) or "still a code token" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_name_left_behind_in_an_unchanged_file_is_refused(repo: Path) -> None:
     _rename(repo, "func_80100000_de", "Game_Init", only=("include/api.h",))
     assert "still a code token" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_new_name_that_already_exists_would_capture(repo: Path) -> None:
     (repo / "src/b.c").write_text("int Game_Init;\n")
     _git(repo, "add", "-A")
@@ -113,6 +121,7 @@ def test_a_new_name_that_already_exists_would_capture(repo: Path) -> None:
     assert "already a code token" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_new_name_a_file_defines_for_itself_is_no_capture(repo: Path) -> None:
     (repo / "src/b.c").write_text("static int Game_Init(int a) { return a; }\nint use(void) { return Game_Init(1); }\n")
     _git(repo, "add", "-A")
@@ -121,6 +130,7 @@ def test_a_new_name_a_file_defines_for_itself_is_no_capture(repo: Path) -> None:
     assert ["func_80100000_de", "Game_Init"] in _prove(repo)["map"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_defining_file_that_uses_the_renamed_name_would_still_capture(repo: Path) -> None:
     (repo / "src/b.c").write_text(
         "static int Game_Init(int a) { return a; }\nint use(void) { return func_80100000_de(1); }\n"
@@ -131,6 +141,7 @@ def test_a_defining_file_that_uses_the_renamed_name_would_still_capture(repo: Pa
     assert "already a code token" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_static_definition_beside_the_renamed_definition_is_still_a_capture(repo: Path) -> None:
     (repo / "src/a.c").write_text("static int Game_Init(int a) { return a; }\n" + (repo / "src/a.c").read_text())
     _git(repo, "add", "-A")
@@ -139,6 +150,7 @@ def test_a_static_definition_beside_the_renamed_definition_is_still_a_capture(re
     assert "already a code token" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_non_static_definition_in_another_file_is_still_a_capture(repo: Path) -> None:
     (repo / "src/b.c").write_text("int Game_Init(int a) { return a; }\nint use(void) { return Game_Init(1); }\n")
     _git(repo, "add", "-A")
@@ -147,12 +159,14 @@ def test_a_non_static_definition_in_another_file_is_still_a_capture(repo: Path) 
     assert "already a code token" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_two_names_renamed_to_one_are_refused(repo: Path) -> None:
     _rename(repo, "func_80100000_de", "Game_Init")
     _rename(repo, "func_80100100_de", "Game_Init")
     assert "both renamed to" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_one_refusal_names_every_conflicting_row_not_the_first_few(repo: Path) -> None:
     pairs = [(f"func_8020{n:04X}_de", f"func_8021{n:04X}_de") for n in range(renameproof.SHOWN + 4)]
     (repo / "src/b.c").write_text("".join(f"int {a}(void);\nint {b}(void);\n" for a, b in pairs))
@@ -165,6 +179,7 @@ def test_one_refusal_names_every_conflicting_row_not_the_first_few(repo: Path) -
     assert all(f"Batch_{n}" in reasons for n in range(len(pairs)))
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_swap_is_a_rename(repo: Path) -> None:
     for path in ("include/api.h", "src/a.c", "versions/de/symbol_addrs.txt", "include/include_asm.h"):
         text = (
@@ -174,6 +189,7 @@ def test_a_swap_is_a_rename(repo: Path) -> None:
     assert _prove(repo)["renames"] == 2
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_name_stringified_outside_assembly_is_refused(repo: Path) -> None:
     (repo / "src/c.c").write_text("const char *Name(void) { return STR(func_80100000_de); }\n")
     _git(repo, "add", "-A")
@@ -182,6 +198,7 @@ def test_a_name_stringified_outside_assembly_is_refused(repo: Path) -> None:
     assert "stringifies it outside inline assembly" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_name_pasted_is_refused(repo: Path) -> None:
     (repo / "src/c.c").write_text("int v = CAT(func_80100000_de,);\n")
     _git(repo, "add", "-A")
@@ -190,6 +207,7 @@ def test_a_name_pasted_is_refused(repo: Path) -> None:
     assert "pasted" in _refused(repo) or "stringif" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_string_that_differs_outside_assembly_is_refused(repo: Path) -> None:
     (repo / "src/c.c").write_text('const char *Tag = "func_80100000_de";\n')
     _git(repo, "add", "-A")
@@ -198,6 +216,7 @@ def test_a_string_that_differs_outside_assembly_is_refused(repo: Path) -> None:
     assert "not an identifier" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_an_added_file_refuses_unless_declared_inert(repo: Path) -> None:
     _rename(repo, "func_80100000_de", "Game_Init")
     (repo / "versions/de/names.tsv").write_text("addr name\n")
@@ -210,6 +229,7 @@ def test_an_added_file_refuses_unless_declared_inert(repo: Path) -> None:
     assert _prove(repo, patch=[str(patch)], inert=["versions/*/names.tsv"])["inert"] == ["versions/de/names.tsv"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_line_that_moves_where_the_tree_reads_line_is_refused(repo: Path) -> None:
     (repo / "src/c.c").write_text("int l = __LINE__;\n")
     _git(repo, "add", "-A")
@@ -220,6 +240,7 @@ def test_a_line_that_moves_where_the_tree_reads_line_is_refused(repo: Path) -> N
     assert "another line" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_change_to_no_file_is_not_a_proof(repo: Path) -> None:
     assert "touches no file" in _refused(repo)
 
@@ -230,11 +251,13 @@ def test_text_files_keep_their_indent_and_directives_their_line_ends() -> None:
     assert renameproof._tokens('__asm__("a");\n"b"', True)[2] == '\0"a"'
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_rename_to_or_from_a_compiler_builtin_is_refused(repo: Path) -> None:
     _rename(repo, "func_80100000_de", "sqrtf")
     assert "expands itself" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_builtin_name_is_fine_when_the_project_turns_builtins_off(repo: Path) -> None:
     (repo / "config.toml").write_text('cflags = ["-O2", "-fno-builtin"]\n')
     _git(repo, "add", "-A")
@@ -243,6 +266,7 @@ def test_a_builtin_name_is_fine_when_the_project_turns_builtins_off(repo: Path) 
     assert _prove(repo)["map"] == [["func_80100000_de", "sqrtf"]]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_steps_judge_each_patch_over_the_state_the_earlier_ones_leave(repo: Path) -> None:
     patches = []
     for n, (old, new) in enumerate([("func_80100000_de", "Game_Init"), ("func_80100100_de", "sqrtf")]):
@@ -275,6 +299,7 @@ def _grow(repo: Path, old: str, new: str) -> None:
     (repo / "src/loc.c").write_text(re.sub(rf"\b{old}\b", new, head) + "int Other" + tail)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_local_rename_to_a_name_another_function_uses_is_proved(repo: Path) -> None:
     _locals(repo)
     _grow(repo, "step", "growStep")
@@ -283,18 +308,21 @@ def test_a_local_rename_to_a_name_another_function_uses_is_proved(repo: Path) ->
     assert result["map"] == [["range", "influenceRange"], ["step", "growStep"]]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_local_may_take_a_builtin_spelling_a_global_may_not(repo: Path) -> None:
     _locals(repo)
     _grow(repo, "step", "index")  # a loop index: shadows libc index() inside this function only
     assert _prove(repo)["map"] == [["step", "index"]]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_local_rename_to_a_name_the_function_already_uses_is_refused(repo: Path) -> None:
     _locals(repo)
     _grow(repo, "step", "range")
     assert "already used in the function" in _refused(repo) or "both renamed" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_local_rename_shadowing_a_global_the_function_uses_is_refused(repo: Path) -> None:
     _locals(repo)
     text = (repo / "src/loc.c").read_text().replace("return range * 2;", "return range * Util;", 1)
@@ -304,6 +332,7 @@ def test_a_local_rename_shadowing_a_global_the_function_uses_is_refused(repo: Pa
     assert "already used in the function" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_local_rename_meeting_a_macro_free_name_is_refused(repo: Path) -> None:
     _locals(repo)
     path = repo / "src/loc.c"
@@ -314,6 +343,7 @@ def test_a_local_rename_meeting_a_macro_free_name_is_refused(repo: Path) -> None
     assert "preprocessor directive" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_one_file_with_two_names_left_behind_reports_both(repo: Path) -> None:
     _rename(repo, "func_80100000_de", "Game_Init", only=("include/api.h", "src/a.c"))
     _rename(repo, "func_80100100_de", "Game_Step", only=("src/a.c",))
@@ -327,6 +357,7 @@ def test_one_file_with_two_names_left_behind_reports_both(repo: Path) -> None:
     assert "Game_Init" in reasons and "Game_Step" in reasons
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_refusal_in_an_early_stage_does_not_hide_the_later_stages(repo: Path) -> None:
     # batch 78 (10-27): a literal, a name left behind and a libc name each hid behind the one before; one run names all
     _rename(repo, "func_80100000_de", "Game_Init", only=("include/api.h",))
@@ -336,6 +367,7 @@ def test_a_refusal_in_an_early_stage_does_not_hide_the_later_stages(repo: Path) 
     assert "not an identifier" in reasons and "Game_Init" in reasons and "name the compiler expands" in reasons
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_local_rename_left_half_done_in_its_function_is_refused(repo: Path) -> None:
     _locals(repo)
     (repo / "src/loc.c").write_text(
@@ -344,6 +376,7 @@ def test_a_local_rename_left_half_done_in_its_function_is_refused(repo: Path) ->
     assert "left in another" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_global_rename_to_a_name_that_is_another_functions_local_is_proved(repo: Path) -> None:
     (repo / "src/loc.c").write_text("int Other(int step) { return step; }\n")
     _git(repo, "add", "-A")
@@ -352,6 +385,7 @@ def test_a_global_rename_to_a_name_that_is_another_functions_local_is_proved(rep
     assert _prove(repo)["map"] == [["func_80100000_de", "step"]]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_per_version_copies_of_one_function_may_share_a_new_name(repo: Path) -> None:
     (repo / "versions/eu").mkdir()
     (repo / "versions/eu/symbol_addrs.txt").write_text("func_80100200_eu = 0x80100200; // type:func\n")
@@ -362,6 +396,7 @@ def test_per_version_copies_of_one_function_may_share_a_new_name(repo: Path) -> 
     assert ["func_80100200_eu", "Game_Init"] in _prove(repo)["map"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_static_without_a_symbol_row_and_another_versions_extern_may_share_a_new_name(repo: Path) -> None:
     (repo / "versions/us-rev1").mkdir()
     (repo / "versions/de/symbol_addrs.txt").write_text(
@@ -376,6 +411,7 @@ def test_a_static_without_a_symbol_row_and_another_versions_extern_may_share_a_n
     assert ["D_80100300_us_rev1", "g_value"] in _prove(repo)["map"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_fuzzy_alias_dropped_with_its_undef_is_a_rename(repo: Path) -> None:
     text = (repo / "src/a.c").read_text()
     shim = "#ifdef NON_MATCHING\n#define func_80100000_de fz_func_80100000_de\n#endif\n"
@@ -389,6 +425,7 @@ def test_a_fuzzy_alias_dropped_with_its_undef_is_a_rename(repo: Path) -> None:
     assert ["func_80100000_de", "Game_Init"] in _prove(repo)["map"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_prototype_parameter_named_like_a_renamed_global_is_no_use_of_it(repo: Path) -> None:
     (repo / "include/rate.h").write_text("extern int rate;\nint Scale(int rate, int other);\n")
     (repo / "src/r.c").write_text('#include "rate.h"\nint rate;\nint Use(void) { return rate; }\n')
@@ -399,12 +436,14 @@ def test_a_prototype_parameter_named_like_a_renamed_global_is_no_use_of_it(repo:
     assert ["rate", "g_rate"] in _prove(repo)["map"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_two_copies_in_one_version_still_share_no_name(repo: Path) -> None:
     _rename(repo, "func_80100000_de", "Game_Init")
     _rename(repo, "func_80100100_de", "Game_Init")
     assert "both renamed to" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_later_parameter_with_a_typed_name_is_a_local_of_its_function(repo: Path) -> None:
     (repo / "src/loc.c").write_text(
         "typedef struct Box Box;\n"
@@ -420,6 +459,7 @@ def test_a_later_parameter_with_a_typed_name_is_a_local_of_its_function(repo: Pa
     assert result["map"] == [["arg1", "box"], ["arg1", "entry"]]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_tag_and_a_typedef_of_one_name_may_take_different_names(repo: Path) -> None:
     (repo / "include/m.h").write_text(
         "struct Message;\nstruct Message { int a; };\ntypedef struct Message Message;\nextern Message *g;\n"
@@ -434,6 +474,7 @@ def test_a_tag_and_a_typedef_of_one_name_may_take_different_names(repo: Path) ->
     assert _prove(repo)["map"] == [["Message", "CMsg"], ["Message", "CMsg_t"]]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_tag_renamed_in_one_place_and_left_in_another_is_refused(repo: Path) -> None:
     (repo / "include/m.h").write_text("struct Message { int a; };\nextern struct Message *g;\n")
     _git(repo, "add", "-A")
@@ -467,6 +508,7 @@ def _edit(root: Path, path: str, *pairs: tuple[str, str]) -> None:
     (root / path).write_text(text)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_one_member_name_renamed_differently_in_two_structs_is_a_rename(structs: Path) -> None:
     _edit(
         structs,
@@ -479,6 +521,7 @@ def test_one_member_name_renamed_differently_in_two_structs_is_a_rename(structs:
     assert ["unk58", "modeState"] in result["map"] and ["unk58", "phase"] in result["map"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_member_access_no_declaration_renames_that_way_is_refused(structs: Path) -> None:
     _edit(structs, "include/s.h", ("struct A { int unk58;", "struct A { int modeState;"))
     _edit(structs, "src/m.c", ("a->unk58", "a->modeState"), ("b->unk58", "b->other"))
@@ -486,6 +529,7 @@ def test_a_member_access_no_declaration_renames_that_way_is_refused(structs: Pat
     assert "no struct declaration renames it so" in _refused(structs)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_two_members_of_one_struct_renamed_to_one_name_are_refused(structs: Path) -> None:
     _edit(
         structs,
@@ -497,6 +541,7 @@ def test_two_members_of_one_struct_renamed_to_one_name_are_refused(structs: Path
     assert "both renamed to same" in _refused(structs)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_typed_member_name_already_used_in_the_tree_is_refused(structs: Path) -> None:
     (structs / "src/z.c").write_text("typedef struct Z { int phase; } Z;\n")
     _git(structs, "add", "-A")
@@ -523,17 +568,20 @@ def _twin(repo: Path, alias_address: str) -> None:
     _rename(repo, "D_auto_blob_us_rev1", "g_value")
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_two_names_of_one_address_in_one_version_may_share_a_new_name(repo: Path) -> None:
     _twin(repo, "0x80101300;")
     assert ["D_auto_blob_us_rev1", "g_value"] in _prove(repo)["map"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_two_names_of_different_addresses_in_one_version_may_not(repo: Path) -> None:
     _twin(repo, "0x80101340;")
     with pytest.raises(Refusal, match="both renamed to g_value"):
         _prove(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_block_scope_extern_of_a_renamed_global_is_the_global_not_a_local(repo: Path) -> None:
     """10-25 CLEAN-FRONTEND-4: `extern s32 D_801462C8, D_801462CC;` inside a function body was read as a local of that
     name, so its rename was judged a local rename and refused (the name is spelled in a #define)."""
@@ -548,6 +596,7 @@ def test_a_block_scope_extern_of_a_renamed_global_is_the_global_not_a_local(repo
     assert _prove(repo)["map"] == [["D_80100400", "g_settings"]]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_catalog_no_build_reads_may_change_beside_a_rename(repo: Path) -> None:
     """NAMES-2: a libultra_names.tsv row added beside a rename made the whole diff "not a rename". A file outside the
     source folders whose name the Makefile never spells is no build input: it changes freely, like --inert."""
@@ -564,6 +613,7 @@ def test_a_catalog_no_build_reads_may_change_beside_a_rename(repo: Path) -> None
     assert "added or removed" not in _refused(repo)  # the Makefile names symbol_addrs.txt: it is judged, not inert
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_an_assembly_file_renamed_with_its_symbol_is_part_of_the_rename(repo: Path) -> None:
     (repo / "src").mkdir(exist_ok=True)
     (repo / "src/func_80100200_de.s").write_text("glabel func_80100200_de\n    nop\n")
@@ -575,6 +625,7 @@ def test_an_assembly_file_renamed_with_its_symbol_is_part_of_the_rename(repo: Pa
     assert result["map"] == [["func_80100200_de", "Game_Wait"]] and result["files"] == 1
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_an_added_file_that_is_no_renamed_assembly_file_still_refuses(repo: Path) -> None:
     (repo / "src/new.c").write_text("int x;\n")
     assert "added or removed" in _refused(repo)
@@ -600,16 +651,19 @@ def _twins(repo: Path, existing: str, extra: dict[str, str] | None = None) -> No
 DE_PULL = "#if defined(VERSION_DE)\nint alAuxBusPull(int a) { return a + 1; }\n#endif\n\n"
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_new_name_that_only_a_disjoint_version_holds_is_no_capture(repo: Path) -> None:
     _twins(repo, DE_PULL)
     assert ["func_80100400_us", "alAuxBusPull"] in _prove(repo)["map"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_new_name_held_by_the_same_version_is_still_a_capture(repo: Path) -> None:
     _twins(repo, DE_PULL.replace("VERSION_DE", "VERSION_US"))
     assert "already a code token" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 @pytest.mark.parametrize(
     "existing",
     [
@@ -624,11 +678,13 @@ def test_a_new_name_with_ambiguous_version_evidence_is_refused(repo: Path, exist
     assert "already a code token" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_new_name_in_a_file_no_version_owns_is_refused(repo: Path) -> None:
     _twins(repo, "", {"tools/names.txt": "alAuxBusPull\n"})
     assert "already a code token" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_renamed_symbol_with_no_version_evidence_is_refused(repo: Path) -> None:
     _twins(repo, DE_PULL, {"tools/names.txt": "func_80100400_us\n"})
     assert "already a code token" in _refused(repo)
@@ -650,24 +706,28 @@ def _shared(root: Path, extra: dict[str, str] | None = None) -> None:
     _git(root, "commit", "-q", "-m", "records")
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_scoped_rename_reaches_one_definition_and_the_uses_that_bind_to_it(repo: Path) -> None:
     _shared(repo)
     _rename(repo, "Box", "WideBox", only=("include/a.h", "src/a.c"))
     assert _prove(repo)["renames"] == 1
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_use_left_on_a_renamed_definition_is_refused(repo: Path) -> None:
     _shared(repo)
     _rename(repo, "Box", "WideBox", only=("include/a.h",))
     assert "binds to" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_use_that_binds_to_two_definitions_cannot_follow_one_of_them(repo: Path) -> None:
     _shared(repo, {"src/both.c": '#include "a.h"\n#include "b.h"\nstruct Box both;\n'})
     _rename(repo, "Box", "WideBox", only=("include/a.h", "src/a.c"))
     assert "binds to" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_the_binding_rule_names_the_files_one_definition_owns(repo: Path) -> None:
     _shared(repo, {"src/both.c": '#include "a.h"\n#include "b.h"\nstruct Box both;\n'})
     texts = {p: (repo / p).read_text() for p in _git(repo, "ls-files").split() if p.endswith((".c", ".h"))}
@@ -725,6 +785,7 @@ def _git_runs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return runs
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_batch_75_slice_proves_with_greps_that_do_not_follow_the_token_count(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -742,6 +803,7 @@ def test_shared_records_are_the_tags_two_files_define_with_a_body() -> None:
     assert renameproof._shared_records(texts) == {"Actor", "SoundActor", "ActorWorld"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_linker_function_sections_are_global_names_not_c_members(repo: Path) -> None:
     # Real refusal: RageWars.ld .text.Fx_CountAcceptedTargets was called a member.
     (repo / "link.ld").write_text("src/a.c.o(.text.func_80100000_de);\n")
@@ -751,6 +813,7 @@ def test_linker_function_sections_are_global_names_not_c_members(repo: Path) -> 
     assert ["func_80100000_de", "Target_CountAcceptedTargets"] in _prove(repo)["map"]
 
 
+@pytest.mark.integration(REAL_GIT)
 @pytest.mark.parametrize("alias_address", ["0x800C6E30", "0x800C6E34", None])
 def test_aliases_are_checked_only_in_versions_that_spell_them(repo: Path, alias_address: str | None) -> None:
     # Actual three-spelling datum: de has all three; us-rev1 only canonical+blob.
@@ -772,6 +835,7 @@ def test_aliases_are_checked_only_in_versions_that_spell_them(repo: Path, alias_
         assert "not copies for disjoint versions" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 @pytest.mark.parametrize("captured", [False, True])
 def test_unrelated_rename_does_not_capture_static_helper(repo: Path, captured: bool) -> None:
     (repo / "src/helper.c").write_text(
@@ -789,6 +853,7 @@ def test_unrelated_rename_does_not_capture_static_helper(repo: Path, captured: b
         assert ["func_80100000_de", "alCSeqNextEvent"] in _prove(repo)["map"]
 
 
+@pytest.mark.integration(REAL_GIT)
 @pytest.mark.parametrize(
     "name,macro",
     [
@@ -806,6 +871,7 @@ def test_real_macro_member_and_tag_names_do_not_capture_local(repo: Path, name: 
     assert _prove(repo)["renames"] == 1
 
 
+@pytest.mark.integration(REAL_GIT)
 @pytest.mark.parametrize(
     "macro",
     [
@@ -827,6 +893,7 @@ def test_macro_free_names_and_conditions_still_capture(repo: Path, macro: str) -
     assert "preprocessor directive" in _refused(repo)
 
 
+@pytest.mark.integration(REAL_GIT)
 @pytest.mark.parametrize("use", ["unused", "direct", "nested", "object", "cycle", "pasted"])
 def test_real_printf_free_name_only_captures_reachable_local(repo: Path, use: str) -> None:
     _locals(repo)
@@ -867,6 +934,7 @@ def test_function_macro_formals_are_not_free_even_across_splice() -> None:
     assert rows[0][2] == ["(", "(", "growStep", ")", "*", "2", ")"]
 
 
+@pytest.mark.integration(REAL_GIT)
 @pytest.mark.parametrize(
     "macro",
     [

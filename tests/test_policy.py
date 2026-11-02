@@ -11,6 +11,8 @@ import pytest
 from unbake import effort, policy, tree
 from unbake.contracts import Config, Finding, Project, Snapshot, SourceView
 
+REAL_GIT = "the audit compares two commits of a real git repository"
+
 PATH = "src/unit.c"
 
 
@@ -842,6 +844,7 @@ def _audit_repo(tmp_path, monkeypatch):
     return json
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_refuses_a_matched_function_drop_that_removes_no_c(tmp_path, monkeypatch):
     json = _audit_repo(tmp_path, monkeypatch)
     (tmp_path / "src/a.c").write_text("/* touched */\nint f(void) { return 1; }\nint g(void) { return 2; }\n")
@@ -852,6 +855,7 @@ def test_audit_refuses_a_matched_function_drop_that_removes_no_c(tmp_path, monke
     assert (finding.key, finding.versions) == ("audit.credit_drop", ("us",))
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_allows_a_drop_the_removed_c_explains(tmp_path, monkeypatch):
     json = _audit_repo(tmp_path, monkeypatch)
     (tmp_path / "src/a.c").write_text("int f(void) { return 1; }\n")
@@ -860,6 +864,7 @@ def test_audit_allows_a_drop_the_removed_c_explains(tmp_path, monkeypatch):
     assert result["paths"] == ["src/a.c"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_counts_a_function_removed_from_a_library_root(tmp_path, monkeypatch):
     import subprocess
 
@@ -904,12 +909,14 @@ def _audit_rename(tmp_path, monkeypatch, new_name, body):
     return policy.audit_command({"project": str(tmp_path), "against": "HEAD"})
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_carries_an_old_row_through_a_function_rename(tmp_path, monkeypatch):
     new = "Particle_ParentTransform"
     result = _audit_rename(tmp_path, monkeypatch, new, _RENAMED.format(name=new))
     assert result["paths"] == ["src/p.c"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_refuses_a_new_row_inside_a_renamed_function(tmp_path, monkeypatch):
     new = "Particle_ParentTransform"
     body = _RENAMED.format(name=new).replace("    return", "    gAddr = (s32)&((Actor *)arg1)->x;\n    return")
@@ -919,6 +926,7 @@ def test_audit_refuses_a_new_row_inside_a_renamed_function(tmp_path, monkeypatch
     assert new in refused.value.findings[0].reason
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_unchanged_names_keep_their_rows(tmp_path, monkeypatch):
     name = "func_8027D97C_de"
     assert _audit_rename(tmp_path, monkeypatch, name, "/* touched */\n" + _RENAMED.format(name=name))["paths"] == [
@@ -926,6 +934,7 @@ def test_audit_unchanged_names_keep_their_rows(tmp_path, monkeypatch):
     ]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_a_new_function_with_an_old_row_shape_is_new(tmp_path, monkeypatch):
     name = "func_8027D97C_de"
     body = _RENAMED.format(name=name) + _RENAMED.format(name="func_other")
@@ -966,6 +975,7 @@ def test_scope_a_row_moved_between_paths_is_free_even_beside_a_rise_elsewhere():
     assert blocking == (added,)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_names_the_path_that_added_the_rows_not_an_unchanged_includer(tmp_path, monkeypatch):
     import subprocess
 

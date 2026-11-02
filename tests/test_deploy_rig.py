@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+REAL_GIT = "the rig suite script reads the tree's commit with git, as on the rig"
+
 spec = importlib.util.spec_from_file_location("deploy_rig", Path(__file__).parent.parent / "ci" / "deploy_rig.py")
 deploy_rig = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deploy_rig)
@@ -199,6 +201,7 @@ def test_the_toolkit_path_is_this_repos_own_and_no_script_names_the_decomp_toolk
         assert "decomp tools" not in path.read_text(), path
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_the_suite_refuses_a_tree_at_another_commit_than_the_landed_one():
     with tempfile.TemporaryDirectory() as temp:
         repo = Path(temp)

@@ -5,7 +5,11 @@ import subprocess
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from unbake import hdrnarrow as hn
+
+REAL_GIT = "the narrowing diffs headers against a revision of a real git repository"
 
 GUARD = '#ifndef A_H\n#define A_H\n#include "TYPES.H"\n{}\n#endif\n'
 
@@ -123,6 +127,7 @@ def narrow(tmp_path, units, headers=("include/H.H",)):
     return hn.narrow(config, "v", list(headers), units, FMT, now)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_narrow_skips_a_unit_whose_key_names_nothing_changed_and_keeps_every_other(tmp_path):
     tree(tmp_path, {"a.CPP": "int f(void){return D_2;}", "b.CPP": "int g(void){return D_1[0];}", "nokey.CPP": None})
     (tmp_path / "include/H.H").write_text(GUARD.format("extern f32 D_1;\nextern u8 D_2;\n"))
@@ -130,6 +135,7 @@ def test_narrow_skips_a_unit_whose_key_names_nothing_changed_and_keeps_every_oth
     assert keep == ["b.CPP", "nokey.CPP", "gone.CPP"] and stats["skipped"] == 1  # no key: kept, as an absent unit is
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_narrow_keeps_everything_on_doubt(tmp_path):
     tree(tmp_path, {"a.CPP": "int f(void){return 1;}"})
     units = ["a.CPP"]
@@ -159,6 +165,7 @@ def test_narrow_keeps_everything_on_doubt(tmp_path):
     assert narrow(tmp_path, units)[0] == units
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_narrow_keeps_a_unit_whose_key_names_a_removed_or_added_definition(tmp_path):
     tree(tmp_path, {"u.CPP": "extern u8 D_2;\nint f(void){return D_2;}", "w.CPP": "int w(void){return 0;}"})
     (tmp_path / "include/H.H").write_text(GUARD.format("extern u8 D_1[8];\nextern f32 D_2;\n"))
@@ -166,6 +173,7 @@ def test_narrow_keeps_a_unit_whose_key_names_a_removed_or_added_definition(tmp_p
     assert keep == ["u.CPP"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_the_build_marker_makes_units_built_at_the_mint_pristine(tmp_path):
     head = tree(tmp_path, {"a.CPP": "int f(void){return D_2;}", "b.CPP": "int g(void){return D_1[0];}"})
     # the pool builds after it extracts: the units' .i.ok are newer than the extraction marker
@@ -180,6 +188,7 @@ def test_the_build_marker_makes_units_built_at_the_mint_pristine(tmp_path):
     assert narrow(tmp_path, ["a.CPP", "b.CPP"])[0] == ["b.CPP"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_stamp_rebuilt_after_the_mint_from_the_same_bytes_is_pristine_by_its_record(tmp_path):
     """A reused stamp tree: units its last stamp rebuilt carry a later date than the pool's marker, but their record
     (date + key of the files the .d names) says they were made from the base's bytes, so they still narrow."""
@@ -205,6 +214,7 @@ def test_a_stamp_rebuilt_after_the_mint_from_the_same_bytes_is_pristine_by_its_r
     assert narrow(tmp_path, ["a.CPP", "b.CPP"])[0] == ["a.CPP", "b.CPP"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_resign_signs_again_the_includers_whose_record_before_the_diff_holds_for_the_bytes_now(tmp_path):
     """A2: a reused stamp slot reset after a header diff. The includers that diff's narrowing signed under its header
     bytes are signed again under the commit's (their record from before the diff names their date and these bytes);
@@ -254,6 +264,7 @@ def split_vector(
     git(tmp_path, "add", "-A")
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_declaration_moved_into_a_new_guarded_header_changes_nothing_a_unit_names(tmp_path):
     split_vector(tmp_path, {"a.CPP": "int f(void){return D_2;}", "b.CPP": "V v;"})
     keep, stats = narrow(tmp_path, ["a.CPP", "b.CPP"], ("include/H.H", "include/V.H"))
@@ -261,6 +272,7 @@ def test_a_declaration_moved_into_a_new_guarded_header_changes_nothing_a_unit_na
     assert stats["why"] == "no declaration changed"
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_new_header_with_a_second_user_of_its_guard_or_an_unseen_include_is_not_inlined(tmp_path):
     split_vector(tmp_path, {"a.CPP": "int f(void){return D_2;}"})
     (tmp_path / "other.c").write_text("#ifdef V_H\n#endif\n")
@@ -274,6 +286,7 @@ def test_a_new_header_with_a_second_user_of_its_guard_or_an_unseen_include_is_no
     assert keep == ["a.CPP"] and "not a droppable declaration" in stats["why"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_changed_declaration_moved_into_a_new_header_still_keeps_the_units_that_name_it(tmp_path):
     split_vector(tmp_path, {"a.CPP": "int f(void){return D_2;}", "b.CPP": "V v;"}, new=NEW.replace("f32 x;", "f32 y;"))
     keep, _ = narrow(tmp_path, ["a.CPP", "b.CPP"], ("include/H.H", "include/V.H"))

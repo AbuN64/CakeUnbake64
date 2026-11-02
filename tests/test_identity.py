@@ -7,8 +7,12 @@ import textwrap
 import types
 from pathlib import Path
 
+import pytest
+
 from unbake import contracts, native, policy
 from unbake.contracts import code_identity
+
+PROCESSES = "a hash seed differs only between processes: three interpreters with three seeds must name the code alike"
 
 
 def _module(source: str) -> dict:
@@ -108,6 +112,7 @@ def _moved(module, name: str, roots) -> bool:
         code_identity.cache_clear()
 
 
+@pytest.mark.seconds(2)  # walks the code graph of policy three times
 def test_the_census_identity_ignores_an_unrelated_policy_function_and_follows_a_reached_one():
     roots = (policy.evaluate, policy._view_uses, policy._stand_in_body)
     assert not _moved(policy, "_census_warnings", roots)
@@ -212,6 +217,7 @@ def test_editing_the_expression_of_a_reassigned_global_moves_the_identity(tmp_pa
         _drop_package()
 
 
+@pytest.mark.integration(PROCESSES)
 def test_the_identity_of_a_producer_is_equal_in_every_process():
     import subprocess
 

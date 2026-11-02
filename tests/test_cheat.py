@@ -15,6 +15,8 @@ from unbake import api, build, cheat, symbols, tree
 from unbake import config as configuration
 from unbake.contracts import Finding, Refusal
 
+REAL_GIT = "the check reads a small real git history: diff -M, show and grep at the base and the head commit"
+
 STAND_IN = 'INCLUDE_RODATA("data_800C", D_auto_rodata_func_8040BB40_de_800DD07C);\n'
 FACTS = {
     "D_auto_rodata_func_8040BB40_de_800DD07C": (0x800DD07C, 0xDDC7C, 4, ""),
@@ -76,24 +78,29 @@ PATHS = {"blobs_toml": "config/blobs.toml", "src__a_c": "src/a.c", "src__x_s": "
 A = '#include "include_asm.h"\nint f(void) { return 1; }\nINCLUDE_ASM("seg", func_80000000);\n'
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_plain_c_passes(repo: SimpleNamespace) -> None:
     assert repo.check(src__a_c="int f(void) { return 2; }\n")["stand_ins"] == []
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_stand_in_the_tool_would_write_passes(repo: SimpleNamespace) -> None:
     """The INCLUDE_RODATA line `sync --place` writes for a symbol the facts name and no C defined."""
     result = repo.check(src__a_c=A + "#if defined(VERSION_DE)\n" + STAND_IN + "#endif\n")
     assert result["stand_ins"] == ["D_auto_rodata_func_8040BB40_de_800DD07C"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_stand_in_for_a_symbol_no_fact_names_fails(repo: SimpleNamespace) -> None:
     assert _refused(repo, src__a_c=A + 'INCLUDE_RODATA("data_800C", D_made_up);\n') == {"cheat.added"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_stand_in_in_the_wrong_segment_fails(repo: SimpleNamespace) -> None:
     assert _refused(repo, src__a_c=A + STAND_IN.replace("data_800C", "elsewhere")) == {"cheat.added"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_stand_in_hiding_a_c_definition_fails(repo: SimpleNamespace) -> None:
     """The name was C at the base: turning it into a stand-in is a hidden body, whatever the facts say."""
     (repo.root / "src/b.c").write_text("const int D_auto_rodata_func_8040BB40_de_800DD07C[1] = {1};\n")
@@ -108,10 +115,12 @@ def test_a_stand_in_hiding_a_c_definition_fails(repo: SimpleNamespace) -> None:
     assert {f.key for f in hidden.value.findings} == {"cheat.added"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_hand_added_include_asm_fails(repo: SimpleNamespace) -> None:
     assert _refused(repo, src__a_c=A + 'INCLUDE_ASM("seg", func_80000004);\n') == {"cheat.include-asm"}
 
 
+@pytest.mark.integration(REAL_GIT)
 @pytest.mark.parametrize(
     "line",
     [
@@ -127,16 +136,19 @@ def test_assembly_words_and_pragmas_fail(repo: SimpleNamespace, line: str) -> No
     assert _refused(repo, src__a_c=A + line + "\n") == {"cheat.added"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_non_matching_only_branch_is_exempt_from_the_scan(repo: SimpleNamespace) -> None:
     body = A + '#ifdef NON_MATCHING\nint g(void) { asm("nop"); }\n#endif\n'
     assert repo.check(src__a_c=body)["stand_ins"] == []
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_an_unreadable_condition_keeps_lines_in_scope(repo: SimpleNamespace) -> None:
     body = A + "#if defined(NON_MATCHING) +\n.word 1\n#endif\n"
     assert _refused(repo, src__a_c=body) == {"cheat.added"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_non_c_file_under_src_fails(repo: SimpleNamespace) -> None:
     assert _refused(repo, src__x_s="nop\n") == {"cheat.non-c"}
 
@@ -148,27 +160,32 @@ def _handwritten(monkeypatch: pytest.MonkeyPatch, names: set[str]) -> None:
 ASM = ".globl func_a_de\nfunc_a_de:\n    .word 0x40845800\n    jr $ra\n"
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_handwritten_only_new_asm_file_in_an_asm_home_passes(repo: SimpleNamespace, monkeypatch) -> None:
     _handwritten(monkeypatch, {"func_a_de"})
     assert repo.check(**{"src/sdk/x.s": ASM})["against"] == repo.base
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_new_asm_file_with_a_compiled_function_fails(repo: SimpleNamespace, monkeypatch) -> None:
     _handwritten(monkeypatch, {"func_a_de"})
     both = ASM + ".globl func_b_de\nfunc_b_de:\n    jr $ra\n"
     assert "cheat.non-c" in _refused(repo, **{"src/sdk/x.s": both})
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_new_asm_file_in_the_game_dir_fails(repo: SimpleNamespace, monkeypatch) -> None:
     _handwritten(monkeypatch, {"func_a_de"})
     assert "cheat.non-c" in _refused(repo, **{"src/game/x.s": ASM})
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_new_asm_file_defining_no_global_fails(repo: SimpleNamespace, monkeypatch) -> None:
     _handwritten(monkeypatch, set())
     assert _refused(repo, **{"src/sdk/x.s": "nop\n"}) == {"cheat.non-c"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_infrastructure_edits_fail(repo: SimpleNamespace) -> None:
     assert _refused(repo, local_mk="X=1\n") == {"cheat.infra"}
 
@@ -194,14 +211,17 @@ def _header(repo: SimpleNamespace, text: str) -> dict[str, Any]:
     return cheat.cheat_command(repo.config, {"against": base})
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_declaration_removed_from_a_mixed_header_is_not_infrastructure(repo: SimpleNamespace) -> None:
     assert _header(repo, HEADER.replace("extern void func_80289970_de(int a);\n", ""))["against"]
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_declaration_added_or_edited_in_a_mixed_header_is_not_infrastructure(repo: SimpleNamespace) -> None:
     assert _header(repo, HEADER.replace("(int a)", "(int a, int b)") + "extern void g(void);\n")["against"]
 
 
+@pytest.mark.integration(REAL_GIT)
 @pytest.mark.parametrize(
     "edit",
     [
@@ -217,12 +237,14 @@ def test_a_macro_include_or_definition_edit_of_a_mixed_header_stays_infrastructu
     assert "cheat.infra" in {f.key for f in refused.value.findings}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_declaration_edit_cannot_carry_an_asm_line_in(repo: SimpleNamespace) -> None:
     with pytest.raises(Refusal) as refused:
         _header(repo, HEADER + "#pragma weak x\nextern void g(void);\n")
     assert {f.key for f in refused.value.findings} >= {"cheat.infra", "cheat.added"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_makefile_rows_pass_other_lines_fail_unless_generated(
     repo: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -233,6 +255,7 @@ def test_makefile_rows_pass_other_lines_fail_unless_generated(
     assert cheat.cheat_command(repo.config, {"against": repo.base})["makefile"] == "generated"
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_dirty_fact_tree_is_refused(repo: SimpleNamespace) -> None:
     (repo.root / "config.toml").write_text("changed\n")
     with pytest.raises(Refusal) as refused:
@@ -240,16 +263,19 @@ def test_a_dirty_fact_tree_is_refused(repo: SimpleNamespace) -> None:
     assert refused.value.findings[0].key == "cheat.dirty"
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_renamed_file_adds_only_its_changed_lines(repo: SimpleNamespace) -> None:
     _git(repo.root, "mv", "src/a.c", "src/b.c")
     assert repo.check()["stand_ins"] == []
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_name_added_twice_to_the_facts_fails(repo: SimpleNamespace) -> None:
     rows = "lit_x = 0x800E16C8; // rom:0xE22C8\nlit_x = 0x800E173C; // rom:0xE233C\n"
     assert _refused(repo, **{"versions/de/aliases.txt": rows}) == {"cheat.duplicate-name"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_name_in_both_fact_files_fails(repo: SimpleNamespace) -> None:
     keys = _refused(
         repo, **{"versions/de/symbol_addrs.txt": "lit_y = 0x1;\n", "versions/de/aliases.txt": "lit_y = 0x2;\n"}
@@ -257,10 +283,12 @@ def test_a_name_in_both_fact_files_fails(repo: SimpleNamespace) -> None:
     assert keys == {"cheat.duplicate-name"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_unique_names_pass(repo: SimpleNamespace) -> None:
     assert repo.check(**{"versions/de/aliases.txt": "lit_a = 0x1;\nlit_b = 0x2;\n"})["head"] == "HEAD"
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_duplicate_already_at_base_is_not_new(repo: SimpleNamespace) -> None:
     (repo.root / "versions/de").mkdir(parents=True)
     (repo.root / "versions/de/aliases.txt").write_text("dup = 0x1;\ndup = 0x2;\n")
@@ -275,6 +303,7 @@ def test_a_duplicate_already_at_base_is_not_new(repo: SimpleNamespace) -> None:
 LITERALS = Finding("tree.literals", "literals_f_2 in de places literals for f_2, which no file owns")
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_tree_that_cannot_be_captured_fails(repo: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     """A `literals_` row for a function no file owns: tree capture refuses it, so the gate must too."""
     monkeypatch.setattr(cheat, "_tree_findings", lambda cfg: (LITERALS,))
@@ -291,6 +320,7 @@ def test_tree_findings_are_the_capture_refusal(monkeypatch: pytest.MonkeyPatch) 
     assert cheat._tree_findings(SimpleNamespace()) == ()
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_blobs_toml_is_a_fact_not_infrastructure_and_is_verified_when_it_changes(
     repo: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -308,6 +338,7 @@ def test_blobs_toml_is_a_fact_not_infrastructure_and_is_verified_when_it_changes
     assert seen == [1]  # config/blobs.toml did not differ: no verification
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_blobs_toml_that_fails_verification_is_refused(
     repo: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -317,6 +348,7 @@ def test_a_blobs_toml_that_fails_verification_is_refused(
     assert _refused(repo, blobs_toml="schema = 1\n") == {"blobs.evidence"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_the_uncommitted_tree_is_checked_without_a_commit(
     repo: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -334,6 +366,7 @@ def test_the_uncommitted_tree_is_checked_without_a_commit(
     assert _git(repo.root, "status", "--porcelain") == "M src/a.c"
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_makefile_behind_the_generator_is_mains_lag_not_a_refusal(
     repo: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -360,6 +393,7 @@ def test_the_generator_version_follows_the_template_and_stamps_the_makefile(tmp_
     assert build.generator_of(build.makefile(make_config(tmp_path)).decode()) == first
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_the_uncommitted_tree_still_refuses_added_assembly(
     repo: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -370,6 +404,7 @@ def test_the_uncommitted_tree_still_refuses_added_assembly(
     assert {f.key for f in refused.value.findings} == {"cheat.added"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_base_that_moved_on_is_not_charged_to_the_head(repo: SimpleNamespace) -> None:
     """Main matched a function after the lane branched (its INCLUDE_ASM went away): the lane is judged against the
     merge-base, not charged with the INCLUDE_ASM line main removed."""
@@ -384,6 +419,7 @@ def test_a_base_that_moved_on_is_not_charged_to_the_head(repo: SimpleNamespace) 
     assert cheat.cheat_command(repo.config, {"against": ahead})["stand_ins"] == []
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_an_added_sdk_trap_is_recorded_not_refused_and_game_code_is_refused(repo: SimpleNamespace) -> None:
     """10-25 REV1-ONE-72: the narrow SDK exception (fakematch.sdk_line); the owner still confirms the form."""
     repo.config.project.libraries = (Path("src/sdk/libsn"),)
@@ -402,18 +438,21 @@ MOVED = {
 }
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_project_cheat_table_replaces_the_packaged_asm_home(repo: SimpleNamespace, monkeypatch) -> None:
     _handwritten(monkeypatch, {"func_a_de"})
     repo.config.project.cheat = MOVED["cheat"]
     assert repo.check(**{"sdk/x.s": ASM})["against"] == repo.base
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_project_cheat_table_leaves_the_old_asm_home_to_fail(repo: SimpleNamespace, monkeypatch) -> None:
     _handwritten(monkeypatch, {"func_a_de"})
     repo.config.project.cheat = MOVED["cheat"]
     assert "cheat.non-c" in _refused(repo, **{"src/sdk/x.s": ASM})
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_project_cheat_table_replaces_the_makefile_row(repo: SimpleNamespace) -> None:
     repo.config.project.cheat = MOVED["cheat"]
     row = "FILE.sdk/a.c := ido\n"

@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
+import runpy
 import shutil
 import struct
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any
+
+import fakecpp
 
 from unbake.contracts import Config, Json, NativeResult, Proof, Submission, digest, sha1, sha256
 
@@ -51,58 +56,128 @@ def _git(root: Path, *args: str) -> None:
     subprocess.run(argv, check=True, capture_output=True, env=env)
 
 
-FAKE_CPP = r'''#!{python}
-"""A fake cpp for tests: #if/#ifdef/#else/#endif, -D macros, INCLUDE_* stand-ins; each run is logged."""
-import os
-import re
+FAKE_CPP = """#!{python}
 import sys
+sys.path.insert(0, {tests!r})
+import fakecpp
+fakecpp.main()
+"""  # the program form of tests/fakecpp.py, for a real process (make, a subprocess); unit tests answer it in process
+TESTS = Path(__file__).resolve().parent
 
-args = sys.argv[1:]
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "cpp.log"), "a") as log:
-    log.write(" ".join(a for a in args if a.startswith("-D")) + "\n")
-defs = {a[2:].partition("=")[0]: a[2:].partition("=")[2] or "1" for a in args if a.startswith("-D")}
-text = sys.stdin.read() if "-" in args else open(args[-1]).read()
-
-
-def truth(expr):
-    expr = re.sub(r"defined\s*\(\s*(\w+)\s*\)|defined\s+(\w+)", lambda m: str(int((m[1] or m[2]) in defs)), expr)
-    expr = re.sub(r"[A-Za-z_]\w*", lambda m: defs.get(m[0], "0"), expr)
-    return bool(eval(expr.replace("&&", " and ").replace("||", " or ").replace("!", " not ")))
+# Programs the fixture writes that unit tests answer in process (conftest routes process.run here): a program path ->
+# fn(argv, cwd, stdin) -> (exit, stdout, stderr). The program files stay real for the integration set.
+Fake = Callable[[Sequence[str], Path, bytes], tuple[int, bytes, bytes]]
+FAKES: dict[Path, tuple[Fake, tuple[int, int]]] = {}
 
 
-out, stack = [], []
-for line in text.splitlines():
-    word = re.match(r"\s*#\s*(\w+)\s*(.*)", line)
-    if word:
-        kind, rest = word[1], word[2]
-        live = all(a for a, _ in stack)
-        if kind in ("if", "ifdef", "ifndef"):
-            value = truth(rest) if kind == "if" else (rest.strip() in defs) == (kind == "ifdef")
-            stack.append((value, value))
-        elif kind == "elif":
-            _, taken = stack.pop()
-            value = not taken and truth(rest)
-            stack.append((value, taken or value))
-        elif kind == "else":
-            _, taken = stack.pop()
-            stack.append((not taken, True))
-        elif kind == "endif":
-            stack.pop()
-        elif kind == "define" and live:
-            parts = rest.split(None, 1)
-            defs[parts[0]] = parts[1] if len(parts) > 1 else "1"
-        continue
-    if not all(a for a, _ in stack):
-        continue
-    stand = re.match(r"\s*INCLUDE_(ASM|DATA|RODATA)\(\s*\"?(\w+)\"?\s*,\s*(\w+)\s*\)\s*;?\s*$", line)
-    if stand and "include_asm.h" in text:  # like the real header: without it the call stays as written
-        folder = "nonmatchings" if stand[1] == "ASM" else "data"
-        section = {"ASM": ".text", "DATA": ".data", "RODATA": ".rodata"}[stand[1]]
-        out.append('__asm__(".section %s\\n.include \\"%s/%s/%s.s\\"");' % (section, folder, stand[2], stand[3]))
-    else:
-        out.append(line)
-sys.stdout.write("\n".join(out) + "\n")
-'''
+def _stat(path: Path) -> tuple[int, int]:
+    found = path.stat()
+    return found.st_size, found.st_mtime_ns
+
+
+def fake(program: str | Path) -> Fake | None:
+    """The in-process stand-in of a program the fixture wrote, while the file is still the one it wrote (a test that
+    rewrites the program gets the program)."""
+    path = Path(program)
+    entry = FAKES.get(path)
+    if entry is None:
+        return None
+    try:
+        return entry[0] if _stat(path) == entry[1] else None
+    except OSError:
+        return None
+
+
+def _cpp(argv: Sequence[str], cwd: Path, stdin: bytes) -> tuple[int, bytes, bytes]:
+    program, args = Path(argv[0]), [str(a) for a in argv[1:]]
+    return 0, fakecpp.run(program, args, stdin.decode(), cwd).encode(), b""
+
+
+def _true(argv: Sequence[str], cwd: Path, stdin: bytes) -> tuple[int, bytes, bytes]:
+    return 0, b"", b""
+
+
+class Repo:
+    """The committed state of a fixture project, standing in for its git repository in unit tests: conftest answers
+    process.tracked/tree_id/dirty/changed/blob/show/spelling from it. `fixture.project(..., git=True)` makes a real
+    repository instead (the integration set)."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.files = {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+        self.tree = sha1(json.dumps({k: sha1(v) for k, v in self.files.items()}, sort_keys=True).encode())
+
+    COMMIT = "c" * 40
+
+    def head(self, rev: str) -> bool:
+        return rev.removesuffix("^{tree}").removesuffix("^{commit}") in ("HEAD", "main", self.COMMIT, self.tree)
+
+    def changed(self) -> list[str]:
+        out = []
+        for path, data in self.files.items():
+            file = self.root / path
+            if not file.is_file() or file.read_bytes() != data:
+                out.append(path)
+        return out
+
+    def on_disk(self) -> list[str]:
+        """The work tree's files git would list: never .git, never a folder whose .gitignore ignores everything."""
+        found = []
+        for folder, dirs, names in os.walk(self.root):
+            here = Path(folder)
+            dirs[:] = sorted(
+                d for d in dirs if d != ".git" and not ((here / d / ".gitignore").is_file() and
+                                                        (here / d / ".gitignore").read_text().strip() == "*")
+            )  # fmt: skip
+            found += [(here / n).relative_to(self.root).as_posix() for n in names]
+        return sorted(found)
+
+    def git(self, argv: Sequence[str], cwd: Path, stdin: bytes) -> tuple[int, bytes, bytes]:
+        """The git subcommands the code asks of a fixture project, answered from the committed state."""
+        args = [str(a) for a in argv[1:]]
+        while args and args[0] in ("-c", "-C"):
+            args = args[2:]
+        command, rest = args[0], args[1:]
+        flags = [a for a in rest if a.startswith("-")]
+        operands = [a for a in rest if not a.startswith("-")]
+        z = "-z" in flags
+        if command == "rev-parse":
+            rev = operands[-1]
+            if not self.head(rev):
+                return 128, b"", f"fatal: bad revision {rev}\n".encode()
+            return 0, ((self.tree if rev.endswith("^{tree}") else self.COMMIT) + "\n").encode(), b""
+        if command == "ls-files":
+            cached = not ({"-o", "--others"} & set(flags)) or bool({"-c", "--cached", "-co"} & set(flags))
+            others = bool({"-o", "--others", "-co"} & set(flags))
+            disk = set(self.on_disk())
+            names = (set(self.files) if cached else set()) | ((disk - set(self.files)) if others else set())
+            wanted = [o.rstrip("/") for o in operands]
+            names = {n for n in names if not wanted or any(n == w or n.startswith(w + "/") for w in wanted)}
+            return 0, "".join(n + ("\0" if z else "\n") for n in sorted(names)).encode(), b""
+        if command == "status":
+            lines = [f" {'M' if (self.root / p).is_file() else 'D'} {p}" for p in self.changed()]
+            if "--untracked-files=no" not in flags:
+                lines += [f"?? {p}" for p in self.on_disk() if p not in self.files]
+            return 0, "".join(line + "\n" for line in lines).encode(), b""
+        if command == "ls-tree" and self.head(operands[0]):
+            hits = [p for p in self.files if any(p == o for o in operands[1:])]
+            return 0, "".join(f"100644 blob {sha1(self.files[p])}\t{p}\n" for p in hits).encode(), b""
+        if command == "show" and ":" in operands[0]:
+            rev, _, path = operands[0].partition(":")
+            if self.head(rev) and path in self.files:
+                return 0, self.files[path], b""
+            return 128, b"", f"fatal: path '{path}' does not exist in '{rev}'\n".encode()
+        raise AssertionError(f"fixture.Repo does not answer git {command}: make the project with git=True")
+
+
+REPOS: dict[Path, Repo] = {}
+
+
+def repo(root: Path) -> Repo | None:
+    """The stand-in repository of a fixture project at or above root, if root is one."""
+    root = Path(root).resolve()
+    return REPOS.get(root)
+
 
 SEGMENTS = {"main": (0x1000, 0x80000400), "ovl": (0x3000, 0x80100000)}
 SOURCES = {
@@ -140,9 +215,11 @@ def project(
     sources: Mapping[str, str] | None = None,
     symbols: Mapping[str, str] | None = None,
     extra: Mapping[str, str | bytes] = MappingProxyType({}),
+    git: bool = False,
 ) -> Path:
     """Write a committed schema-4 project under tmp/project: two segments, three modules (a C function, an
-    INCLUDE_ASM stand-in, a NON_MATCHING body). sources replace src/, symbols replace a version's symbol file."""
+    INCLUDE_ASM stand-in, a NON_MATCHING body). sources replace src/, symbols replace a version's symbol file.
+    Committed in a stand-in repository (Repo), or with `git` in a real one."""
     root = tmp / "project"
     root.mkdir(parents=True)
     rom = bytes(0x4000)
@@ -157,9 +234,12 @@ def project(
         _write(root / f"versions/{v}/symbol_addrs.txt", (symbols or {}).get(v, symbol_file(v)))
     for relative, text in {**HEADERS, **(SOURCES if sources is None else sources), **extra}.items():
         _write(root / relative, text)
-    _git(root, "init", "-q", "-b", "main")
-    _git(root, "add", "-A")
-    _git(root, "commit", "-q", "-m", "fixture project")
+    if git:
+        _git(root, "init", "-q", "-b", "main")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", "fixture project")
+    else:
+        REPOS[root.resolve()] = Repo(root.resolve())
     return root
 
 
@@ -180,8 +260,10 @@ def host(tmp: Path, **overrides: Any) -> Path:
     tools["git"] = shutil.which("git") or tools["git"]  # the tree lists files through the real git
     fake = tmp / "bin" / "cpp"
     fake.unlink()
-    fake.write_text(FAKE_CPP.replace("{python}", sys.executable))
+    fake.write_text(FAKE_CPP.format(python=sys.executable, tests=str(TESTS)))
     fake.chmod(0o755)
+    FAKES[fake] = (_cpp, _stat(fake))
+    FAKES.update((Path(p), (_true, _stat(Path(p)))) for name, p in tools.items() if name not in ("git", "cpp"))
     document: dict[str, dict[str, Any]] = {
         "resources": {
             "cores": 2,
@@ -356,6 +438,31 @@ def elf_with_symbols(defined: Sequence[str], undefined: Sequence[str]) -> bytes:
     sections += header(".strtab", 3, 0, strtab) + header(".shstrtab", 3, 0, shstr)
     ident = b"\x7fELF" + bytes([1, 2, 1, 0]) + bytes(8)
     return ident + struct.pack(">HHIIIIIHHHHHH", 1, 8, 1, 0, 0, shoff, 0, 52, 0, 0, 40, 5, 4) + body + sections
+
+
+def program(argv: Sequence[str | Path], cwd: Path | None = None) -> SimpleNamespace:
+    """Run a python program of the build (argv as make spells it: `python3 -I [-S] script args`, or the script alone)
+    in this process, from its file as `__main__`, in `cwd`: returncode, stdout and stderr (bytes) as subprocess.run
+    has them. The programs it starts are still processes; a unit test gives them stubs."""
+    words = [str(a) for a in argv]
+    while words and (Path(words[0]).name.startswith("python") or words[0] in ("-I", "-S", "-E", "-s")):
+        words = words[1:]
+    out, err = (io.TextIOWrapper(io.BytesIO(), write_through=True) for _ in range(2))  # .buffer as sys.stdout has
+    code: int = 0
+    saved = sys.argv
+    sys.argv = words
+    try:
+        with contextlib.chdir(cwd or Path.cwd()), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            runpy.run_path(words[0], run_name="__main__")
+    except SystemExit as exit:
+        if isinstance(exit.code, str):
+            err.write(exit.code + "\n")
+            code = 1
+        else:
+            code = exit.code or 0
+    finally:
+        sys.argv = saved
+    return SimpleNamespace(returncode=code, stdout=out.buffer.getvalue(), stderr=err.buffer.getvalue())  # type: ignore[attr-defined]
 
 
 def cpp_runs(tmp: Path) -> int:

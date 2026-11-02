@@ -10,8 +10,13 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import fixture
+import pytest
+
 from unbake import build
 from unbake.resources import cc_cache
+
+STANDALONE = "the program must start on its own from the package file: a real process is the check"
 
 
 def fake_cc(tmp_path: Path) -> Path:
@@ -117,6 +122,7 @@ def test_prune_drops_only_what_aged_out(tmp_path):
     assert new.exists() and not old.exists()
 
 
+@pytest.mark.integration(STANDALONE)
 def test_the_script_runs_standalone_from_the_package_file(tmp_path):
     cc, cache = fake_cc(tmp_path), tmp_path / "cc"
     root = tree(tmp_path, "a", "int a;")
@@ -333,7 +339,7 @@ def unit_argv(cache: Path, cpp: Path, tmp_path: Path, *flags: str) -> list[str]:
 
 def pp(cache: Path, cpp: Path, root: Path, *flags: str) -> SimpleNamespace:
     """The `--unit` process of a stamp; `stdout` is the text it left in `build/x.i`."""
-    done = subprocess.run(unit_argv(cache, cpp, root.parent, *flags), cwd=root, capture_output=True, check=False)
+    done = fixture.program(unit_argv(cache, cpp, root.parent, *flags), root)
     text = root / "build" / "x.i"
     return SimpleNamespace(
         returncode=done.returncode, stdout=text.read_bytes() if text.exists() else b"", stderr=done.stderr
@@ -386,7 +392,7 @@ def test_a_failed_preprocess_is_not_stored_and_a_command_without_a_dependency_fi
     (root / "x.c").write_text("int x;\n")
     bare = unit_argv(cache, cpp, tmp_path)
     del bare[bare.index("-MMD") : bare.index("-MF")]  # no -MP: the cache cannot name the headers
-    done = subprocess.run(bare, cwd=root, capture_output=True, check=False)
+    done = fixture.program(bare, root)
     assert done.returncode == 0 and runs(cpp) == 2 and not cache.exists()
 
 
@@ -484,10 +490,7 @@ def test_a_batch_makes_every_recorded_stamp_and_leaves_a_failing_one_to_make(tmp
     good = ["build/x.i.ok", "F", str(hdrkey), str(stamprec), str(cpp), "-MMD", "-MP", "-MF", "x.d", "x.c"]
     bad = ["build/y.i.ok", "F", str(hdrkey), str(stamprec), str(cpp), "-MMD", "-MP", "-MF", "y.d", "y.c"]
     manifest.write_text("".join(cc_cache.SEPARATOR.join(row) + "\n" for row in (good, bad)))
-    done = subprocess.run(
-        ["python3", "-I", str(Path(cc_cache.__file__)), "--units", str(cache), str(manifest), "0", "1"],
-        cwd=root, capture_output=True, check=False,
-    )  # fmt: skip
+    done = fixture.program([str(Path(cc_cache.__file__)), "--units", str(cache), str(manifest), "0", "1"], root)
     assert done.returncode == 0 and done.stderr == b""  # the failure is make's to name, not the batch's
     assert (root / "build/x.i.ok").exists() and (root / "build/x.i").exists() and not (root / "build/y.i.ok").exists()
 
@@ -539,7 +542,7 @@ def test_a_real_units_stamp_command_makes_the_whole_stamp_with_one_preprocessor_
     argv = ["python3", "-I", "-S", str(Path(cc_cache.__file__)), "--unit", str(cache), stamp, flags]
     argv += [str(hdrkey), str(stamprec), str(cpp), *cpp_args.split()]
     for _ in range(2):  # the second answers from the cache: still the whole stamp, no second preprocessor run
-        assert subprocess.run(argv, cwd=root, check=False).returncode == 0
+        assert fixture.program(argv, root).returncode == 0
     text = root / stamp.removesuffix(".ok")
     assert text.read_bytes() == b"int x;\n#define A 1\n" and (root / (stamp + ".flags")).read_text() == flags + "\n"
     assert (root / stamp).exists() and not text.with_suffix(".new").exists()

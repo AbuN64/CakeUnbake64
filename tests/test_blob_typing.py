@@ -8,6 +8,8 @@ import pytest
 
 from unbake import blobs, policy
 
+REAL_GIT = "the audit compares two commits of a real git repository"
+
 
 def _row(kind="leftover", state="decoded", rom=None, **extra):
     return {"type": kind, "state": state, "rom": {"v": rom or [[0, 16]]}, **extra}
@@ -73,6 +75,7 @@ def _audit(tmp_path, monkeypatch, before, after):
     return policy._untyped_findings(tmp_path, "HEAD", shutil.which("git"), tmp_path, {"untyped": {"reach": 100}})
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_refuses_an_added_untyped_row(tmp_path, monkeypatch):
     refused, warned = _audit(
         tmp_path,
@@ -84,6 +87,7 @@ def test_audit_refuses_an_added_untyped_row(tmp_path, monkeypatch):
     assert warned == []
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_allows_a_draft_and_an_untyped_row_the_base_held(tmp_path, monkeypatch):
     refused, warned = _audit(
         tmp_path,
@@ -94,6 +98,7 @@ def test_audit_allows_a_draft_and_an_untyped_row_the_base_held(tmp_path, monkeyp
     assert refused == [] and warned == []
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_audit_warns_on_untyped_rows_in_a_touched_window_only(tmp_path, monkeypatch):
     base = [("near", "leftover", 64, False), ("far", "leftover", 9000, False), ("t", "model", 0, False)]
     refused, warned = _audit(

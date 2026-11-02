@@ -10,7 +10,12 @@ import pytest
 
 from unbake import adapters
 
-pytestmark = pytest.mark.skipif(shutil.which("cc") is None, reason="needs a C compiler, as the generated Makefile does")
+pytestmark = [
+    pytest.mark.integration(
+        "the code under test is hdrkey.c: the host compiler builds it once and each test runs the program"
+    ),
+    pytest.mark.skipif(shutil.which("cc") is None, reason="needs a C compiler, as the generated Makefile does"),
+]
 
 
 @pytest.fixture(scope="session")

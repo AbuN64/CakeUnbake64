@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import functools
 import re
 import tomllib
 import warnings
@@ -27,6 +28,7 @@ FORBIDDEN = ("subprocess", "multiprocessing", "concurrent.futures", "threading")
 DISPATCH = {"gcc", "ido", "c", "asm", "data", "resource"}
 
 
+@functools.cache  # each file parsed once per worker: the checks only read the tree
 def _tree(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
@@ -71,6 +73,7 @@ def test_no_dispatch_literals(path: Path) -> None:
                     assert leaf.value not in DISPATCH, f"{path.name}:{leaf.lineno} dispatches on {leaf.value!r}"
 
 
+@pytest.mark.seconds(2)  # parses every source module
 def test_finding_keys_exist() -> None:
     keys = set(tomllib.loads((SRC / "resources/data/keys.toml").read_text(encoding="utf-8"))["key"])
     for path in FILES:

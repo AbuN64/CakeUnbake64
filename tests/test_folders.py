@@ -15,6 +15,8 @@ import pytest
 from unbake import folders
 from unbake.contracts import Config, Refusal
 
+REAL_GIT = "the carry moves files in a real repository and writes its edits as the git patch git applies"
+
 RULES = """\
 schema = 1
 libraries = []
@@ -265,6 +267,7 @@ def test_plan_without_rules_is_refused(cfg: Config) -> None:
     assert refusal.value.findings[0].key == "layout.input"
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_carry_moves_untracked_files_and_writes_the_edits_as_a_patch(cfg: Config, tmp_path: Path) -> None:
     root = cfg.project.root
     folders.plan(cfg, {"rules": _rules_file(tmp_path)})
@@ -278,6 +281,7 @@ def test_carry_moves_untracked_files_and_writes_the_edits_as_a_patch(cfg: Config
     assert _git(root, "status", "--porcelain").count("c_func.c") == 1  # the tracked file itself is not touched
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_apply_without_a_plan_or_with_a_dirty_file_is_refused(cfg: Config, tmp_path: Path) -> None:
     with pytest.raises(Refusal) as refusal:
         folders.apply(cfg, {})
@@ -289,6 +293,7 @@ def test_apply_without_a_plan_or_with_a_dirty_file_is_refused(cfg: Config, tmp_p
     assert "uncommitted" in refusal.value.findings[0].reason
 
 
+@pytest.mark.integration(REAL_GIT)
 @pytest.mark.parametrize("move_map", [False, True])
 def test_apply_carries_prefix_authority_paths_preserving_evidence(cfg, tmp_path, monkeypatch, move_map):
     root = cfg.project.root
@@ -328,6 +333,7 @@ def test_apply_carries_prefix_authority_paths_preserving_evidence(cfg, tmp_path,
     assert folders._module_paths((root / final_map).read_text(), moved) == (root / final_map).read_text()
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_missing_configured_module_map_refuses_before_moving(cfg, tmp_path):
     cfg.project.module_map = "missing.tsv"
     folders.plan(cfg, {"rules": _rules_file(tmp_path)})

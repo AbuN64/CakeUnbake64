@@ -13,6 +13,8 @@ import pytest
 from unbake import adapters
 from unbake.contracts import Config, Host, Refusal
 
+REAL_GIT = "the pin is fetched from a real git origin into a real clone"
+
 _SHA = "e00b0f706db980da04f137118e9328b6c24b9529"
 
 
@@ -50,6 +52,7 @@ def _fetching_config(adapter_config, origin: Path, clone: Path) -> Config:
     return replace(adapter_config, host=host)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_pin_absent_from_the_clone_is_fetched_from_the_configured_url_then_installed(
     monkeypatch, tmp_path, adapter_config, abucache_origin
 ):
@@ -82,6 +85,7 @@ def test_a_pin_absent_from_the_clone_is_fetched_from_the_configured_url_then_ins
     execv.assert_called_once()
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_pin_already_in_the_clone_is_not_fetched(monkeypatch, tmp_path, adapter_config, abucache_origin):
     origin, pin = abucache_origin
     clone = tmp_path / "clone.git"
@@ -101,6 +105,7 @@ def test_the_installed_pin_changes_nothing(monkeypatch, adapter_config):
     adapters.ensure_abucache(adapter_config)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_pin_the_url_cannot_give_refuses_naming_the_commit_and_the_url(
     monkeypatch, tmp_path, adapter_config, abucache_origin
 ):

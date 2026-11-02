@@ -8,6 +8,8 @@ import pytest
 from unbake import config, debtrules, human, policy
 from unbake.contracts import Finding
 
+REAL_GIT = "the audit compares two commits of a real git repository"
+
 SETTINGS = config.audit_settings(None)
 
 # RageWars 9faab54a8d, src/AI/PLAYER/PLAYER_DEATH.CPP: a cleanup rewrote 0x11 to 17 beside a held 0x140, which the table
@@ -56,17 +58,20 @@ def test_hex_review_classes_are_not_dec():
     assert _lines("void f(void) {\n    x = 0x400;\n}\n", "hex_values", "REVIEW") == {2: "0x400 (pow2)"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_the_audit_refuses_a_new_header_that_spells_array_sizes_in_hex(tmp_path, monkeypatch):
     _repo(tmp_path, monkeypatch, {"include/a.h": "int x;\n"})
     assert ("source.hex-value", "Refuse") in _refused(tmp_path, {"include/p.h": NEW_SIZES})
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_the_audit_does_not_blame_a_hex_literal_the_base_already_held(tmp_path, monkeypatch):
     _repo(tmp_path, monkeypatch, {"src/a.c": HELD_BEFORE})
     (tmp_path / "src/a.c").write_text(HELD_AFTER)
     assert policy.audit_command({"project": str(tmp_path), "against": "HEAD"})["warnings"] == {}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_hex_literal_with_a_suffix_is_held_like_any_other(tmp_path, monkeypatch):
     # RageWars aab9c527cc: a suffixed literal (0x10u) has no word boundary after its digits; the audit crashed on it.
     _repo(tmp_path, monkeypatch, {"src/a.c": "void f(void) {\n    g(0x2BCu, 0x11);\n}\n"})
@@ -100,6 +105,7 @@ def test_a_placeholder_folder_is_named_by_its_first_component():
     assert debtrules.placeholder_path("src/ok/a.c", SETTINGS) is None
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_the_audit_refuses_a_stand_in_a_non_matching_note_and_a_placeholder_path(tmp_path, monkeypatch):
     _repo(tmp_path, monkeypatch, {"src/a.c": "int x;\n"})
     stand_in = 'INCLUDE_ASM("asm/a", f);\n#ifdef NON_MATCHING\nint y;\n#endif\n'

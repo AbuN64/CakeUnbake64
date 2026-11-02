@@ -13,6 +13,8 @@ import pytest
 from unbake import build, buildproof, process, store
 from unbake.contracts import Refusal
 
+REAL_GIT = "the proof applies and reverts the change in a real git repository (diff, apply, reset) around its builds"
+
 FILES = {
     "include/h.h": "int Thing(void);\n",
     "src/a.c": '#include "h.h"\nint A(void) { return Thing(); }\n',
@@ -107,6 +109,7 @@ def _keys(refused: pytest.ExceptionInfo[Refusal]) -> set[str]:
     return {f.key for f in refused.value.findings}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_rename_that_builds_the_same_passes_and_reaches_header_consumers(tree: SimpleNamespace) -> None:
     def edit(root: Path) -> None:
         (root / "include/h.h").write_text("int Renamed(void);\n")
@@ -119,6 +122,7 @@ def test_a_rename_that_builds_the_same_passes_and_reaches_header_consumers(tree:
     assert not any("b.CPP" in t for t in tree.log[0])
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_dot_cpp_unit_and_a_dot_c_unit_are_both_proved(tree: SimpleNamespace) -> None:
     def edit(root: Path) -> None:
         (root / "src/b.CPP").write_text("int B(void) { return 2; } /* note */\n")
@@ -129,6 +133,7 @@ def test_a_dot_cpp_unit_and_a_dot_c_unit_are_both_proved(tree: SimpleNamespace) 
     assert result["absent"] == 1
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_change_that_breaks_make_fails(tree: SimpleNamespace) -> None:
     def edit(root: Path) -> None:
         (root / "src/c.c").write_text("BROKEN\n")
@@ -139,6 +144,7 @@ def test_a_change_that_breaks_make_fails(tree: SimpleNamespace) -> None:
     assert _clean(tree)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_real_change_differs(tree: SimpleNamespace) -> None:
     def edit(root: Path) -> None:
         (root / "src/c.c").write_text("int C(void) { return 4; }\n")
@@ -149,6 +155,7 @@ def test_a_real_change_differs(tree: SimpleNamespace) -> None:
     assert _clean(tree)  # the patch is taken off on a failing proof too
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_unit_that_disappears_from_the_set_fails(tree: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     def edit(root: Path) -> None:
         (root / "src/c.c").write_text("int C(void) { return 3; } /* x */\n")
@@ -170,6 +177,7 @@ def test_a_unit_that_disappears_from_the_set_fails(tree: SimpleNamespace, monkey
     assert "buildproof.set" in _keys(refused)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_file_never_built_before_is_built_and_counted_not_skipped(tree: SimpleNamespace) -> None:
     def edit(root: Path) -> None:
         (root / "src/c.c").write_text("int C(void) { return 3; } /* x */\n")
@@ -180,6 +188,7 @@ def test_a_file_never_built_before_is_built_and_counted_not_skipped(tree: Simple
     assert (tree.root / "build/us/src/d.c.o").is_file()
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_change_reaching_no_unit_proves_nothing(tree: SimpleNamespace) -> None:
     def edit(root: Path) -> None:
         (root / "README.md").write_text("y\n")
@@ -189,6 +198,7 @@ def test_a_change_reaching_no_unit_proves_nothing(tree: SimpleNamespace) -> None
     assert _keys(refused) == {"buildproof.empty"}
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_dirty_tree_refuses(tree: SimpleNamespace) -> None:
     (tree.root / "src/c.c").write_text("changed\n")
     with pytest.raises(Refusal) as refused:
@@ -227,6 +237,7 @@ def _minted(tree: SimpleNamespace, key: str) -> None:
         (base.parent / "a.c.i.ok").write_text("")
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_header_edit_no_key_names_builds_nothing_and_still_passes(tree: SimpleNamespace) -> None:
     _minted(tree, "int A(void){return Thing();}")
 
@@ -239,6 +250,7 @@ def test_a_header_edit_no_key_names_builds_nothing_and_still_passes(tree: Simple
     assert _clean(tree)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_header_edit_a_key_names_is_built_and_compared(tree: SimpleNamespace) -> None:
     _minted(tree, "int A(void){return Other();}")
 
@@ -249,6 +261,7 @@ def test_a_header_edit_a_key_names_is_built_and_compared(tree: SimpleNamespace) 
     assert result["narrowed"]["skipped"] == 0 and result["compared"] == 2
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_objects_the_change_built_are_compared_even_when_restoring_the_extraction_deletes_them(
     tree: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -278,6 +291,7 @@ def test_objects_the_change_built_are_compared_even_when_restoring_the_extractio
     assert extracted == ["us", "us"] and result["compared"] == 2 and result["identical"] == 2
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_a_dirty_lease_tree_proves_against_a_reference_built_at_rev(tree: SimpleNamespace, tmp_path: Path) -> None:
     """RO3 (REV1-ONE-74): a lane's leased tree is never clean and may not be reset. With --reference the change is the
     tree's own edits over REV and the objects before are the reference tree's (the pool's clean build at REV)."""

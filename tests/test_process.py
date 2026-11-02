@@ -19,6 +19,8 @@ from abucache import stages
 from unbake import effort, process
 from unbake.contracts import Config, Host, Project, Refusal
 
+RUNNER = "process.run is the runner itself: its kill of a timed-out process group is seen on real processes"
+
 
 @pytest.fixture
 def process_config(tmp_path):
@@ -113,6 +115,7 @@ def test_concurrent_cpu_attributed(tmp_path, monkeypatch):
     assert short.cpu_seconds + long.cpu_seconds == pytest.approx(sum(usages.values()), abs=1e-9)
 
 
+@pytest.mark.integration(RUNNER)
 @pytest.mark.parametrize("stdin", [b"", b"x" * (1 << 20)], ids=["empty-stdin", "blocked-stdin"])
 def test_timeout_kills_group(tmp_path, stdin):
     # The deadline starts when the shell is spawned, so under load it may expire before the shell has started its
@@ -166,6 +169,7 @@ def test_missing_tool(tmp_path, monkeypatch, kind):
     popen.assert_not_called()
 
 
+@pytest.mark.seconds(2)  # parses every source module
 def test_no_creation_bypass():
     allowed = {"cc_cache.py", "effort.py", "nm_pick.py", "process.py", "runslice.py"}
     banned = ("subprocess", "multiprocessing", "concurrent.futures", "threading")

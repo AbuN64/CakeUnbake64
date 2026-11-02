@@ -5,9 +5,12 @@ import tomllib
 from importlib import resources
 
 import fixture
+import pytest
 
 from unbake import config as configuration
 from unbake import process
+
+REAL_GIT = "what is checked is git's own reading of the ignore file the state directory writes"
 
 
 def _data(name):
@@ -27,6 +30,7 @@ def test_shipped_sdk_headers_guard_without_the_tool_name():
     assert headers and all("UNBAKE_" not in h.read_text() for h in headers)
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_state_directory_ignores_itself(tmp_path):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     path = process.state(tmp_path)
@@ -43,8 +47,9 @@ def test_state_directory_ignores_itself(tmp_path):
     assert status.stdout == ""
 
 
+@pytest.mark.integration(REAL_GIT)
 def test_loading_a_project_makes_its_state_directory_ignored(tmp_path, toolchains):
-    root = fixture.project(tmp_path)
+    root = fixture.project(tmp_path, git=True)
     configuration.load(root, fixture.host(tmp_path))
     assert (root / ".unbake/.gitignore").read_text() == "*\n"
     status = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=True)

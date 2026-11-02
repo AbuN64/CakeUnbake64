@@ -13,6 +13,9 @@ from unbake import adapters, build, tree
 from unbake.contracts import Refusal
 
 # A real slice shape: three words, a branch over the cut, three more words (a `bne` whose target lies in the next run).
+
+REAL_BINUTILS = "the pass works on real MIPS objects: binutils assemble, link and read them"
+
 SOURCE = """	.section .text.F,"ax",@progbits
 F:
 	.set noreorder
@@ -103,6 +106,7 @@ def test_a_textpiece_row_of_a_function_no_file_owns_is_a_finding(tmp_path):
     assert sections["src/a.c"]["us"]["textpiece1_f_1"] == ".text"
 
 
+@pytest.mark.integration(REAL_BINUTILS)
 @pytest.mark.skipif(not BINUTILS, reason="needs the MIPS binutils")
 def test_the_pass_cuts_one_text_section_in_two_and_the_link_lays_the_runs_apart(tmp_path):
     source, obj = tmp_path / "s.s", tmp_path / "s.o"
@@ -130,6 +134,7 @@ def test_the_pass_cuts_one_text_section_in_two_and_the_link_lays_the_runs_apart(
     assert " F" in symbols
 
 
+@pytest.mark.integration(REAL_BINUTILS)
 @pytest.mark.skipif(not BINUTILS, reason="needs the MIPS binutils")
 def test_the_pass_refuses_a_cut_that_does_not_lie_inside_the_section(tmp_path):
     source, obj = tmp_path / "s.s", tmp_path / "s.o"

@@ -4,13 +4,8 @@ from __future__ import annotations
 
 import fcntl
 import json
-import multiprocessing
 import os
 import pickle
-import subprocess
-import sys
-import threading
-import time
 from functools import partial
 from pathlib import Path
 
@@ -21,18 +16,18 @@ from unbake import effort, store
 from unbake.contracts import Config, Refusal
 
 
-def _hold_child(config: Config, started: Path, release: Path) -> None:
-    with store.exclusive(config, "land", wait=False) as held:
-        started.write_text(str(held))
-        while not release.exists():
-            time.sleep(0.02)
+class Other:
+    """Another holder of `store.exclusive(config, name)`: this process through files of its own (a flock belongs to the
+    open file, so this process's next open waits on it as on another process's), until release()."""
 
+    def __init__(self, config: Config, name: str) -> None:
+        self.hold = store.exclusive(config, name, wait=False)
+        self.held = self.hold.__enter__()
 
-def _wait(path: Path) -> None:
-    deadline = time.monotonic() + 10
-    while not path.exists():
-        assert time.monotonic() < deadline, f"{path} never appeared"
-        time.sleep(0.02)
+    def release(self) -> None:
+        if self.held is not None:
+            self.held = None
+            self.hold.__exit__(None, None, None)
 
 
 def test_cached_pool_cached_holds_no_lock(cfg: Config) -> None:
@@ -120,18 +115,13 @@ def test_log_kinds(cfg: Config) -> None:
 
 
 def test_exclusive_second_holder_gets_false(cfg: Config, tmp_path: Path) -> None:
-    started, release = tmp_path / "started", tmp_path / "release"
-    proc = multiprocessing.get_context("fork").Process(target=_hold_child, args=(cfg, started, release))
-    proc.start()
+    other = Other(cfg, "land")
     try:
-        _wait(started)
-        assert started.read_text() == "True"
+        assert other.held is True
         with store.exclusive(cfg, "land", wait=False) as held:
             assert held is False
     finally:
-        release.write_text("go")
-        proc.join(10)
-    assert proc.exitcode == 0
+        other.release()
     with store.exclusive(cfg, "land", wait=False) as held:
         assert held is True
         text = (cfg.project.root / ".unbake" / "land.lock").read_text()
@@ -139,19 +129,17 @@ def test_exclusive_second_holder_gets_false(cfg: Config, tmp_path: Path) -> None
 
 
 def test_exclusive_waits_for_a_held_lock_and_records_the_wait(cfg: Config, tmp_path: Path, monkeypatch) -> None:
-    started, release = tmp_path / "started", tmp_path / "release"
-    proc = multiprocessing.get_context("fork").Process(target=_hold_child, args=(cfg, started, release))
-    proc.start()
+    other = Other(cfg, "land")
+    paused: list[float] = []
     waits: list[float] = []
     monkeypatch.setattr(stages, "waited", lambda seconds, *rest: waits.append(seconds))
+    monkeypatch.setattr(store, "_PAUSE", lambda s: paused.append(s) if len(paused) < 1 else other.release())
     try:
-        _wait(started)
-        threading.Timer(0.3, release.write_text, ["go"]).start()
         with store.exclusive(cfg, "land", wait=True) as held:
             assert held is True
     finally:
-        proc.join(10)
-    assert len(waits) == 1
+        other.release()
+    assert len(waits) == 1 and paused  # it waited on the holder, then took the lock
 
 
 def test_work_dir_removed(cfg: Config) -> None:
@@ -456,22 +444,15 @@ def test_unshare_copies_a_readonly_file_even_when_unlinked(tmp_path):
 
 def test_a_blocked_lock_says_who_holds_it(tmp_path, monkeypatch):
     path = tmp_path / "held.lock"
-    holder = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            "import fcntl,sys,time;f=open(sys.argv[1],'a+b');fcntl.flock(f,2);print(1,flush=True);time.sleep(2)",
-            str(path),
-        ],
-        stdout=subprocess.PIPE,
-    )
-    assert holder.stdout and holder.stdout.readline()
+    holder = path.open("a+b")  # another open file of the lock: its flock blocks this process's own next one
+    fcntl.flock(holder, fcntl.LOCK_EX)
     said = []
     monkeypatch.setattr(stages, "say", said.append)
+    monkeypatch.setattr(store, "_PAUSE", lambda seconds: holder.close())  # the holder lets go while we wait
     with store._flock(path, store.fcntl.LOCK_EX):
         pass
-    holder.wait()
-    assert said and f"pid {holder.pid}" in said[0] and "held.lock" in said[0]
+    holder.close()
+    assert said and f"pid {os.getpid()}" in said[0] and "held.lock" in said[0]
 
 
 def test_a_journal_undoes_what_was_written_in_it(tmp_path: Path) -> None:

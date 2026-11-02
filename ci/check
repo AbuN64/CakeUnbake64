@@ -5,4 +5,5 @@ cd "$(dirname "$0")/.."
 ci/abucache-audit
 .venv/bin/python -m ruff check src tests
 .venv/bin/python -m ruff format --check src tests
-exec bin/test "$@"
+bin/test "$@"  # the unit suite: mocked seams, each test inside its seconds bound (tests/hygiene.py)
+exec bin/test --integration "$@"  # the integration set: the tests that need a real tool, each marked with why

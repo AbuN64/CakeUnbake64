@@ -30,6 +30,21 @@ def _compiler_row(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _short_similarity(monkeypatch):
+    """rom.toml's similarity rule (its window, its threshold, its start) over 16 KiB instead of 1 MiB: every pair of
+    ROMs these tests write is alike, or not, the same way in that span, and the measure's cost is per window."""
+    real = configuration.load_resource
+
+    def load_resource(name: str):
+        document = real(name)
+        if name == "rom.toml":
+            document = {**document, "similarity": {**document["similarity"], "length": 0x4000}}
+        return document
+
+    monkeypatch.setattr(configuration, "load_resource", load_resource)
+
+
+@pytest.fixture(autouse=True)
 def isolate_native(monkeypatch):
     # Any missed mock must fail rather than launch a process or a worker.
     monkeypatch.setattr(repo.process, "run", Mock(side_effect=AssertionError("unmocked process")))

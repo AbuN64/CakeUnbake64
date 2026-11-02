@@ -23,7 +23,9 @@ def test_project_has_two_versions_two_segments_three_modules(tmp_path: Path) -> 
         "src/main/stand_in.c",
         "src/ovl/fuzzy.c",
     ]
-    assert (root / ".git").is_dir() and not (root / "layout.toml").exists()
+    committed = fixture.repo(root)  # committed in the stand-in repository, every written file in it
+    assert committed is not None and "src/main/c_func.c" in committed.files and committed.changed() == []
+    assert not (root / ".git").exists() and not (root / "layout.toml").exists()
     table = symbols.parse((root / "versions/b/symbol_addrs.txt").read_text())
     assert table["fuzzy"] == (0x80100010, 0x3010, 0x10, "func")
 

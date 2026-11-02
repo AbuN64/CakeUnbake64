@@ -37,20 +37,27 @@ def epoch(root: Path) -> int:
         return 0
 
 
-def _take(handle: int, mode: int, say: Callable[[str], None], note: Callable[[], str]) -> float:
+def _take(
+    handle: int,
+    mode: int,
+    say: Callable[[str], None],
+    note: Callable[[], str],
+    clock: Callable[[], float],
+    pause: Callable[[float], None],
+) -> float:
     """Take the flock in `mode`, printing `note()` at once and every BEAT while it waits; the seconds waited."""
-    began = last = time.monotonic()
+    began = last = clock()
     first = True
     while True:
         try:
             fcntl.flock(handle, mode | fcntl.LOCK_NB)
-            return time.monotonic() - began
+            return clock() - began
         except BlockingIOError:
-            now = time.monotonic()
+            now = clock()
             if first or now - last >= BEAT:
                 first, last = False, now
                 say(f"{note()} ({now - began:.0f}s)")
-            time.sleep(0.2)
+            pause(0.2)
 
 
 def _free(intent: int, tree: int) -> bool:
@@ -66,11 +73,19 @@ def _free(intent: int, tree: int) -> bool:
 
 @contextmanager
 def hold(
-    root: Path, *, exclusive: bool = False, who: str = "", say: Callable[[str], None] = stages.say, wait: bool = True
+    root: Path,
+    *,
+    exclusive: bool = False,
+    who: str = "",
+    say: Callable[[str], None] = stages.say,
+    wait: bool = True,
+    clock: Callable[[], float] = time.monotonic,
+    pause: Callable[[float], None] = time.sleep,
 ) -> Iterator[float]:
     """Hold the tree lock of `root` (shared by default); yields the seconds waited. A shared hold with `wait` false
     never waits for a writer: it says who writes, reads the tree as the writer has it (every file is whole, a file is
-    replaced in one rename) and records that in `inflight`; the ROM check of a build stays the proof of a ship."""
+    replaced in one rename) and records that in `inflight`; the ROM check of a build stays the proof of a ship.
+    `clock` and `pause` are the time a wait is measured and spent in (a test passes its own)."""
     if os.environ.get(ENV):  # a parent of ours holds it
         yield 0.0
         return
@@ -91,10 +106,11 @@ def hold(
     tree, intent = (os.open(folder / name, os.O_RDWR | os.O_CREAT, 0o644) for name in ("tree.lock", "tree.writer"))
     try:
         if exclusive:  # announce: readers that come now queue behind us
-            waited = _take(intent, fcntl.LOCK_EX, say, lambda: "waiting for another writer of the tree")
+            waited = _take(intent, fcntl.LOCK_EX, say, lambda: "waiting for another writer of the tree", clock, pause)
             os.ftruncate(intent, 0)
             os.write(intent, f"{who or 'writer'} {time.time():.0f} pid {os.getpid()}".encode())
-            waited += _take(tree, fcntl.LOCK_EX, say, lambda: f"waiting for readers of the tree to finish ({who})")
+            readers = f"waiting for readers of the tree to finish ({who})"
+            waited += _take(tree, fcntl.LOCK_EX, say, lambda: readers, clock, pause)
         else:
 
             def note() -> str:
@@ -114,9 +130,9 @@ def hold(
                 yield 0.0
                 return
             holder = note()
-            waited = _take(intent, fcntl.LOCK_SH, say, note)  # a writer announced: wait it out
+            waited = _take(intent, fcntl.LOCK_SH, say, note, clock, pause)  # a writer announced: wait it out
             fcntl.flock(intent, fcntl.LOCK_UN)
-            waited += _take(tree, fcntl.LOCK_SH, say, lambda: "waiting for the tree lock")
+            waited += _take(tree, fcntl.LOCK_SH, say, lambda: "waiting for the tree lock", clock, pause)
             if waited >= 1.0:  # the command's lock wait, with whom it waited for
                 stages.waited(waited, "lock", holder.removeprefix("waiting for "))
         os.environ[ENV] = "1"

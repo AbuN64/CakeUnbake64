@@ -16,6 +16,9 @@ import pytest
 from unbake import adapters
 from unbake.resources import cc_cache
 
+pytestmark = pytest.mark.integration(
+    "the code under test is stamprec.c: the host compiler builds it once and each test runs the program"
+)
 CC = Path(cc_cache.__file__)
 
 # The argument vector of a real object (`build/us/.../802A8A94_2.CPP.o` of a RageWars tree, captured from `make -n`):

@@ -13,6 +13,9 @@ from unbake.contracts import FileFacts
 # A real slice: the 172-byte CountActive-shaped leaf the US ROM holds at 0xFD5F0 + 0x1D34 (a Psy-Q LNK code chunk).
 # SN gcc 2.8.1 -O0 wrote this assembly from `g_hold->slots[i].active`; the ROM keeps its jumps and its address
 # halves zero (`j 0`, `lui v0,0`) and its delay slots hold nops.
+
+REAL_BINUTILS = "the pass works on real MIPS objects: binutils assemble and read them"
+
 SLICE = """gcc2_compiled.:
 	.text
 	.align	2
@@ -100,6 +103,7 @@ def _unrelocate(obj: Path) -> None:
     subprocess.run([sys.executable, "-I", adapters.make_tool("unreloc_pass.py"), str(obj)], check=True)
 
 
+@pytest.mark.integration(REAL_BINUTILS)
 @pytest.mark.skipif(not Path("/usr/bin/mips-linux-gnu-as").exists(), reason="needs the MIPS binutils")
 def test_the_assembled_slice_is_the_rom_bytes_once_unrelocated(tmp_path):
     obj = _object(tmp_path, "-O0")
@@ -118,6 +122,7 @@ def test_a_file_row_unrelocated_sets_the_makefile_variable_and_runs_the_pass(tmp
     assert "$(if $(UNRELOC),'&&' $(PASS)unreloc_pass.py $@)" in recipe
 
 
+@pytest.mark.integration(REAL_BINUTILS)
 @pytest.mark.skipif(not Path("/usr/bin/mips-linux-gnu-as").exists(), reason="needs the MIPS binutils")
 def test_the_compilers_read_only_data_is_not_loaded_once_unrelocated(tmp_path):
     # a switch's jump table (.rodata) and a literal pool (.rdata) are the ROM's already, in the data the file
