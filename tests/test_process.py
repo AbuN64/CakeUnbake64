@@ -4,6 +4,7 @@ import ast
 import hashlib
 import os
 import signal
+import sys
 from dataclasses import replace
 from pathlib import Path
 from threading import Barrier, Thread, get_ident
@@ -232,6 +233,37 @@ def test_a_grandchild_the_child_leaves_behind_is_killed_and_reaped_by_us(tmp_pat
     result = process.run("orphan", argv, tmp_path, tmp=tmp_path / "tmp")
     child = reaped[0][0]
     assert result.exit == 0 and [pid for pid, _ in reaped] == [child, -child]
+
+
+# a detached descendant, as `git gc --auto` or a fsmonitor daemon is: it leaves the process group and the child's exit
+# hands it to us, the subreaper (like a daemon it closes the pipes, or the run would wait for it). "dead" waits (waitid
+# WNOWAIT, no sleep) until it is a zombie before the child exits.
+DETACHED = {
+    "dead": """
+import os
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    os._exit(0)
+os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+""",
+    "alive": """
+import os, time
+if os.fork() == 0:
+    os.setsid()
+    for fd in (0, 1, 2):
+        os.dup2(os.open(os.devnull, os.O_RDWR), fd)
+    time.sleep(300)
+""",
+}
+
+
+@pytest.mark.parametrize("kind", DETACHED)
+def test_a_descendant_that_left_the_process_group_is_not_left_a_zombie_of_ours(tmp_path, kind):
+    before = {child.pid for child in psutil.Process().children()}
+    result = process.run("detached", (sys.executable, "-c", DETACHED[kind]), tmp_path, tmp=tmp_path / "tmp")
+    assert result.exit == 0
+    assert {child.pid for child in psutil.Process().children()} == before
 
 
 def test_wait4_accounting_and_record_callback(tmp_path, monkeypatch):

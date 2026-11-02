@@ -11,9 +11,11 @@ from collections.abc import Mapping, Sequence
 from contextlib import ExitStack, suppress
 from functools import cache
 from pathlib import Path
+from threading import Lock
 from time import perf_counter_ns
 from typing import IO
 
+import psutil
 from abucache import slots, stages
 from abucache.proc import Completed
 
@@ -34,17 +36,39 @@ def _subreaper() -> None:
     ctypes.CDLL(None).prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)
 
 
-def _reap(group: int) -> float:
-    """Kills what the child left in its process group and reaps it, returning the CPU seconds of every member: a
-    killed child never waited for its own children, which are ours (subreaper) and only we can account for."""
+_LIVE: set[int] = set()  # the children of the runs in flight, under _GUARD together with every look at our children
+_GUARD = Lock()
+
+
+def _children() -> set[int]:
+    """The pids of our children, zombies included: what we started and what the subreaper adopted."""
+    return {child.pid for child in psutil.Process().children()}
+
+
+def _reap(group: int, known: set[int]) -> float:
+    """Kills what the child left behind and reaps it, returning the CPU seconds of every member: a killed child never
+    waited for its own children, which are ours (subreaper) and only we can account for. First its process group; then,
+    when no other run is in flight, every child we did not have when the run began (`known`): a descendant that left
+    the group (setsid, a daemonizing `git gc --auto`) is adopted by us too, and unreaped it stays a zombie for the life
+    of this process."""
     _kill(group)
     cpu = 0.0
     while True:
         try:
             _, _, usage = os.wait4(-group, 0)
         except ChildProcessError:
-            return cpu
+            break
         cpu += usage.ru_utime + usage.ru_stime
+    with _GUARD:
+        _LIVE.discard(group)
+        while not _LIVE and (strays := _children() - known):
+            for pid in strays:
+                with suppress(ProcessLookupError):
+                    os.kill(pid, signal.SIGKILL)
+                with suppress(ChildProcessError):
+                    _, _, usage = os.wait4(pid, 0)
+                    cpu += usage.ru_utime + usage.ru_stime
+    return cpu
 
 
 STATE = ".unbake"
@@ -88,16 +112,19 @@ def _execute(
         destination: int | IO[bytes] = subprocess.PIPE
         if stdout_path is not None:
             destination = stack.enter_context(stdout_path.open("wb"))
-        proc = subprocess.Popen(
-            argv,
-            cwd=cwd,
-            stdin=subprocess.PIPE,
-            stdout=destination,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-            env={**os.environ, **env, "TMPDIR": str(tmp)},
-            pass_fds=tuple(pass_fds),
-        )
+        with _GUARD:
+            known = _children() - _LIVE
+            proc = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                stdin=subprocess.PIPE,
+                stdout=destination,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+                env={**os.environ, **env, "TMPDIR": str(tmp)},
+                pass_fds=tuple(pass_fds),
+            )
+            _LIVE.add(proc.pid)
         try:
             selector = stack.enter_context(selectors.DefaultSelector())
             pipes: dict[str, IO[bytes]] = {}
@@ -146,13 +173,13 @@ def _execute(
                             pipe.close()
             _, status, usage = os.wait4(proc.pid, 0)
             proc.returncode = os.waitstatus_to_exitcode(status)
-            orphans = _reap(proc.pid)
+            orphans = _reap(proc.pid, known)
         finally:
             if proc.returncode is None:
                 _kill(proc.pid)
                 _, status, _ = os.wait4(proc.pid, 0)
                 proc.returncode = os.waitstatus_to_exitcode(status)
-                _reap(proc.pid)
+                _reap(proc.pid, known)
     code = proc.returncode
     result = NativeResult(
         tuple(str(arg) for arg in argv),
