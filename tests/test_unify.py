@@ -876,3 +876,59 @@ def test_records_that_do_not_read_are_left_to_the_plain_plan(tmp_path: Path) -> 
     }
     got, _src = _plan_of(tmp_path, files, "g_rec")
     assert isinstance(got, typeplan.Plan) and got.bodies == ()
+
+
+def test_a_unit_that_sees_the_chosen_tag_forward_declared_includes_the_header_that_defines_it(tmp_path: Path) -> None:
+    """g_controllerPakSnapshotPayload: `struct PakPreview *` is chosen, its body is in a header the reading unit
+    does not read, so the unit gets an `#include` of that header and no definition of the tag of its own."""
+    files = {
+        "include/h.H": "struct PakPreview;\n",
+        "include/body.H": "struct PakPreview { char pad[0x22]; short value; };\n",
+        "src/a.CPP": "extern struct PakPreview *g_p;\nint f(void) { return g_p != 0; }\n",
+        "src/b.CPP": "extern struct PakPreview *g_p;\n",
+        "src/c.CPP": "extern struct { char pad[0x22]; short value; } *g_p;\nint k(void) { return g_p->value; }\n",
+    }
+    world = World(tmp_path, files, sorted(f for f in files if f.startswith("src/")))
+    census = typeunify.collect(world.found(), world.read)
+    src = typeplan.Sources(lambda p: (tmp_path / p).read_text())
+    closures = [
+        frozenset({"include/h.H", "src/a.CPP"}),
+        frozenset({"include/h.H", "include/body.H", "src/b.CPP"}),
+        frozenset({"include/h.H", "src/c.CPP"}),
+    ]
+    scope = {f for c in closures for f in c}
+    got = typeplan.plan("g_p", typeplan.sites_of(census.per, "g_p"), 0, src, census.norm, scope, closures)
+    assert isinstance(got, typeplan.Plan), got
+    assert got.canon == "struct PakPreview*"
+    assert got.includes == (("src/c.CPP", "include/body.H"),)
+    out = typeplan.render("src/c.CPP", [got], src)
+    assert out.startswith('#include "body.H"\nextern struct PakPreview *g_p;') and "struct PakPreview {" not in out
+
+
+def test_the_header_is_included_before_the_first_declaration_not_after_the_files_last_include(tmp_path: Path) -> None:
+    """Snapshot_RestoreSaveBlock: an `#include` sits below the declaration (line 116 of 190); the header goes after the
+    last include above the first edit, never below the reads."""
+    files = {
+        "include/h.H": "struct PakPreview;\n",
+        "include/body.H": "struct PakPreview { char pad[0x22]; short value; };\n",
+        "src/a.CPP": "extern struct PakPreview *g_p;\nint f(void) { return g_p != 0; }\n",
+        "src/b.CPP": "extern struct PakPreview *g_p;\n",
+        "src/c.CPP": (
+            'extern struct { char pad[0x22]; short value; } *g_p;\nint k(void) { return g_p->value; }\n#include "h.H"\n'
+        ),
+    }
+    world = World(tmp_path, files, sorted(f for f in files if f.startswith("src/")))
+    census = typeunify.collect(world.found(), world.read)
+    src = typeplan.Sources(lambda p: (tmp_path / p).read_text())
+    closures = [
+        frozenset({"include/h.H", "src/a.CPP"}),
+        frozenset({"include/h.H", "include/body.H", "src/b.CPP"}),
+        frozenset({"include/h.H", "src/c.CPP"}),
+    ]
+    got = typeplan.plan(
+        "g_p", typeplan.sites_of(census.per, "g_p"), 0, src, census.norm, set().union(*closures), closures
+    )
+    assert isinstance(got, typeplan.Plan), got
+    assert got.includes == (("src/c.CPP", "include/body.H"),), (got.canon, got.includes, got.edits)
+    out = typeplan.render("src/c.CPP", [got], src)
+    assert out.startswith('#include "body.H"\nextern struct PakPreview *g_p;') and out.endswith('#include "h.H"\n'), out

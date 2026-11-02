@@ -52,6 +52,9 @@ class Plan:
     params: tuple[str, ...] = ()  # the parameters of a function's chosen declaration
     callers: frozenset[str] = frozenset()  # the files whose calls of the name pass fewer arguments than `params`
     bodies: tuple[Body, ...] = ()  # the chosen record's definitions, their members merged with every candidate's
+    includes: tuple[
+        tuple[str, str], ...
+    ] = ()  # (source file, header): the header that defines the chosen tag, which the file's unit does not read
 
 
 @dataclass
@@ -388,8 +391,41 @@ def _merged(
     return (body, spans) if body and spans else None
 
 
+def _includes(
+    canon: str,
+    sites: Mapping[str, Site],
+    name: str,
+    src: Sources,
+    scope: Iterable[str],
+    closures: Iterable[frozenset[str]],
+    edited: Iterable[str],
+) -> tuple[tuple[str, str], ...]:
+    """(source file, header) for each edited source file whose unit does not read the header that defines the chosen
+    record's tag: the declaration it is given names a tag it sees only forward-declared, and a member read of an
+    incomplete type does not build. The header is included, never the tag redefined; a tag defined in a source file, or
+    an anonymous record (written whole at every site), needs nothing."""
+    record = _RECORD.match(canon)
+    if not record or _ANON.match(record[1]):
+        return ()
+    held = [f for f, _, _ in _definitions(canon, sites, name, src, scope) if f.startswith("include/")]
+    if not held:
+        return ()
+    units = list(closures)
+    return tuple(
+        (f, held[0])
+        for f in sorted(set(edited))
+        if not f.startswith("include/") and any(f in c and held[0] not in c for c in units)
+    )
+
+
 def plan(
-    name: str, sites: Mapping[str, Site], rank: int, src: Sources, norm: Norm, scope: Iterable[str] = ()
+    name: str,
+    sites: Mapping[str, Site],
+    rank: int,
+    src: Sources,
+    norm: Norm,
+    scope: Iterable[str] = (),
+    closures: Iterable[frozenset[str]] = (),
 ) -> Plan | str:
     """The plan of `name` at candidate `rank`, or the reason it has none (a string). `scope` is every file a unit that
     declares the name reads: where the definition of a record tag is looked for."""
@@ -445,6 +481,7 @@ def plan(
         body, spans = merged
         bodies = tuple((f, s, e, "{ " + body + " }") for f, s, e in spans)
         ctext = _rebody(ctext, body) if _ANON.match(canon) else ctext
+    includes = _includes(canon, sites, name, src, scope, closures, {e[0] for e in edits})
     params = _params(ctext, name)
     callers = frozenset(
         file
@@ -452,7 +489,8 @@ def plan(
         if params and _calls(src.text(file)[1], name, params, [(s, e) for f, s, e in edits if f == file])
     )
     files = frozenset({e[0] for e in edits} | {cloc.rsplit(":", 1)[0]} | callers | {b[0] for b in bodies})
-    return Plan(name, canon, why, ctext, tuple(edits), files, reads, keep, params, callers, bodies)
+    files |= {f for f, _ in includes}
+    return Plan(name, canon, why, ctext, tuple(edits), files, reads, keep, params, callers, bodies, includes)
 
 
 def readers(found: Plan, sites: Mapping[str, Site], closures: Iterable[frozenset[str]], src: Sources) -> Plan:
@@ -607,6 +645,16 @@ def render(path: str, plans: Iterable[Plan], src: Sources) -> str:
         if path in p.callers:
             ops += _calls(b, p.name, p.params, [(s, e) for f, s, e in p.edits if f == path])
     ops += [(s, e, body) for f, s, e, body in (b for p in plans for b in p.bodies) if f == path]
+    wanted = sorted({h for p in plans for f, h in p.includes if f == path})
+    if wanted:
+        first = min((s for p in plans for f, s, _ in p.edits if f == path), default=len(b))
+        at = max((m.end() for m in re.finditer(r"^[ \t]*#[ \t]*include\b.*$", b, re.M) if m.end() <= first), default=0)
+        have = {m[1] for m in re.finditer(r'#[ \t]*include[ \t]*"([^"]+)"', b)}
+        text = "".join(
+            f'\n#include "{h.removeprefix("include/")}"' for h in wanted if h.removeprefix("include/") not in have
+        )
+        if text:
+            ops.append((at, at, text if at else text[1:] + "\n"))
     for s, e, held in sorted(ops, key=lambda o: (o[0], o[1]), reverse=True):
         if isinstance(held, str):
             t, b = t[:s] + held + t[e:], b[:s] + held + b[e:]
