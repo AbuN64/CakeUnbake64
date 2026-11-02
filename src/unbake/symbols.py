@@ -14,10 +14,10 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from abucache import stages
+from abucache import pool, stages
 
 from unbake import config as configuration
-from unbake import pool, store, windows
+from unbake import store, windows
 from unbake.contracts import Config, Finding, Json, Refusal, digest, sha256
 
 Symbol = tuple[int, int | None, int | None, str]  # vram, rom, size, type ("func" or the data type)
@@ -401,16 +401,14 @@ def _correspondences(
 ) -> list[Correspondence]:
     directions = [(a, b) for v in versions if v != source for a, b in ((source, v), (v, source))]
     masks = {v: (names[v], [_mask(texts[v][n]) for n in names[v]]) for v in versions}
-    found = pool.map(
-        config, "symbols.align", _align, [(masks[a], masks[b]) for a, b in directions], lambda item: digest(item)
-    )
+    found = pool.map("symbols.align", _align, [(masks[a], masks[b]) for a, b in directions], lambda item: digest(item))
     jobs, owners = [], []
     for (a, b), pairs in zip(directions, found, strict=True):
         rows = [(texts[a][x], texts[b][y]) for x, y in pairs.items()]
         for i in range(0, len(rows), 64):
             jobs.append(rows[i : i + 64])
             owners.append((a, b))
-    parts = pool.map(config, "symbols.votes", _votes_job, jobs, lambda item: digest(item))
+    parts = pool.map("symbols.votes", _votes_job, jobs, lambda item: digest(item))
     total: dict[tuple[str, str], Counter[tuple[str, str]]] = defaultdict(Counter)
     for owner, part in zip(owners, parts, strict=True):
         total[owner].update(part)

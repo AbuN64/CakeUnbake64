@@ -9,21 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from abucache import memo as cache
-from abucache import stages
+from abucache import pool, stages
 
-from unbake import (
-    adapters,
-    effort,
-    human,
-    naming_baseline,
-    pool,
-    process,
-    recipes,
-    renameproof,
-    store,
-    symbol_names,
-    tree,
-)
+from unbake import adapters, effort, human, naming_baseline, process, recipes, renameproof, store, symbol_names, tree
 from unbake import config as _config
 from unbake import symbols as _symbols
 from unbake import versions as _versions
@@ -196,7 +184,7 @@ def pool_map(
     items: Sequence[Any],
     key: Callable[[Any], str | None] | None = None,
 ) -> list[Any]:
-    return pool.map(config, name, fn, items, key)
+    return pool.map(name, fn, items, key)
 
 
 # ---------------------------------------------------------------- stage timing

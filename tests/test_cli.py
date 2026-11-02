@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from abucache import pool
 
 import unbake
 from unbake import cli, config, repo, store
@@ -117,6 +118,15 @@ def test_internal_exit_3(argv: list[str], monkeypatch: Patch, capsys: Capture) -
     assert "Traceback" in captured.err
     document = _envelope(captured.out)
     assert document["findings"][0]["Code"] == "internal.error"
+
+
+def test_a_failed_pool_task_is_a_refusal_naming_its_kind(argv: list[str], monkeypatch: Patch, capsys: Capture) -> None:
+    def fail(cfg: Any, params: Any) -> None:
+        raise pool.TaskFailed("memory", "stage", 3, "a pool worker hit its memory limit")
+
+    monkeypatch.setattr(repo, "setup", fail)
+    assert cli.main(argv) == 1
+    assert _envelope(capsys.readouterr().out)["findings"][0]["Code"] == "worker.memory"
 
 
 def test_refused_landing_entries_fail_the_command_with_their_findings(

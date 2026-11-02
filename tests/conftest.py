@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import copy
-from concurrent.futures import Future
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import fixture
 import pytest
-from abucache import memo, stages
+from abucache import memo, pool, stages
 from abucache.store import forget
 
-from unbake import adapters, effort, pool
+from unbake import adapters, effort, hostruntime
 from unbake import config as configuration
 from unbake.contracts import Config
 
@@ -82,6 +82,16 @@ def _fresh_module_state(monkeypatch, tmp_path_factory):
     stages._listeners[:] = [effort._track]  # the hold beat reads the open stage from the one tracker
     monkeypatch.chdir(tmp_path_factory.mktemp("cwd"))  # a command's stage log goes under its working directory
     pool._drop_executor()
+    host = SimpleNamespace(  # pool.map without a bound config still finds a runtime
+        cores=2,
+        slots=2,
+        memory_worker_bytes=1 << 28,
+        memory_parent_bytes=1 << 28,
+        cache_dir=tmp_path_factory.mktemp("cache"),
+        cache_max_bytes=1 << 30,
+    )
+    runtime = hostruntime.runtime(host)  # type: ignore[arg-type]
+    pool.configure(runtime, spill_dir=tmp_path_factory.mktemp("spill"), identity_package="unbake")
     yield
 
 
@@ -91,70 +101,6 @@ def _pinned_abucache(monkeypatch: pytest.MonkeyPatch) -> None:
     venv installed before a pin bump would fail every setup test. Tests judge the code, never the runner's install;
     test_adapters checks the pin reading itself on a canned requirement."""
     monkeypatch.setattr(adapters, "_pin", adapters._installed)
-
-
-class WarmWorkers:
-    """The host's worker pool as warm workers living across every dispatch of a test, inside this process: each holds
-    its own memo, snapshots and laid overlays, forked from the parent's state once, and unpickles and runs every
-    chunk as a forked worker would. Every command a test drives thus meets its pool warm, with the trees and overlays
-    it changes between dispatches (the class of the 2026-10-15 setup regression: a worker served an overlay it was
-    forked holding after the parent laid the same writes to another tree)."""
-
-    def __init__(self, count: int = 2) -> None:
-        self._processes: dict[int, Any] = {}  # none to census: the gather never sees a stalled worker
-        self.count, self.forks, self.dispatches, self.turn = count, 0, 0, 0
-        self.states: list[dict[str, Any]] = []
-        self.laid: set[str] = set()  # every snapshot key a worker laid or read from a spill file (not forked with)
-
-    def __call__(self, **kwargs: Any) -> WarmWorkers:  # ProcessPoolExecutor(...): the fork
-        self.forks += 1
-        self.states = [
-            {
-                "memo": dict(memo._memo),
-                "inherited": frozenset(memo._memo),
-                "shared": dict(pool._SHARED),
-                "laid": [],
-                "epochs": dict(memo._epochs),
-                "applied": dict(memo._epochs),
-            }
-            for _ in range(self.count)
-        ]
-        return self
-
-    def submit(self, function: Any, *args: Any) -> Future[Any]:
-        future: Future[Any] = Future()
-        if function is not pool._dispatch:  # the fork's first job
-            future.set_result(function(*args))
-            return future
-        state = self.states[self.turn % self.count]
-        self.turn += 1
-        self.dispatches += 1
-        saved = (memo._memo, memo._inherited, pool._SHARED, pool._laid, pool._in_worker)
-        counts = (memo._epochs, memo._applied)
-        memo._memo, memo._inherited = state["memo"], state["inherited"]
-        memo._epochs, memo._applied = state["epochs"], state["applied"]
-        pool._SHARED, pool._laid, pool._in_worker = state["shared"], state["laid"], True
-        try:
-            future.set_result(function(*args))
-        except BaseException as exc:  # an unpickling failure: the gather maps it to worker.crash
-            future.set_exception(exc)
-        finally:
-            self.laid.update(pool._laid)
-            memo._memo, memo._inherited, pool._SHARED, pool._laid, pool._in_worker = saved
-            memo._epochs, memo._applied = counts
-        return future
-
-    def shutdown(self, **kwargs: Any) -> None:
-        self.states = []
-
-
-@pytest.fixture
-def warm(monkeypatch: pytest.MonkeyPatch) -> WarmWorkers:
-    """Every gather of the test, even of one chunk, runs on one pool of warm in-process workers."""
-    workers = WarmWorkers()
-    monkeypatch.setattr(pool, "ProcessPoolExecutor", workers)
-    monkeypatch.setattr(pool, "_INLINE_AT", 0)
-    return workers
 
 
 @pytest.fixture

@@ -14,7 +14,7 @@ from pathlib import Path
 from time import perf_counter_ns
 from typing import IO
 
-from abucache import stages
+from abucache import slots, stages
 from abucache.proc import Completed
 
 from unbake.contracts import Config, Finding, NativeResult, Refusal
@@ -203,7 +203,7 @@ def run(
             raise Refusal(Finding("native.missing_tool", reason="the tool is not an executable file", path=executable))
         jobs = "-j" in [str(a)[:2] for a in argv[1:]] or "-j" in env.get("MAKEFLAGS", "").split(" ")[0][:2]
         if Path(executable).name == "make" and not jobs:
-            raise Refusal(Finding("native.exit", reason="make runs only with -j from pool.cores or pool.jobserver"))
+            raise Refusal(Finding("native.exit", reason="make runs only with -j from slots.cores or slots.jobserver"))
         try:
             tmp.mkdir(parents=True, exist_ok=True)
             return _execute(name, argv, cwd, stdin, stdout_path, timeout, outputs, tmp, env, pass_fds)
@@ -277,13 +277,13 @@ def git(config: Config, *args: str) -> NativeResult:
 
 
 def make(config: Config, targets: Sequence[str], jobs: int = 0) -> NativeResult:
-    """One `make -j<jobs> <targets>` under the pool jobserver: the only process a build spawns, whatever its steps.
+    """One `make -j<jobs> <targets>` under the slots jobserver: the only process a build spawns, whatever its steps.
     `jobs` is the work the build expects (0: unknown); the jobserver grants the slots and grows into freed ones. The
     compile commands are answered in a batch between two runs of it (front.build)."""
-    from unbake import front, pool  # pool imports store, which imports this module
+    from unbake import front
 
     root = config.project.root
-    with stages.stage("make"), pool.jobserver(config.host, jobs) as (granted, env, fds):
+    with stages.stage("make"), slots.jobserver(jobs) as (granted, env, fds):
         argv: list[str | Path] = [tool(config, "make"), "-k", *targets]
 
         def start(record: str | None, preprocess: bool) -> NativeResult:

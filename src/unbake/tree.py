@@ -21,9 +21,9 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from abucache import memo, stages
+from abucache import memo, pool, stages
 
-from unbake import adapters, libasm, pool, process, recipes, store, symbols
+from unbake import adapters, libasm, process, recipes, store, symbols
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Refusal, sha256
 from unbake.resources import cc_cache
@@ -1378,7 +1378,7 @@ def _parse_all(
     rank = {v: n for n, v in enumerate(_project(config).versions)}
     order = sorted(todo, key=lambda i: (rank[jobs[i][1]], i))
     items = [(config, jobs[i][0], blobs[jobs[i][0]], jobs[i][1], keys[i], seconds[i], inputs[i]) for i in order]
-    done = dict(zip(order, pool.map(config, "tree.parse", _parse_job, items), strict=True)) if items else {}
+    done = dict(zip(order, pool.map("tree.parse", _parse_job, items), strict=True)) if items else {}
     out = []
     for i, k in enumerate(keys):
         if i in done:

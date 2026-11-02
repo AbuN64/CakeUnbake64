@@ -15,7 +15,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
-from abucache import memo, stages
+from abucache import memo, pool, stages
 
 from unbake import (
     blobs,
@@ -28,7 +28,6 @@ from unbake import (
     naming_baseline,
     native,
     offsets,
-    pool,
     process,
     recipes,
     store,
@@ -1343,7 +1342,6 @@ def census(
         items = [(snapshot, m) for m in _tree(snapshot).modules if wanted is None or m.path in wanted]
         headers = _headers_read(snapshot, wanted)
         found = pool.gather(
-            snapshot.config,
             [
                 ("policy.census", _census_unit, items, _census_key),
                 (
@@ -1355,7 +1353,7 @@ def census(
                 # what a build kept is read where the units are judged, on all cores (no key: it changes with the build)
                 ("policy.census.warnings", _census_warnings, items),
                 *also,
-            ],
+            ]
         )
         unique = {}
         lint = header_lint(snapshot, None if wanted is None else [*sorted(wanted), *headers])
@@ -1382,7 +1380,7 @@ def unclean_rules(snapshot: Snapshot, only: Collection[str] | None = None) -> di
         paths = [m.path for m in _tree(snapshot).modules if only is None or m.path in only]
         items = [(snapshot, path, ids, rules["rule"]) for path in paths]
         if only is not None:  # a few units judged for a caller: no record of the whole project
-            verdicts = pool.map(snapshot.config, "policy.unclean", _unclean_unit, items, _unclean_key)
+            verdicts = pool.map("policy.unclean", _unclean_unit, items, _unclean_key)
         else:  # a landing judges again only the units whose text, reach or rows moved
             verdicts = delta.map(
                 snapshot.config,

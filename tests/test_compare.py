@@ -53,7 +53,7 @@ class World:
                 n: self.measure(config, version, n, path, text) for n in names
             },
         )
-        monkeypatch.setattr(compare.pool, "map", lambda config, name, fn, items, key=None: [fn(i) for i in items])
+        monkeypatch.setattr(compare.pool, "map", lambda name, fn, items, key=None: [fn(i) for i in items])
         monkeypatch.setattr(compare.land, "submit", self.submit)
         monkeypatch.setattr(compare.land, "submit_many", self.submit_many)
         monkeypatch.setattr(compare.land, "drain", self.drain)

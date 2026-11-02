@@ -128,6 +128,9 @@ def bind(config: Config) -> None:
         package="unbake",
         project=str(config.project.root),
     )
+    from unbake import workers  # workers imports effort
+
+    workers.bind(config)
 
 
 __all__ = ["Finding", "bind", "command", "priority", "set_priority", "sink", "yield_cpu"]

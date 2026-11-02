@@ -93,3 +93,61 @@ def start(host_file: Path) -> None:
         return
     if name:
         enter(name, [sys.executable, *sys.orig_argv[1:]])
+
+
+def build(argv: Sequence[str]) -> int:
+    """`unbake-run [--work N] -- make -j{j} ...`: the elastic build. The jobserver is fed from the host slots
+    (abucache.slots), and the compile commands are answered in a batch between two runs of make (front.build). Any other
+    command line is abucache.slots.run's."""
+    from abucache import slots
+
+    from unbake import config as configuration
+    from unbake import front, hostruntime
+    from unbake.contracts import Refusal
+
+    args, work = list(argv), 0
+    if args[:1] == ["--work"] and len(args) > 1:
+        work, args = int(args[1]), args[2:]
+    command = args[1:] if args[:1] == ["--"] else args
+    if not (command and Path(command[0]).name in ("make", "gmake") and "-j{j}" in command):
+        return slots.run(argv)
+    try:
+        host = configuration.load_host(Path(os.environ.get("UNBAKE_HOST", Path.home() / ".config/unbake/unbake.toml")))
+    except Refusal:  # no usable host file: the command runs alone, holding no slots
+        return slots.run(argv)
+    slots.configure(hostruntime.runtime(host))
+    with slots.jobserver(work) as (j, env, fds):
+        argv = [a.replace("{j}", str(j)) for a in command] if not fds else [a for a in command if a != "-j{j}"]
+
+        def start(record: str | None, preprocess: bool) -> int:
+            if record is None:
+                return subprocess.run(argv, env={**os.environ, **env}, pass_fds=fds).returncode
+            # the recording run: a failed unit never stops it, and its output is noise unless it recorded nothing
+            # (then it was the build)
+            done = subprocess.run(
+                [*argv, *([] if "-k" in argv else ["-k"])],
+                env={
+                    **os.environ,
+                    **env,
+                    "ABU_CC_COLLECT": record,
+                    **({"ABU_PP_COLLECT": record + ".pp"} if preprocess else {}),
+                },
+                pass_fds=fds,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            if not Path(record).exists() and not Path(record + ".pp").exists():
+                sys.stdout.flush()
+                sys.stdout.buffer.write(done.stdout)
+                sys.stdout.buffer.flush()
+            return done.returncode
+
+        return front.build(start, Path.cwd(), front.cache(host), max(j, host.slots))
+
+
+def run() -> int:
+    """The `unbake-run` entry point: `unbake-run make -j{j} check` is how anything builds on a host that shares its
+    cores. The build takes its fair share of the host slots as a make jobserver, grows into slots other commands
+    free and gives them back as they ask. A raw `make -jN` is invisible to the slots and starves every other command."""
+    start(Path(os.environ.get("UNBAKE_HOST", Path.home() / ".config/unbake/unbake.toml")))
+    return build(sys.argv[1:])

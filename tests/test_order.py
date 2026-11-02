@@ -81,7 +81,7 @@ def world(tmp_path, monkeypatch):
         return {"score": score, "exact": place == 10, "words": {"built": 1, "target": 1, "matched": 1}}
 
     monkeypatch.setattr(order.compare, "probe_command", fake_probe)
-    monkeypatch.setattr(order.pool, "map", lambda config, name, fn, items, key=None: [fn(i) for i in items])
+    monkeypatch.setattr(order.pool, "map", lambda name, fn, items, key=None: [fn(i) for i in items])
     monkeypatch.setattr(order.store, "work", lambda config: contextlib.nullcontext(tmp_path))
     src = tmp_path / "cand.c"
     src.write_text(SOURCE)

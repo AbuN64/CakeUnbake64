@@ -248,7 +248,7 @@ class World:
             (repo.store, "exclusive"): contextmanager(lambda config, name, **kw: (yield True)),
             (repo.journal, "recover"): Mock(),
             (repo.report, "progress"): Mock(return_value={}),
-            (repo.pool, "map"): lambda config, name, fn, items, *a: [fn(i) for i in items],
+            (repo.pool, "map"): lambda name, fn, items, *a: [fn(i) for i in items],
             (repo, "_splat_version"): lambda tool, root: b"0.50.0",
         }
         for (module, name), value in patches.items():

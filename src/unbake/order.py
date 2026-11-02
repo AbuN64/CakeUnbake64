@@ -15,9 +15,9 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
-from abucache import stages
+from abucache import pool, stages
 
-from unbake import compare, pool, store
+from unbake import compare, store
 from unbake.contracts import Config, Finding, Json, Refusal
 
 _DECL = re.compile(
@@ -233,7 +233,7 @@ def order_command(config: Config, params: Json) -> Json:
                         )
                     )
                 used[0] += len(items)
-                return pool.map(config, "order.probe", _job, items)
+                return pool.map("order.probe", _job, items)
 
             first = probe(["\n".join(lines)])[0]
             if first is None:

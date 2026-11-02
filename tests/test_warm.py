@@ -8,11 +8,11 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
-from abucache import memo
+from abucache import memo, slots
 from test_native import _outputs, _tools, case, invocation  # noqa: F401  (fixtures)
 
 from unbake import config as configuration
-from unbake import native, pool, process, store, view
+from unbake import native, process, store, view
 from unbake.contracts import digest
 
 
@@ -62,17 +62,6 @@ def test_a_validated_table_is_parsed_once_across_commands(cfg, monkeypatch) -> N
         memo._memo.clear()
         configuration.toml("symbols", data, "symbols.toml", "symbols.table", store.content(cfg).cached)
     assert len(parses) == 1
-
-
-def test_a_group_warm_item_by_item_is_sealed_for_the_next_run(cfg, monkeypatch) -> None:
-    items = [1, 2, 3]
-    for index in (str, str):
-        pool.map(cfg, "units", abs, items, key=index)
-    reads = []
-    real = pool.store.get
-    monkeypatch.setattr(pool.store, "get", lambda c, kind, key, **kw: reads.append(kind) or real(c, kind, key, **kw))
-    pool.map(cfg, "units", abs, items, key=str)
-    assert reads == ["units.group"]
 
 
 def test_a_listing_is_read_once_until_a_stream_is_appended(cfg, monkeypatch) -> None:
@@ -131,16 +120,11 @@ def test_warm_measure_compiles_nothing(case, monkeypatch, toolchains) -> None:  
     assert len(calls) == 1  # the second object came from the store: 0 compiles
 
 
-def test_workers_honour_host() -> None:
-    host = Mock(workers=7, slots=3)
-    assert pool._fan(host) == pool._budget(host) == 7
-
-
 def _make_run(cfg, monkeypatch, record=None):
     """process.make with the pool, make and the batch replaced: the runs it started, the batches it asked for."""
     ran, batches = [], []
     monkeypatch.setattr(
-        pool, "jobserver", lambda host, work=0: __import__("contextlib").nullcontext((4, {"MAKEFLAGS": "-j4"}, ()))
+        slots, "jobserver", lambda work=0: __import__("contextlib").nullcontext((4, {"MAKEFLAGS": "-j4"}, ()))
     )
     monkeypatch.setattr(process, "tool", lambda config, name, **k: cfg.project.root / "make")
 

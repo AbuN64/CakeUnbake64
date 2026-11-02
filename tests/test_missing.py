@@ -6,8 +6,9 @@ from pathlib import Path
 
 import fixture
 import pytest
+from abucache import pool
 
-from unbake import missing, pool, symbols
+from unbake import missing, symbols
 
 
 @pytest.fixture(autouse=True)

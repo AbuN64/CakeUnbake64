@@ -5,10 +5,10 @@ from itertools import count
 from pathlib import Path
 
 import pytest
-from abucache import memo, stages
+from abucache import memo, pool, stages
 from test_effort import _config
 
-from unbake import effort, pool, process, repo
+from unbake import effort, process, repo
 from unbake.contracts import Origin, Refusal
 
 
@@ -25,36 +25,6 @@ def cfg(tmp_path, monkeypatch):
     monkeypatch.setattr(pool, "_in_worker", True)  # jobs run in this process: the count is what is under test
     monkeypatch.setattr(stages, "_listeners", [])
     return replace(config, host=replace(config.host, origins=origins))
-
-
-def test_a_keyed_map_dispatches_only_its_misses(cfg):
-    ran = []
-
-    def job(item):
-        ran.append(item)
-        return item * 2
-
-    with effort.command("check", [], Path.cwd()):
-        assert pool.map(cfg, "doubles", job, [1, 2, 3], str) == [2, 4, 6]
-        assert pool.map(cfg, "doubles", job, [1, 2, 3, 4], str) == [2, 4, 6, 8]
-        assert pool.map(cfg, "doubles", job, [1, 2, 3, 4], str) == [2, 4, 6, 8]
-    assert ran == [1, 2, 3, 4]  # the warm map dispatched 0 items
-    assert [r.jobs for r in stages.closed() if r.kind == "pool"] == [3, 1, 0]
-
-
-def test_a_none_key_always_dispatches(cfg):
-    ran = []
-    with effort.command("check", [], Path.cwd()):
-        for _ in range(2):
-            pool.map(cfg, "open", ran.append, [1], lambda item: None)
-    assert ran == [1, 1]
-
-
-def test_gather_runs_independent_groups_in_one_dispatch_loop(cfg):
-    with effort.command("check", [], Path.cwd()):
-        found = pool.gather(cfg, [("squares", lambda v: v * v, [1, 2, 3]), ("names", str, ["a"], str)])
-    assert found == [[1, 4, 9], ["a"]]
-    assert len([r for r in stages.closed() if r.path[-1] == "pool.map"]) == 1
 
 
 def test_memo_computes_once_per_command_and_resets(cfg):

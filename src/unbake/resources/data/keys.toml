@@ -277,28 +277,16 @@ sentence = "the splat split or its assembly is incomplete"
 owner = "view"
 sentence = "an active include cannot be found"
 
-[key."pool.wait_slot"]
-owner = "pool"
-sentence = "the command waited for host slots other commands held"
-
-[key."pool.protocol"]
-owner = "pool"
-sentence = "the command waited for unbake commands of another slot protocol to finish"
-
-[key."pool.short_slots"]
-owner = "pool"
-sentence = "the command got fewer host slots than its work could use"
-
 [key."worker.crash"]
-owner = "pool"
+owner = "workers"
 sentence = "a pool worker failed"
 
 [key."worker.stalled"]
-owner = "pool"
+owner = "workers"
 sentence = "pool work is pending but no worker is running it"
 
 [key."worker.memory"]
-owner = "pool"
+owner = "workers"
 sentence = "a pool worker hit its memory limit"
 
 [key."fuzzy.no_gain"]

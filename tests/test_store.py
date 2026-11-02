@@ -15,9 +15,9 @@ from functools import partial
 from pathlib import Path
 
 import pytest
-from abucache import stages
+from abucache import pool, stages
 
-from unbake import effort, pool, store
+from unbake import effort, store
 from unbake.contracts import Config, Refusal
 
 
@@ -42,7 +42,7 @@ def test_cached_pool_cached_holds_no_lock(cfg: Config) -> None:
         return store.cached(cfg, "inner", str(item), lambda: b"inner")
 
     def produce() -> bytes:
-        return b"+".join(pool.map(cfg, "inner", job, [1]))
+        return b"+".join(pool.map("inner", job, [1]))
 
     assert store.cached(cfg, "outer", "k", produce) == b"inner"
     assert store.cached(cfg, "outer", "k", lambda: pytest.fail("a second call must hit")) == b"inner"
@@ -215,7 +215,7 @@ def test_one_command_writes_one_manifest_with_the_keys_of_its_workers(cfg: Confi
 
     _CFG[:] = [cfg]
     store.put(cfg, "unit", "p", b"1")  # a named kind keeps its key as given
-    pool.map(cfg, "inner", _inner, [1, 2])
+    pool.map("inner", _inner, [1, 2])
     store.finish(cfg)
     store.finish(cfg)  # nothing new was touched: no second manifest
     (manifest,) = _manifests(cfg)

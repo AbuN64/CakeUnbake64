@@ -314,7 +314,7 @@ def test_scores_from_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(
         rescore, "_measure", lambda config, path, names, version: {n: measured.append(n) or 0.5 for n in names}
     )
-    monkeypatch.setattr(rescore.pool, "map", lambda config, name, fn, items, key=None: [fn(i) for i in items])
+    monkeypatch.setattr(rescore.pool, "map", lambda name, fn, items, key=None: [fn(i) for i in items])
     assert rescore.rows(config, tree, facts) == {"f": {"a": 0.5}} and len(measured) == 1  # cold: one measure
     assert rescore.rows(config, tree, facts) == {"f": {"a": 0.5}} and len(measured) == 1  # warm: none
     source.write_text("#ifdef NON_MATCHING\nint f(void) { return 2; }\n#endif\n")

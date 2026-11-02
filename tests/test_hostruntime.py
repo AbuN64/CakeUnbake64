@@ -21,3 +21,10 @@ def test_the_runtime_file_takes_the_host_configs_resolved_values_and_abucache_lo
 def test_without_out_the_document_goes_to_stdout(host_file, capsys):
     assert hostruntime.main(["--host", str(host_file)]) == 0
     assert capsys.readouterr().out == hostruntime.runtime_toml(config.load_host(host_file))
+
+
+def test_the_resolved_runtime_equals_the_file_abucache_loads(host_file, tmp_path):
+    host = config.load_host(host_file)
+    out = tmp_path / "runtime.toml"
+    assert hostruntime.main(["--host", str(host_file), "--out", str(out)]) == 0
+    assert hostruntime.runtime(host) == runtime.load(out)

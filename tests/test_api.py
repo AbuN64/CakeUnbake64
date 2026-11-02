@@ -6,8 +6,9 @@ from pathlib import Path
 
 import fixture
 import pytest
+from abucache import pool
 
-from unbake import api, pool, process, store, tree
+from unbake import api, process, store, tree
 from unbake.contracts import Refusal
 
 pytestmark = pytest.mark.usefixtures("toolchains")  # the parse runs the toolchain row's preprocess template
@@ -72,7 +73,8 @@ def test_cached_memo_and_pool_map_are_the_shared_ones(tmp_path: Path) -> None:
     assert runs == [1]
     count = []
     assert api.memo("key", lambda: count.append(1) or 5) == 5 == api.memo("key", lambda: 6) and count == [1]
-    assert api.pool_map(config, "api.test", str, [1, 2]) == pool.map(config, "api.test", str, [1, 2]) == ["1", "2"]
+    api.bind(config)
+    assert api.pool_map(config, "api.test", str, [1, 2]) == pool.map("api.test", str, [1, 2]) == ["1", "2"]
 
 
 def test_score_reads_report_lazily(tmp_path: Path, monkeypatch) -> None:

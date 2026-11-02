@@ -28,9 +28,9 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from abucache import stages
+from abucache import pool, stages
 
-from unbake import adapters, pool, process, recipes, store
+from unbake import adapters, process, recipes, store
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Json, Recipe, Refusal, UnitSpec, digest, sha256
 
@@ -282,7 +282,7 @@ def fingerprint(config: Config, params: Json) -> Row:
                 )
             )
         batches = [(config, version, units[i : i + 200]) for i in range(0, len(units), 200)]
-        rows = [r for part in pool.map(config, "compilers.fingerprint", _fingerprint_job, batches) for r in part]
+        rows = [r for part in pool.map("compilers.fingerprint", _fingerprint_job, batches) for r in part]
         by_unit: dict[str, list[Row]] = defaultdict(list)
         for r in rows:
             by_unit[r["unit"]].append(r)
@@ -522,7 +522,7 @@ def census(config: Config, params: Json) -> Row:
         while todo and spent < budget:
             chunk, todo = todo[:BATCH], todo[BATCH:]
             items = [(config, version, u, list(plan[u][1].items()), drafts) for u in chunk]
-            for unit, row in zip(chunk, pool.map(config, "compilers.census", _census_job, items), strict=True):
+            for unit, row in zip(chunk, pool.map("compilers.census", _census_job, items), strict=True):
                 spent += row.pop("cpu", 0.0)
                 stored[(version, unit)] = {**row, "key": plan[unit][0]}
                 done += 1

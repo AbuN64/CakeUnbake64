@@ -507,7 +507,7 @@ def test_blobs_toml_is_no_build_or_score_input():
     import ast
 
     root = Path(blobs.__file__).parent
-    for name in ("build", "tree", "rescore", "repo", "pool", "publish"):
+    for name in ("build", "tree", "rescore", "repo", "publish"):
         imported = {
             alias.name
             for node in ast.walk(ast.parse((root / f"{name}.py").read_text()))

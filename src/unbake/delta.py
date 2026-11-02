@@ -12,9 +12,9 @@ from collections.abc import Callable, Mapping, Sequence
 from hashlib import blake2b
 from typing import Any
 
-from abucache import stages
+from abucache import pool, stages
 
-from unbake import pool, store
+from unbake import store
 from unbake.contracts import Config, code_identity
 
 _FORMAT = 1  # bump when a record's shape changes: an older record reads as empty
@@ -83,7 +83,7 @@ def map(
             else:
                 todo.append(n)
             stages.count(f"{name}.delta", held)
-        fresh = pool.map(config, name, function, [items[n] for n in todo], key) if todo else []
+        fresh = pool.map(name, function, [items[n] for n in todo], key) if todo else []
         for n, (result, read) in zip(todo, fresh, strict=True):
             out[n] = result
             # a file another command rewrote while the job read it is not recorded: the item derives again next run

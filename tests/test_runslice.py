@@ -26,7 +26,7 @@ def _enter(cgroup: str, which: bool = True, probe: Any = None, **extra: Any) -> 
     warned: list[str] = []
     result = runslice.enter(
         "decomp.slice",
-        ["/venv/bin/python", "-m", "unbake.pool", "make"],
+        ["/venv/bin/python", "-m", "unbake.runslice", "make"],
         cgroup=lambda: cgroup,
         which=lambda name: "/usr/bin/systemd-run" if which else None,
         probe=probe or (lambda name: _done(0)),
@@ -50,7 +50,7 @@ def test_a_process_outside_the_slice_re_execs_its_own_argv_under_systemd_run(mon
     assert program == "systemd-run"
     assert command == [
         "systemd-run", "--user", "--scope", "--quiet", "--slice=decomp.slice", "--",
-        "/venv/bin/python", "-m", "unbake.pool", "make",
+        "/venv/bin/python", "-m", "unbake.runslice", "make",
     ]  # fmt: skip
     assert env[runslice.ENTERED] == "decomp.slice"
 
@@ -115,3 +115,34 @@ def test_start_enters_the_slice_the_host_file_names_and_ignores_a_missing_host_f
     assert entered == []
     runslice.start(path)
     assert [call[0] for call in entered] == ["decomp.slice"]
+
+
+def test_a_command_without_a_make_jobserver_is_abucache_slots_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    from abucache import slots
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(slots, "run", lambda argv: seen.append(list(argv)) or 7)
+    assert runslice.build(["--work", "2", "--", "pytest", "-n", "{j}"]) == 7
+    assert runslice.build(["make", "check"]) == 7
+    assert seen == [["--work", "2", "--", "pytest", "-n", "{j}"], ["make", "check"]]
+
+
+def test_a_make_on_a_jobserver_builds_in_batches_under_the_host_slots(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, host_file: Path
+) -> None:
+    from contextlib import nullcontext
+
+    from abucache import slots
+
+    from unbake import front
+
+    monkeypatch.setenv("UNBAKE_HOST", str(host_file))
+    monkeypatch.setattr(slots, "configure", lambda runtime, **kw: None)
+    monkeypatch.setattr(slots, "jobserver", lambda work=0: nullcontext((3, {"MAKEFLAGS": "-j3"}, ())))
+    ran: list[Any] = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: ran.append((argv, kw)) or _done(0))
+    monkeypatch.setattr(front, "cache", lambda host: None)
+    monkeypatch.setattr(front, "build", lambda start, cwd, cache, width: start(None, False))
+    assert runslice.build(["--", "make", "-j{j}", "check"]) == 0
+    [(argv, kw)] = ran
+    assert argv == ["make", "-j3", "check"] and kw["env"]["MAKEFLAGS"] == "-j3"

@@ -22,7 +22,7 @@ API = {
 }
 _DOCUMENTED = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 CONTRACTS = "unbake.contracts"
-PROCESS_OWNERS = {"process.py", "pool.py", "effort.py", "runslice.py"}
+PROCESS_OWNERS = {"process.py", "effort.py", "runslice.py"}
 FORBIDDEN = ("subprocess", "multiprocessing", "concurrent.futures", "threading")
 DISPATCH = {"gcc", "ido", "c", "asm", "data", "resource"}
 

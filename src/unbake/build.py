@@ -18,9 +18,9 @@ from pathlib import Path
 from string import Template
 from typing import TYPE_CHECKING
 
-from abucache import stages
+from abucache import pool, stages
 
-from unbake import adapters, front, linkfill, pool, process, report, store, symbols, tree, versions, windows
+from unbake import adapters, front, linkfill, process, report, store, symbols, tree, versions, windows
 from unbake import config as configuration
 from unbake.contracts import (
     Config,
@@ -93,7 +93,7 @@ def _install(item: tuple[Config, str]) -> Path:
 
 def install_toolchains(config: Config, ids: Sequence[str]) -> list[Path]:
     """Every toolchain installed at once: each is a download and an unpack that waits on the network and one core."""
-    return pool.map(config, "build.install_toolchains", _install, [(config, id) for id in ids])
+    return pool.map("build.install_toolchains", _install, [(config, id) for id in ids])
 
 
 def install_toolchain(config: Config, id: str) -> Path:

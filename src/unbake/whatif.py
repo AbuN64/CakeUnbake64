@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from abucache import stages
+from abucache import pool, stages
 
-from unbake import compare, config, native, pool, process, sched, store
+from unbake import compare, config, native, process, sched, store
 from unbake.contracts import Config, Finding, Json, Proof, Refusal
 
 _DEP = re.compile(r"(\d+)>(\d+)(?::(\w+))?")

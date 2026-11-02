@@ -25,9 +25,9 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from abucache import stages
+from abucache import pool, stages
 
-from unbake import build, pool, process, store, tree
+from unbake import build, process, store, tree
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Host, Json, Refusal
 from unbake.typecensus import Decl, Norm, Stmt, clashes, declarations, files_of, index, scan, table, tkey
@@ -410,7 +410,7 @@ def seams(cfg: Config) -> Seams:
 
     def read(items: Sequence[Unit]) -> list[Facts]:
         chunks = [[(cfg, v, u) for v, u in items[at : at + READ_CHUNK]] for at in range(0, len(items), READ_CHUNK)]
-        return [got for chunk in pool.map(cfg, "unify.read", _read_chunk, chunks) for got in chunk]
+        return [got for chunk in pool.map("unify.read", _read_chunk, chunks) for got in chunk]
 
     def make(targets: Sequence[str]) -> tuple[int, str]:
         store.write(root / "local.mk", build.local_mk(cfg))

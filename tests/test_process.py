@@ -167,7 +167,7 @@ def test_missing_tool(tmp_path, monkeypatch, kind):
 
 
 def test_no_creation_bypass():
-    allowed = {"cc_cache.py", "effort.py", "nm_pick.py", "pool.py", "process.py", "runslice.py"}
+    allowed = {"cc_cache.py", "effort.py", "nm_pick.py", "process.py", "runslice.py"}
     banned = ("subprocess", "multiprocessing", "concurrent.futures", "threading")
     violations = []
     for path in sorted(Path(process.__file__).parent.rglob("*.py")):
@@ -374,16 +374,18 @@ def test_make_front_batch_uses_every_host_slot_not_the_makes_first_grant(process
     slots (1.7 cores of 16 on a ship) must not size the batch by that share."""
     from contextlib import contextmanager
 
-    from unbake import front, pool
+    from abucache import slots
+
+    from unbake import front
 
     config = replace(process_config, host=replace(process_config.host, workers=8, slots=8))
     seen = []
 
     @contextmanager
-    def small_grant(host, work=0):
+    def small_grant(work=0):
         yield 2, {}, ()
 
-    monkeypatch.setattr(pool, "jobserver", small_grant)
+    monkeypatch.setattr(slots, "jobserver", small_grant)
     monkeypatch.setattr(process, "tool", lambda *a, **k: Path("make"))
     monkeypatch.setattr(front, "build", lambda start, root, store, workers: seen.append(workers))
     process.make(config, ["x"])
@@ -395,10 +397,12 @@ def test_the_runs_of_one_make_are_stages_of_their_own(process_config, monkeypatc
     reports the same stage closed twice in a command for what is three different phases."""
     from contextlib import contextmanager
 
-    from unbake import front, pool
+    from abucache import slots
+
+    from unbake import front
 
     @contextmanager
-    def grant(host, work=0):
+    def grant(work=0):
         yield 2, {}, ()
 
     def three_runs(start, root, store, workers):
@@ -406,7 +410,7 @@ def test_the_runs_of_one_make_are_stages_of_their_own(process_config, monkeypatc
         start("record", False)
         start(None, False)
 
-    monkeypatch.setattr(pool, "jobserver", grant)
+    monkeypatch.setattr(slots, "jobserver", grant)
     monkeypatch.setattr(process, "tool", lambda *a, **k: Path("make"))
     monkeypatch.setattr(process, "run", lambda *a, **k: "ok")
     monkeypatch.setattr(front, "build", three_runs)

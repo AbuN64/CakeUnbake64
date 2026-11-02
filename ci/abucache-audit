@@ -13,7 +13,6 @@ src/unbake/debtrules.py
 src/unbake/effort.py
 src/unbake/non_matching.py
 src/unbake/permute.py
-src/unbake/pool.py
 src/unbake/process.py
 src/unbake/repo.py
 src/unbake/rescore.py

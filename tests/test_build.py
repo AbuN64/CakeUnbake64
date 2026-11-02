@@ -399,7 +399,7 @@ def test_toolchains_install_in_one_pool_dispatch(cfg, monkeypatch):
     monkeypatch.setattr(
         build.pool,
         "map",
-        lambda config, name, function, items, key=None: calls.append((name, items)) or [Path(i[1]) for i in items],
+        lambda name, function, items, key=None: calls.append((name, items)) or [Path(i[1]) for i in items],
     )
     assert build.install_toolchains(cfg, ["x", "y"]) == [Path("x"), Path("y")]
     assert calls == [("build.install_toolchains", [(cfg, "x"), (cfg, "y")])]

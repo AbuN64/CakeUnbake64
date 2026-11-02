@@ -7,9 +7,9 @@ from pathlib import Path
 
 import fixture
 import pytest
-from abucache import memo
+from abucache import memo, pool
 
-from unbake import api, pool, store, tree
+from unbake import api, store, tree
 from unbake.contracts import Config, Refusal
 
 pytestmark = pytest.mark.usefixtures("toolchains")  # the parse runs the toolchain row's preprocess template
@@ -535,9 +535,11 @@ def test_meaning_is_the_text_less_its_comments(before: bytes, after: bytes, same
 def test_the_tool_does_not_lower_its_own_priority() -> None:
     import inspect
 
-    from unbake import process
+    from unbake import process, workers
 
-    assert "nice" not in inspect.getsource(pool).replace("niceness", "") and "nice(" not in inspect.getsource(process)
+    assert "nice" not in inspect.getsource(workers).replace("niceness", "") and "nice(" not in inspect.getsource(
+        process
+    )
 
 
 def test_a_header_is_read_and_walked_once_for_all_the_files_that_reach_it(tmp_path: Path) -> None:

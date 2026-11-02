@@ -26,7 +26,7 @@ def world(tmp_path, monkeypatch):
         "_measure",
         lambda config, path, names, version: {n: measured.append((n, version)) or 0.25 for n in names},
     )
-    monkeypatch.setattr(rescore.pool, "map", lambda config, name, fn, items, key=None: [fn(i) for i in items])
+    monkeypatch.setattr(rescore.pool, "map", lambda name, fn, items, key=None: [fn(i) for i in items])
     config = SimpleNamespace(project=SimpleNamespace(root=tmp_path))
     tree = SimpleNamespace(
         digest="r",

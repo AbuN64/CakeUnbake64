@@ -20,4 +20,4 @@ ulimit -v 4194304
 workers=$(( (free_mb - 4096) / 4096 )); cores=$(nproc)
 (( workers > cores )) && workers=$cores; [[ -n "${UNBAKE_CORES:-}" ]] && (( workers > UNBAKE_CORES )) && workers=$UNBAKE_CORES; (( workers < 1 )) && workers=1
 # The workers come out of the one host core budget (the same slots unbake itself divides), at most the memory allows.
-exec .venv/bin/python -m unbake.pool --work "$workers" -- .venv/bin/python -m pytest -q -n '{j}' "$@"
+exec .venv/bin/python -m abucache.slots --work "$workers" -- .venv/bin/python -m pytest -q -n '{j}' "$@"

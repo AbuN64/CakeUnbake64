@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import click
-from abucache import stages
+from abucache import pool, stages
 from click.core import ParameterSource
 
 from unbake import __version__, config, effort, human, store, treelock
@@ -149,6 +149,8 @@ def _run(name: str, params: dict[str, Any], argv: Sequence[str]) -> int:
                 code = _failed(findings)
     except Refusal as refusal:
         code, findings = 1, list(refusal.findings)
+    except pool.TaskFailed as failed:  # kind is crash, memory or stalled: the worker.* keys
+        code, findings = 1, [Finding(f"worker.{failed.kind}", failed.reason)]
     except Exception as exc:
         sys.stderr.write(traceback.format_exc())
         code, findings = 3, [_crash(exc, root)]

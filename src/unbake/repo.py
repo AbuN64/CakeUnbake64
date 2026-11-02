@@ -20,7 +20,7 @@ from typing import Any
 
 import rabbitizer
 import yaml
-from abucache import memo, stages
+from abucache import memo, pool, stages
 
 from unbake import (
     adapters,
@@ -31,7 +31,6 @@ from unbake import (
     libasm,
     linkfill,
     place,
-    pool,
     process,
     report,
     store,
@@ -1657,7 +1656,7 @@ def _state(config: Config) -> str:
 
 
 def _extract(config: Config, versions: Sequence[str]) -> list[str]:
-    ran = pool.map(config, "repo.extract", extract_job, [(config, v) for v in versions])
+    ran = pool.map("repo.extract", extract_job, [(config, v) for v in versions])
     for did in ran:
         stages.count("extract", not did)
     return [v for v, did in zip(versions, ran, strict=True) if did]

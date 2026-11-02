@@ -10,6 +10,10 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from types import MappingProxyType
+
+from abucache import keys
+from abucache import runtime as runtime_file
 
 from unbake import config
 from unbake.contracts import Host
@@ -40,6 +44,26 @@ def runtime_toml(host: Host) -> str:
         f"slow_seconds = {SLOW_SECONDS}\noverrun_percent = {OVERRUN_PERCENT}\n\n"
         "[capacities]\n"
     )
+
+
+def runtime(host: Host) -> runtime_file.Runtime:
+    """The same document as `runtime_toml`, resolved: what abucache.pool and abucache.slots are configured with."""
+    values = {
+        "cores": host.cores,
+        "workers": host.slots,
+        "worker_memory": host.memory_worker_bytes,
+        "parent_memory": host.memory_parent_bytes,
+        "reserve_memory": host.memory_parent_bytes,
+        "capacities": MappingProxyType({}),
+        "cache_dir": host.cache_dir,
+        "cache_bytes": host.cache_max_bytes,
+        "cache_keep_seconds": CACHE_KEEP_SECONDS,
+        "stage_log_bytes": STAGE_LOG_BYTES,
+        "feed": host.cache_dir / "events.jsonl",
+        "slow_seconds": SLOW_SECONDS,
+        "overrun_percent": OVERRUN_PERCENT,
+    }
+    return runtime_file.Runtime(**values, digest=keys.digest(values))
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -216,7 +216,7 @@ def test_the_identity_of_a_producer_is_equal_in_every_process():
     import subprocess
 
     program = (
-        "from unbake import pool, rescore\nfrom unbake.contracts import code_identity\n"
+        "from abucache import pool\nfrom unbake import rescore\nfrom unbake.contracts import code_identity\n"
         "print(code_identity(pool._keys), code_identity(rescore.scores))"
     )
     runs = {

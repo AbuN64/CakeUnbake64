@@ -13,9 +13,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from abucache import memo, stages
+from abucache import memo, pool, stages
 
-from unbake import adapters, pool, store
+from unbake import adapters, store
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Recipe, Refusal, Snapshot, SourceView, UnitSpec, digest, macro, sha256
 
@@ -401,9 +401,7 @@ def _one(item: tuple[Snapshot, UnitSpec, str, Recipe]) -> SourceView:
 
 def all_versions(snapshot: Snapshot, unit: UnitSpec, recipe: Recipe, versions: Sequence[str]) -> dict[str, SourceView]:
     with stages.stage("view.all_versions"):
-        results = pool.map(
-            snapshot.config, "view.all_versions", _one, [(snapshot, unit, version, recipe) for version in versions]
-        )
+        results = pool.map("view.all_versions", _one, [(snapshot, unit, version, recipe) for version in versions])
         return dict(zip(versions, results, strict=True))
 
 

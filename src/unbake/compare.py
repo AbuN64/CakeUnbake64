@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from abucache import stages
+from abucache import pool, stages
 
 from unbake import (
     alloc,
@@ -21,7 +21,6 @@ from unbake import (
     native,
     permute,
     policy,
-    pool,
     publish,
     sched,
     store,
@@ -126,7 +125,7 @@ def _measure(
         for p in resolved.placed
         for v in p.owner.versions
     ]
-    return tuple(_sited(proof, resolved) for proof in pool.map(config, "compare.measure", _measure_job, jobs))
+    return tuple(_sited(proof, resolved) for proof in pool.map("compare.measure", _measure_job, jobs))
 
 
 def score_functions(config: Config, path: str, names: Sequence[str], version: str) -> dict[str, float]:
@@ -449,7 +448,7 @@ def _bulk(config: Config, files: Sequence[Path], params: Json) -> Json:
         for p in r[0].placed
         for v in p.owner.versions
     ]
-    measured = iter(pool.map(config, "compare.measure", _measure_job, jobs) if jobs else [])
+    measured = iter(pool.map("compare.measure", _measure_job, jobs) if jobs else [])
     rows: list[dict[str, Any]] = []
     calls: dict[int, dict[str, Any]] = {}
     proofs: dict[int, tuple[Proof, ...]] = {}
@@ -662,7 +661,7 @@ def _score_variants(config: Config, params: Json) -> Json:
             raise Refusal(
                 *(replace(f, path=str(manifest), reason=f"row {index}: {f.reason}") for f in error.findings)
             ) from error
-    return {"variants": pool.map(config, "compare.variants", _variant_job, [(config, v) for v in variants])}
+    return {"variants": pool.map("compare.variants", _variant_job, [(config, v) for v in variants])}
 
 
 def _inactive(

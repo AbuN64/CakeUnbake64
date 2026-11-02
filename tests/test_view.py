@@ -110,7 +110,7 @@ def lane(tmp_path, monkeypatch):
 
     state.put = Mock(side_effect=put)
     state.content = Mock(return_value=SimpleNamespace(count=lambda kind, hit: state.events.append((kind, hit))))
-    state.pool = Mock(side_effect=lambda config, name, function, items, key=None: [function(item) for item in items])
+    state.pool = Mock(side_effect=lambda name, function, items, key=None: [function(item) for item in items])
     state.stage = Mock(side_effect=lambda name: nullcontext())
     monkeypatch.setattr(view.adapters, "toolchain", state.toolchain)
     monkeypatch.setattr(view, "_identity", lambda config, recipe: "tool-bytes")
@@ -158,8 +158,7 @@ def test_cardinality_equals_request(lane):
     assert len({item.text for item in result.values()}) == 1
     assert [item.version for item in result.values()] == list(requested)
     assert lane.preprocess.call_count == 5
-    config, name, function, items = lane.pool.call_args.args
-    assert config is lane.snapshot.config
+    name, function, items = lane.pool.call_args.args
     assert name == "view.all_versions"
     assert function.__module__ == "unbake.view"
     assert function.__qualname__ == "_one"

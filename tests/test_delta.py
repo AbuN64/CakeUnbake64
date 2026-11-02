@@ -23,7 +23,7 @@ def scene(tmp_path, monkeypatch):
     )
     config = SimpleNamespace(project=SimpleNamespace(root=tmp_path))
 
-    def mapped(cfg, name, function, items, key=None):
+    def mapped(name, function, items, key=None):
         state.jobs.extend(items)
         return [function(item) for item in items]
 
