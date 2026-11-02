@@ -1,4 +1,4 @@
-deploy-env TOOLKIT=/home/abu/venv-unbake
+deploy-input TOOLKIT
 rig run ci/deploy_rig.py name
-rig activate ci/deploy_rig.py /home/abu/venv-unbake build
+rig activate ci/deploy_rig.py $TOOLKIT build
 rig run ci/deploy_rig.py readback

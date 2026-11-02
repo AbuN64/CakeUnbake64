@@ -104,14 +104,13 @@ def test_the_orchestrator_is_gone():
 def test_the_deploy_file_is_the_step_grammar():
     root = Path(__file__).parent.parent
     lines = (root / ".deploy").read_text().splitlines()
-    toolkit = lines[0].removeprefix("deploy-env TOOLKIT=")  # the activation needs the live link absolute: only here
-    assert toolkit.startswith("/") and toolkit.endswith("/venv-unbake")
     assert lines == [
-        f"deploy-env TOOLKIT={toolkit}",
+        "deploy-input TOOLKIT",
         "rig run ci/deploy_rig.py name",
-        f"rig activate ci/deploy_rig.py {toolkit} build",
+        "rig activate ci/deploy_rig.py $TOOLKIT build",
         "rig run ci/deploy_rig.py readback",
     ]
+    assert "/home" not in (root / ".deploy").read_text()  # the value lives in Hosts.json, not in a tracked file
     assert "/home" not in (root / "ci" / "deploy_rig.py").read_text()
     assert os.access(root / "ci" / "deploy_rig.py", os.X_OK)
 
