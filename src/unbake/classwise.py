@@ -175,12 +175,12 @@ def _condition(versions: Iterable[str], guards: Mapping[str, str]) -> str:
     return " || ".join(f"defined({guards[v]})" for v in sorted(versions))
 
 
-def _fill(n: int, fill: Row, versions: Sequence[str], guards: Mapping[str, str]) -> Chunk:
-    """The array of the stale bytes `fill` names for `versions`; under a condition when only some versions link them
-    there."""
+def _fill(name: str, fill: Row, versions: Sequence[str], guards: Mapping[str, str]) -> Chunk:
+    """The array `name` of the stale bytes `fill` names for `versions`; under a condition when only some versions link
+    them there."""
     const = "const " if fill["cls"] == "rodata" else ""
-    text = f"{const}unsigned char unbake_fill_{n}[] = {{{', '.join(f'0x{b:02X}' for b in fill['data'])}}};"
-    chunk = Chunk(fill["after"], 1 << 30, text, text, [fill["cls"]], [f"unbake_fill_{n}"])
+    text = f"{const}unsigned char {name}[] = {{{', '.join(f'0x{b:02X}' for b in fill['data'])}}};"
+    chunk = Chunk(fill["after"], 1 << 30, text, text, [fill["cls"]], [name])
     if guards and set(versions) != set(guards):
         chunk.when = _condition(versions, guards)
     return chunk
@@ -257,9 +257,11 @@ def arrange(
                 storage.append(copy)
                 place[copy] = (rank[cls][anchor] if anchor else -1, 1, at, chunk.at)
     kept = [f for f in fills if f["cls"] in STORED and f["after"] in rank.get(f["cls"], {})]
+    # the arrays are global symbols of one link, so each merged object names them after its first unit
+    stem = re.sub(r"\W", "_", parts[0][0]) if parts else ""
     for n, fill in enumerate(kept):
         for where, versions in _fill_places(fill, moves, rank):
-            chunk = _fill(n, fill, versions, guards or {})
+            chunk = _fill(f"unbake_fill_{stem}_{n}", fill, versions, guards or {})
             storage.append(chunk)
             place[chunk] = where
     chain: dict[str, list[Chunk]] = defaultdict(list)

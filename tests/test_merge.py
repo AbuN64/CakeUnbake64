@@ -301,8 +301,8 @@ def test_the_stale_link_bytes_between_two_units_stay_as_an_array_before_the_next
     )
     text = out["text"]
     assert out["conflicts"] == []
-    assert "const unsigned char unbake_fill_0[] = {0x24, 0x63, 0x00, 0x01, 0x03, 0xE0, 0x00, 0x08};" in text
-    assert text.index("g_Defs_CosineEaseConstantWords") < text.index("unbake_fill_0") < text.index("Defs_Fn")
+    assert "const unsigned char unbake_fill_defs_0[] = {0x24, 0x63, 0x00, 0x01, 0x03, 0xE0, 0x00, 0x08};" in text
+    assert text.index("g_Defs_CosineEaseConstantWords") < text.index("unbake_fill_defs_0") < text.index("Defs_Fn")
 
 
 def test_stale_bytes_only_some_versions_link_are_guarded_by_those_versions() -> None:
@@ -316,8 +316,8 @@ def test_stale_bytes_only_some_versions_link_are_guarded_by_those_versions() -> 
         fills=[fill],
     )
     text = out["text"]
-    assert "#if defined(VERSION_DE)\nunsigned char unbake_fill_0[] = {0x01, 0x02};\n#endif" in text
-    assert text.index("k_A") < text.index("unbake_fill_0") < text.index("k_B")
+    assert "#if defined(VERSION_DE)\nunsigned char unbake_fill_a_0[] = {0x01, 0x02};\n#endif" in text
+    assert text.index("k_A") < text.index("unbake_fill_a_0") < text.index("k_B")
 
 
 def test_a_fill_follows_the_copy_of_its_unit_that_the_fills_versions_link() -> None:
@@ -341,9 +341,26 @@ def test_a_fill_follows_the_copy_of_its_unit_that_the_fills_versions_link() -> N
     )
     assert out["conflicts"] == []
     linked = _preprocessed(out["text"], "VERSION_US")
-    word, bytes_, pad = (linked.index(k) for k in ("g_Player_Draw", "unbake_fill_0", "g_fmtDec2Pad"))
+    word, bytes_, pad = (linked.index(k) for k in ("g_Player_Draw", "unbake_fill_fmt_0", "g_fmtDec2Pad"))
     assert word < bytes_ < pad
-    assert "unbake_fill_0" not in _preprocessed(out["text"], "VERSION_DE")
+    assert "unbake_fill_fmt_0" not in _preprocessed(out["text"], "VERSION_DE")
+
+
+def test_two_merged_objects_name_their_fill_arrays_apart() -> None:
+    """GAME.CPP and PLAYER_G19.CPP both held `unbake_fill_1`: the fill arrays are globals of one link, so the second
+    merged object failed to link with a multiple definition."""
+    names = []
+    for unit in ("SOURCE/MENU/GAME.CPP", "SOURCE/AI/G19.CPP"):
+        fill = {"after": unit, "cls": "data", "data": b"\x01", "versions": ["de"]}
+        out = merge.merge(
+            [(unit, "int k_A = 1;\n"), ("z", "int k_Z = 2;\n")],
+            never,
+            orders={"data": {"de": [unit, "z"]}},
+            classes={unit: {"k_A": "data"}, "z": {"k_Z": "data"}},
+            fills=[fill],
+        )
+        names.append(re.findall(r"unbake_fill_\w+", out["text"]))
+    assert names[0] and names[1] and not set(names[0]) & set(names[1])
 
 
 def _preprocessed(text: str, version: str) -> str:
