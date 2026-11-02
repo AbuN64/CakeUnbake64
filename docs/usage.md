@@ -214,7 +214,7 @@ result and `--out` hold the seconds spent (a batch's time is shared by its names
 Refusals (exit 1, nothing is reported as a pass): `unify.units` (no built unit: run `unbake setup`),
 `unify.baseline` (a unit does not build before any rewrite), `unify.build` (the build did not run: an empty log, a
 make exit that names no failing unit, as with a toolchain variable unset, or an object neither made nor named in a
-failure), `unify.drift` (after the rewrites an object differs from the baseline).
+failure), `unify.compile` (after the rewrites a source file no longer compiles: names the file, the compiler's first error lines and the rewrites that touched it), `unify.drift` (after the rewrites an object differs from the baseline).
 
 ## Project
 

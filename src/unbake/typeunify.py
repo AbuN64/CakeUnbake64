@@ -38,6 +38,7 @@ Facts = tuple[list[str], list[Stmt], frozenset[str], frozenset[str]]  # (typedef
 _FAILED = re.compile(r"\*\*\* \[(?:[^\]\s]+: )?([^\]\s]+\.o)\]")
 _WORD = re.compile(r"[A-Za-z_]\w*")
 _POINTER = re.compile(r"\(\s*\*")
+ERROR_LINES = 3  # compiler error lines kept per failing object
 
 
 @dataclass(frozen=True)
@@ -222,8 +223,10 @@ def rebuild(
         named |= failed
         if errors is not None:
             for path in failed:
-                first = re.search(rf"^{re.escape(path[:-2])}\.i:\d+: (?!warning)(.*)$", log, re.M)
-                errors[path] = first[1] if first else "no compiler error in the log"
+                first = re.findall(rf"^{re.escape(path[:-2])}\.i:\d+:(?:\d+:)? (?!warning)(.*)$", log, re.M)[
+                    :ERROR_LINES
+                ]
+                errors[path] = " | ".join(first) if first else "no compiler error in the log"
         absent = [p for p in pending if p not in named and not (root / p).is_file()]
         if len(absent) == len(pending):
             raise Refusal(
@@ -253,6 +256,36 @@ def baseline(root: Path, seams: Seams, units: Mapping[str, Sequence[str]]) -> di
             Finding("unify.baseline", "the tree does not build before any rewrite", missing=tuple(broken[:20]))
         )
     return {u: h for u, h in made.items() if h is not None}
+
+
+def _compile_findings(
+    broken: Sequence[Unit], errors: Mapping[str, str], census: Census, settled: Mapping[str, Plan]
+) -> list[Finding]:
+    """One finding per source file whose object the kept rewrites stopped building (not a drift: the object is missing):
+    the file, the first compiler error lines of its first version, the versions, and the rewrites that touched it."""
+    by_file: dict[str, list[Unit]] = defaultdict(list)
+    for unit in broken:
+        by_file[unit[1]].append(unit)
+    out: list[Finding] = []
+    for path, units in sorted(by_file.items())[:20]:
+        why = errors.get(target(units[0]), "no compiler error in the log")
+        rewrites = "; ".join(
+            f"{n} as {p.canon} ({', '.join(sorted(p.files))})"
+            for n, p in sorted(settled.items())
+            if any(u in reach(census, p) for u in units)
+        )
+        out.append(
+            Finding(
+                "unify.compile",
+                f"{path} does not compile after the rewrites: {why}; rewrites that touched it: "
+                + (rewrites or "none of the kept ones reaches it"),
+                path=path,
+                unit=path,
+                versions=tuple(v for v, _ in units),
+                missing=tuple(target(u) for u in units),
+            )
+        )
+    return out
 
 
 def line(name: str, got: Plan | None, failed: Mapping[str, str], seconds: float) -> str:
@@ -339,7 +372,11 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
             _write(root, files, settled.values(), src)  # the names that failed go back to their original text
     reached = set().union(tried, *(reach(census, p) for p in settled.values()))
     with stages.stage("unify.verify"):
-        back = rebuild(root, seams, reached)
+        verify_errors: dict[str, str] = {}
+        back = rebuild(root, seams, reached, verify_errors)
+    broken = sorted(u for u, h in back.items() if h is None)
+    if broken:
+        raise Refusal(*_compile_findings(broken, verify_errors, census, settled))
     drift = sorted(target(u) for u, h in back.items() if h != base[u])
     if drift:
         raise Refusal(
@@ -364,6 +401,19 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
 
 
 READ_CHUNK = 16  # units one worker reads per job: the statements of their shared headers travel once
+READ_WINDOW = 4  # jobs per host slot in flight at once: the parent holds one window of results, never all of them
+
+
+def _shared(got: Facts, same: dict[object, object]) -> Facts:
+    """The facts of a unit with every statement, typedef, file and word being the one object the parent already holds:
+    a worker's chunk arrives as its own copy of the shared headers' statements, whatever its worker interned."""
+    typedefs, stmts, files, words = got
+    return (
+        [same.setdefault(t, t) for t in typedefs],  # type: ignore[misc]
+        [same.setdefault(t, t) for t in stmts],  # type: ignore[misc]
+        frozenset(same.setdefault(f, f) for f in files),  # type: ignore[misc]
+        frozenset(same.setdefault(w, w) for w in words),  # type: ignore[misc]
+    )
 
 
 def _read_chunk(items: list[tuple[Config, str, str]]) -> list[Facts]:
@@ -375,14 +425,7 @@ def _read_chunk(items: list[tuple[Config, str, str]]) -> list[Facts]:
         typedefs, stmts, files, words = facts(
             tree.preprocess(cfg, unit, version, markers=True), unit, configuration.under_tree
         )
-        out.append(
-            (
-                [same.setdefault(t, t) for t in typedefs],  # type: ignore[misc]
-                [same.setdefault(t, t) for t in stmts],  # type: ignore[misc]
-                frozenset(same.setdefault(f, f) for f in files),  # type: ignore[misc]
-                frozenset(same.setdefault(w, w) for w in words),  # type: ignore[misc]
-            )
-        )
+        out.append(_shared((typedefs, stmts, files, words), same))
     return out
 
 
@@ -410,7 +453,12 @@ def seams(cfg: Config) -> Seams:
 
     def read(items: Sequence[Unit]) -> list[Facts]:
         chunks = [[(cfg, v, u) for v, u in items[at : at + READ_CHUNK]] for at in range(0, len(items), READ_CHUNK)]
-        return [got for chunk in pool.map("unify.read", _read_chunk, chunks) for got in chunk]
+        window, same = max(1, cfg.host.slots) * READ_WINDOW, {}  # type: ignore[var-annotated]
+        out: list[Facts] = []
+        for at in range(0, len(chunks), window):
+            for chunk in pool.map("unify.read", _read_chunk, chunks[at : at + window]):
+                out.extend(_shared(got, same) for got in chunk)
+        return out
 
     def make(targets: Sequence[str]) -> tuple[int, str]:
         store.write(root / "local.mk", build.local_mk(cfg))

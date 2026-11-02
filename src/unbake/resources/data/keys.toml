@@ -838,6 +838,10 @@ sentence = "the build of a rewrite did not run: an empty log, a make exit naming
 owner = "typeunify"
 sentence = "a unit does not build from the tree as it is, so there is no baseline to compare against"
 
+[key."unify.compile"]
+owner = "typeunify"
+sentence = "after the rewrites a source file no longer compiles (its object is missing), not drift: the finding names the file, the compiler's first error lines and the rewrites that touched it"
+
 [key."unify.drift"]
 owner = "typeunify"
 sentence = "after the rewrites an object differs from the baseline"

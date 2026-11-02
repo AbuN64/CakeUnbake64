@@ -258,21 +258,53 @@ def test_only_the_touched_objects_are_made_and_compared(tmp_path: Path) -> None:
     assert built == ["build/de/src/b.CPP.o", "build/us/src/b.CPP.o"]  # a does not use h
 
 
-def test_a_unit_the_finer_reading_missed_refuses_the_run_as_drift(tmp_path: Path) -> None:
-    world = tree(tmp_path)
+def late_make(world: World, tmp_path: Path, break_it: str):
+    """A make that, once the rewrites are kept, breaks the object of src/a.CPP (a only declares h: never touched)."""
     base = world.make
 
     def late(targets: Sequence[str]) -> tuple[int, str]:
         code, log = base(targets)
-        broken = [t for t in targets if "src/a.CPP" in t and len(world.calls) > 1]  # a only declares h: not touched
-        for t in broken:
-            (tmp_path / t).unlink()
-            log += f"make: *** [Makefile:1: {t}] Error 1\n"
-        return (2 if broken else code), log
+        hit = [t for t in targets if "src/a.CPP" in t and len(world.calls) > 1]
+        for t in hit:
+            if break_it == "compile":
+                (tmp_path / t).unlink()
+                log += f"{t[:-2]}.i:3: error: conflicting types for 'h'\n{t[:-2]}.i:4: error: second\n"
+                log += f"{t[:-2]}.i:5: warning: skipped\nmake: *** [Makefile:1: {t}] Error 1\n"
+            else:
+                (tmp_path / t).write_text("changed")
+        return (2 if hit and break_it == "compile" else code), log
 
+    return late
+
+
+def test_a_rewrite_that_stops_a_file_compiling_is_a_compile_failure_naming_file_error_and_rewrite(
+    tmp_path: Path,
+) -> None:
+    world = tree(tmp_path)
+    seams = Seams(world.found, world.read, late_make(world, tmp_path, "compile"))
     with pytest.raises(Refusal) as err:
-        typeunify.run(tmp_path, Seams(world.found, world.read, late), ["h"])
+        typeunify.run(tmp_path, seams, ["h"])
+    (finding,) = err.value.findings
+    assert finding.key == "unify.compile" and finding.path == "src/a.CPP"
+    assert finding.versions == ("de", "us")
+    assert finding.missing == ("build/de/src/a.CPP.o", "build/us/src/a.CPP.o")
+    assert "error: conflicting types for 'h' | error: second" in finding.reason and "skipped" not in finding.reason
+    assert "rewrites that touched it: h as " in finding.reason and "include/h.H" in finding.reason
+
+
+def test_an_object_that_differs_after_the_rewrites_is_drift_not_a_compile_failure(tmp_path: Path) -> None:
+    world = tree(tmp_path)
+    seams = Seams(world.found, world.read, late_make(world, tmp_path, "differ"))
+    with pytest.raises(Refusal) as err:
+        typeunify.run(tmp_path, seams, ["h"])
     assert err.value.findings[0].key == "unify.drift"
+
+
+def test_the_parent_holds_one_object_for_equal_statements_of_different_chunks() -> None:
+    same: dict[object, object] = {}
+    one = typeunify._shared((["typedef int T;"], ["a" + "b"], frozenset({"x" + "y"}), frozenset()), same)
+    two = typeunify._shared((["typedef int " + "T;"], ["ab"[:1] + "b"], frozenset({"xy"[:1] + "y"}), frozenset()), same)
+    assert one[0][0] is two[0][0] and one[1][0] is two[1][0] and next(iter(one[2])) is next(iter(two[2]))
 
 
 def test_differing_names_the_missing_and_the_changed_objects() -> None:
