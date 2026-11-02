@@ -135,3 +135,19 @@ def test_a_cut_object_head_is_listed_with_its_dialect():
     roms = {"a": page, "b": rom((0x10, first + following))}
     found = blob_stale.heads(roms, "a", [(0xFC0, 0x1009)], [0x1009], ["a", "b"])
     assert found == [{"version": "a", "region": [0x1000, 0x1009], "reader": "sn-head", "dialect": "obj"}]
+
+
+def test_a_whole_short_stretch_equal_to_accounted_bytes_is_a_copy_the_windows_miss():
+    roms = {"a": rom((0x100, NOISE[:64])), "b": rom((0x400, NOISE[40:52]), (0x440, NOISE[40:46]))}
+    spans = {"a": [(0x100, 0x140)], "b": []}
+    found = blob_stale.short_copies(roms, spans, "b", [(0x400, 0x40C), (0x440, 0x446)])
+    assert found == [  # 12 bytes are a copy; 6 bytes are under SHORT_COPY
+        {"version": "b", "region": [0x400, 0x40C], "reader": "copy", "source": 0x128, "source_version": "a"}
+    ]
+    assert blob_stale.find(roms, spans, blob_stale.index(roms, spans), "b", [(0x400, 0x40C)]) == []
+
+
+def test_a_short_stretch_needs_distinct_values_and_a_source_that_is_whole_accounted_bytes():
+    roms = {"a": rom((0x100, NOISE[:64]), (0x200, bytes([5, 6]) * 8)), "b": rom((0x400, NOISE[0:12]), (0x500, bytes([5, 6]) * 8))}
+    spans = {"a": [(0x100, 0x108), (0x200, 0x210)], "b": []}
+    assert blob_stale.short_copies(roms, spans, "b", [(0x400, 0x40C), (0x500, 0x510)]) == []  # source cut / two values

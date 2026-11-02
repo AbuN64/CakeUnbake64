@@ -17,8 +17,8 @@ from unbake.contracts import Json
 
 Spans = list[tuple[int, int]]
 UNCLASSIFIED = "unclassified"
-MIN_COPY = 8  # the fewest bytes of a copy of accounted bytes
-MIN_DISTINCT = 4  # a copy of fewer distinct byte values names no source
+MIN_COPY = blob_stale.SHORT_COPY  # the fewest bytes of a copy of accounted bytes
+MIN_DISTINCT = blob_stale.MIN_DISTINCT  # a copy of fewer distinct byte values names no source
 MIN_TEXT = 4  # printable characters of a C string, three of them letters
 TINY = 4  # at most this many bytes between proven neighbours
 _TEXT = re.compile(rb"[\x20-\x7e\t\r\n]+")
@@ -65,21 +65,9 @@ def _is_float(w: int) -> bool:
     return 0x30000000 < w < 0x50000000 or 0xB0000000 < w < 0xD0000000
 
 
-def _covered(held: Spans, starts: list[int], a: int, b: int) -> bool:
-    i = bisect_right(starts, a) - 1
-    return i >= 0 and held[i][0] <= a and b <= held[i][1]
-
-
 def _copy(roms: dict[str, bytes], held: dict[str, tuple[Spans, list[int]]], v: str, a: int, b: int) -> Json | None:
     """The first place any version holds these bytes inside its accounted bytes (not the span itself)."""
-    d = roms[v][a:b]
-    for w in sorted(roms, reverse=True):
-        at = roms[w].find(d)
-        while at >= 0:
-            if _covered(*held[w], at, at + len(d)) and not (w == v and at < b and a < at + len(d)):
-                return {"version": w, "at": at}
-            at = roms[w].find(d, at + 1)
-    return None
+    return blob_stale.source_of(roms, {w: spans for w, (spans, _) in held.items()}, v, a, b)
 
 
 def classify(d: bytes, a: int, b: int, segment: str, copy: Json | None) -> tuple[str, str]:

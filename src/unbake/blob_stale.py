@@ -31,6 +31,7 @@ from unbake import (
 )
 from unbake.contracts import Config, Json
 
+SHORT_COPY = 8  # the fewest bytes of a whole leftover stretch that equals accounted bytes (a table tail, a cut record)
 MIN_COPY = 32  # the fewest bytes of one copy: eight words of a table or routine that an older link left unchanged
 WINDOW = 16  # source bytes hashed at multiples of WINDOW; any copy of MIN_COPY bytes holds one
 TEXT = re.compile(rb"[\x20-\x7e\t\r\n]{7,}\x00")  # terminated text, at least eight bytes
@@ -68,6 +69,42 @@ def index(roms: Mapping[str, bytes], spans: Mapping[str, Spans]) -> dict[bytes, 
                 if len(set(window)) >= MIN_DISTINCT:
                     found[window].append((version, at))
                 at += WINDOW
+    return found
+
+
+def source_of(roms: Mapping[str, bytes], spans: Mapping[str, Spans], version: str, low: int, high: int) -> Json | None:
+    """The first place any version holds the bytes [low, high) of `version` inside its accounted `spans` (not the
+    range itself), the newest version first; None when none does."""
+    data = roms[version][low:high]
+    for other in sorted(roms, reverse=True):
+        held, starts = spans[other], [a for a, _ in spans[other]]
+        at = roms[other].find(data)
+        while at >= 0:
+            i = bisect_right(starts, at) - 1
+            inside = i >= 0 and held[i][0] <= at and at + len(data) <= held[i][1]
+            if inside and not (other == version and at < high and low < at + len(data)):
+                return {"version": other, "at": at}
+            at = roms[other].find(data, at + 1)
+    return None
+
+
+def short_copies(roms: Mapping[str, bytes], spans: Mapping[str, Spans], version: str, targets: Spans) -> list[Json]:
+    """The leftover stretches of `version` (whole, SHORT_COPY bytes or more, MIN_DISTINCT values or more) that equal
+    accounted bytes of one version: the copies `find` cannot see because its windows hold WINDOW bytes."""
+    found: list[Json] = []
+    for low, high in targets:
+        if high - low < SHORT_COPY or len(set(roms[version][low:high])) < MIN_DISTINCT:
+            continue
+        if (source := source_of(roms, spans, version, low, high)) is not None:
+            found.append(
+                {
+                    "version": version,
+                    "region": [low, high],
+                    "reader": "copy",
+                    "source": source["at"],
+                    "source_version": source["version"],
+                }
+            )
     return found
 
 
@@ -329,6 +366,9 @@ def scan(config: Config) -> Json:
         short = text_copies(roms[v], text_sources, v, left, list(parts))
         copies.extend(short)
         left = blobs.subtract(left, blobs.merge([tuple(c["region"]) for c in short]))
+        stretches = short_copies(roms, spans, v, left)
+        copies.extend(stretches)
+        left = blobs.subtract(left, blobs.merge([tuple(c["region"]) for c in stretches]))
         out[v] = {
             "unknown": blobs.length(targets),
             "streams": streams,
