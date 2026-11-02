@@ -283,7 +283,7 @@ def _implicit(
     for i, row in rows:
         if i <= at:
             continue
-        if row["k"] != "entry" or row["u"] not in units or row.get("subalign"):
+        if row["k"] != "entry" or row["u"] not in units:
             return False
         for cls, pieces in row.get("parts", {}).items():
             if pieces:

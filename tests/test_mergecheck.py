@@ -654,7 +654,7 @@ def test_interior_fills_are_the_stale_link_bytes_and_zero_pads_between_two_units
     assert [s[1:] for s in mergecheck.spans(seq, {"src/a.CPP", "src/b.CPP"})] == [(12, 12, 0)]
 
 
-def _rodata_link(pad: int, second: int) -> list[dict[str, Any]]:
+def _rodata_link(pad: int, second: int, subalign: int = 0) -> list[dict[str, Any]]:
     """A 3 byte piece of a.CPP, the link's `MAX(., offset)` pad of `pad` bytes, then a piece of b.CPP of `second`
     bytes (SYNTHESIZER_DATA.CPP, `s_synthesizerExText[3]` before synthesizer_data.c, CakeUnbake64 aa0b039)."""
     link = (
@@ -670,6 +670,7 @@ def _rodata_link(pad: int, second: int) -> list[dict[str, Any]]:
             size = 3 if row["u"] == "src/a.CPP" else second
             row["n"], row["cls"] = size, "+".join(row["cls"])
             row["parts"] = {"rodata": [(size, 4)]}
+            row["subalign"] = subalign
     return seq
 
 
@@ -681,6 +682,18 @@ def test_a_link_pad_that_is_the_next_pieces_alignment_is_no_array_for_the_merged
     both = {"src/a.CPP", "src/b.CPP"}
     assert mergecheck.interior_fills(sorted(both), {"us": seq}) == []
     assert [s[1:] for s in mergecheck.spans(seq, both)] == [(40, 40, 0)]
+
+
+def test_a_link_pad_that_is_the_next_pieces_alignment_is_no_array_under_subalign_too() -> None:
+    """The same SYNTHESIZER_DATA.CPP pad in the de/us .rodata the link places under SUBALIGN(1) (rig job 194208,
+    CakeUnbake64): the 1 B `unbake_fill_0` stood a word wide, the merged object 4 B over the linked span, us broke at
+    __nextSampleTime."""
+    seq = _rodata_link(1, 36, subalign=1)
+    both = {"src/a.CPP", "src/b.CPP"}
+    assert mergecheck.interior_fills(sorted(both), {"us": seq}) == []
+    pads: list[tuple[str, str, str, int]] = []
+    assert [s[1:] for s in mergecheck.spans(seq, both, pads=pads)] == [(40, 40, 0)]
+    assert pads == []
 
 
 def test_a_link_pad_longer_than_the_next_pieces_alignment_stays_a_zero_array() -> None:
