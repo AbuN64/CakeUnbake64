@@ -168,7 +168,16 @@ HDRKEY := build/hdrkey
 STAMPREC := build/stamprec
 build/hdrkey build/stamprec: build/%: $(MKTOOLS)/%.c
 	$(Q)mkdir -p build
-	$(Q)$(HOSTCC) -O2 -o $@ $< 2>/dev/null || rm -f $@
+	$(Q)$(HOSTCC) -O2 -DTOOLS_RELEASE='"$(TOOLS_RELEASE)"' -o $@ $< 2>/dev/null || rm -f $@
+# A stamprec built by another unbake than the one that wrote this Makefile (a lane's older copy left it in build/) can
+# lack a step the recipes spell (`no step @probe`): it is refused here, before any recipe runs it, naming both versions.
+# One that predates `version` answers nothing, which reads as "older than version reporting".
+STAMPREC_BUILT := $(shell [ -x $(STAMPREC) ] && { $(STAMPREC) version 2>/dev/null || echo 'older than version reporting'; })
+ifneq ($(STAMPREC_BUILT),)
+ifneq ($(STAMPREC_BUILT),$(TOOLS_RELEASE))
+$(error $(STAMPREC) was built by unbake $(STAMPREC_BUILT), but this tree's Makefile is unbake $(TOOLS_RELEASE): run the published unbake (`unbake sync --makefile`), then remove $(STAMPREC) and build/hdrkey so they are built again)
+endif
+endif
 RECORD = { [ -x $(STAMPREC) ] && $(STAMPREC) record $(1); } || python3 -I $(MKTOOLS)/stamp_sweep.py record $(1)
 shq = '$(subst ','\'',$(1))'
 CC_FLAGS = $(TC) $(CC_$(TC)) $(CFLAGS) $(ASFLAGS) $(DEFINES) $(FSPLIT)

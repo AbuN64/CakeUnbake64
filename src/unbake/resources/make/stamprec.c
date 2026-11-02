@@ -17,6 +17,12 @@
  *
  *   stamprec object OUT VERSION FACTS CHANGED TEXTSIZE FLAGS STAMPREC [EXTRACTED...] -- PROGRAM...
  */
+/* The unbake release this tool was built from (the Makefile passes -DTOOLS_RELEASE): `stamprec version` prints it so a
+ * Makefile of another release refuses the tool at once; a build without it is "unversioned" and so never matches. */
+#ifndef TOOLS_RELEASE
+#define TOOLS_RELEASE "unversioned"
+#endif
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -630,8 +636,9 @@ static int object(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && !strcmp(argv[1], "version")) { puts(TOOLS_RELEASE); return 0; }
     if (argc >= 3 && !strcmp(argv[1], "record")) return record(argv[2], argv + 3, argc - 3);
     if (argc >= 11 && !strcmp(argv[1], "object")) return object(argc, argv);
-    fprintf(stderr, "usage: stamprec record PATH [EXTRACTED...] | object OUT VERSION FACTS CHANGED TEXTSIZE FLAGS STAMPREC [EXTRACTED...] -- PROGRAM...\n");
+    fprintf(stderr, "usage: stamprec version | record PATH [EXTRACTED...] | object OUT VERSION FACTS CHANGED TEXTSIZE FLAGS STAMPREC [EXTRACTED...] -- PROGRAM...\n");
     return 64;
 }

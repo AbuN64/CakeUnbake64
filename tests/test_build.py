@@ -3,6 +3,8 @@
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -11,7 +13,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from unbake import adapters, build
+from unbake import __version__, adapters, build
 from unbake.contracts import FileFacts, Refusal, Segment
 from unbake.resources import cc_cache
 from unbake.tree import Module, Tree
@@ -2115,3 +2117,60 @@ def test_a_literals_row_at_4_mod_8_in_an_apart_object_is_given_its_phase_and_the
     assert "build/us/src/a.c.o: POOLPHASE := literals_f_1:4" in rows
     assert sum("POOLPHASE" in r for r in rows) == 1
     assert "$(PASS)fsplit_pass.py $(@:.o=.n.s) $(@:.o=.f.s) $(POOLPHASE)" in build._recipe("gcc-2.8.1-sn64")
+
+
+def _stamprec_tree(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    _write_makefile(tmp_path, config)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "asm/us").mkdir(parents=True)
+    (tmp_path / "asm/us/.extracted").touch()
+    (tmp_path / "versions/us/text_sizes.mk").write_text("")
+    (tmp_path / "src/a.c").write_text("int a;\n")
+
+
+def _stamprec_make(tmp_path: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["make", "--no-print-directory", "-j1", "build/us/src/a.c.o", "STAMPS=", "TC=gcc_2_8_1_sn64", CCPY,
+         _pp("PREPROCESS_gcc_2_8_1_sn64", "cat $<"), "TEXTSIZE=0x10"],
+        cwd=tmp_path, capture_output=True, text=True,
+    )  # fmt: skip
+
+
+def test_a_stamprec_of_an_older_unbake_is_refused_naming_both_versions_and_the_fix_not_as_no_step_probe(tmp_path):
+    """The lane case: an older unbake left build/stamprec, which knows no `@probe` step (the object recipe's first
+    step), and this tree's Makefile is newer: make stops at once, before any recipe runs the tool."""
+    _stamprec_tree(tmp_path)
+    old = tmp_path / "build/stamprec"
+    old.parent.mkdir()
+    old.write_text(  # what the older tool does: no `version`, and an unknown @step is "no step" with code 64
+        '#!/bin/sh\nif [ "$1" = object ]; then echo "stamprec: no step @probe" >&2; exit 64; fi\n'
+        'echo "usage: stamprec record PATH | object ..." >&2\nexit 64\n'
+    )
+    old.chmod(0o755)
+    done = _stamprec_make(tmp_path)
+    assert done.returncode != 0
+    assert "no step @probe" not in done.stderr
+    assert f"unbake {__version__}" in done.stderr, done.stderr  # the tree's unbake version
+    assert "older than version reporting" in done.stderr  # the tool's
+    assert "run the published unbake" in done.stderr
+
+
+def test_a_stamprec_of_another_unbake_version_is_refused_and_one_built_by_the_makefile_is_not(tmp_path):
+    if shutil.which("cc") is None:
+        pytest.skip("no C compiler")
+    _stamprec_tree(tmp_path)
+    tool = tmp_path / "build/stamprec"
+    tool.parent.mkdir()
+    cc = ["cc", "-o", str(tool), adapters.make_tool("stamprec.c")]
+    subprocess.run([*cc, '-DTOOLS_RELEASE="0.0.1"'], check=True)
+    done = _stamprec_make(tmp_path)
+    assert done.returncode != 0 and "built by unbake 0.0.1" in done.stderr and f"is unbake {__version__}" in done.stderr
+    tool.unlink()
+    built = subprocess.run(
+        ["make", "--no-print-directory", "build/stamprec"], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert built.returncode == 0, built.stderr  # the Makefile builds its own with its version
+    assert subprocess.run([str(tool), "version"], capture_output=True, text=True).stdout == f"{__version__}\n"
+    again = subprocess.run(["make", "-n", "build/stamprec"], cwd=tmp_path, capture_output=True, text=True)
+    assert again.returncode == 0, again.stderr  # and accepts it
