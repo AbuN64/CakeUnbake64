@@ -821,6 +821,7 @@ def test_a_failing_name_among_names_that_share_units_rotates_alone(tmp_path: Pat
     assert result["unified"]["g_gameSettings"]["type"] != first  # rotated to the next candidate
     assert result["rounds"] >= 2 and result["batches"] >= 3  # the round, the suspects one by one, the rotation
 
+
 def test_records_that_overlap_by_offset_are_merged_into_the_chosen_ones_unnamed_unions(tmp_path: Path) -> None:
     """g_pakControllerRecord: one unit's `struct PakRecord { Saved values[4]; }`, another's `struct { u16 value; }`."""
     files = {
