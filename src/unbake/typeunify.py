@@ -286,7 +286,7 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
     spent: dict[str, float] = defaultdict(float)
     tried: set[Unit] = set()
     errors: dict[str, str] = {}
-    pending, rounds, built, rebuilt = list(todo), 0, 0, 0
+    pending, rounds, built, rebuilt, careful = list(todo), 0, 0, 0, False
     while pending:
         rounds += 1
         plans: dict[str, Plan] = {}
@@ -303,7 +303,12 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
         pending = []
         with stages.stage("unify.touch"):
             units_of = {n: touched(census, p) for n, p in plans.items()}
-        for group in batches(units_of):
+        # One make for the whole round: every make repeats the preprocess and record runs, so a round of many names
+        # costs one of them. A unit that differs and is touched by several names of the round cannot name its culprit:
+        # those names are suspects and go again, alone in their units (disjoint batches), at the same candidate.
+        groups = [sorted(plans)] if plans and not careful else batches(units_of)
+        careful = False
+        for group in groups:
             started, built = time.monotonic(), built + 1
             files = {f for n in group for f in plans[n].files}
             _write(root, files, [*settled.values(), *(plans[n] for n in group)], src)
@@ -315,7 +320,10 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
             for name in group:
                 bad = differing(units_of[name], made, base)
                 spent[name] += (time.monotonic() - started) / len(group)
-                if bad:
+                if bad and sum(bad[0] in units_of[n] for n in group) > 1:
+                    careful = True  # which name broke this unit is not known yet
+                    pending.append(name)
+                elif bad:
                     why = "does not build" if made[bad[0]] is None else "object differs"
                     cause = f" ({errors[target(bad[0])][:160]})" if target(bad[0]) in errors else ""
                     failed[name][plans[name].canon] = f"{bad[0][0]} {bad[0][1]}: {why}{cause}"

@@ -142,14 +142,14 @@ def test_batches_group_disjoint_names() -> None:
 
 
 # ---------------------------------------------------------------- pick, rotation, refusal
-def test_pick_keeps_the_most_declared_type_and_batches_disjoint_names(tmp_path: Path) -> None:
+def test_pick_keeps_the_most_declared_type_and_names_that_share_a_unit_share_one_build(tmp_path: Path) -> None:
     world = tree(tmp_path)
-    # g is used by both units, h by b alone: the two share b, so two batches
+    # g is used by both units, h by b alone: the two share b, and a make repeats the preprocess and record runs
     result = typeunify.run(tmp_path, world.seams)
     assert result["unified"]["g"]["type"] == "long" and result["unified"]["h"]["type"] == "short"
-    assert result["unresolved"] == {} and result["batches"] == 2
+    assert result["unresolved"] == {} and result["batches"] == 1
     assert (tmp_path / "include/h.H").read_text() == "extern long g;\nextern short h;\n"
-    assert len(world.calls) == 1 + 2 + 1  # baseline, one build per batch, the verification of every unit touched
+    assert len(world.calls) == 1 + 1 + 1  # baseline, one build for the round, the verification of every unit touched
 
 
 def test_disjoint_names_share_one_build(tmp_path: Path) -> None:
@@ -770,3 +770,52 @@ def test_the_pointer_wins_and_the_array_readers_take_its_address_when_the_array_
     assert result["unified"]["g_label"]["type"].endswith("*") and result["unresolved"] == {}
     assert "g_label[]" not in (tmp_path / "src/a.CPP").read_text()
     assert "(char **)((" in (tmp_path / "src/a.CPP").read_text()  # the array read is the address of the pointer
+
+
+# ---------------------------------------------------------------- UNIFY-FAST: the TIMER names (rig NAMES.tsv rows)
+TIMER_NAMES = [
+    "g_controllerPakSnapshotPayload",
+    "g_gameSettings",
+    "g_matchEndingTeamWheelClose",
+    "g_matchRoundCounters",
+    "g_pakControllerRecord",
+    "g_playerViewRenderContext",
+]
+
+
+def timer_world(tmp_path: Path, fail: Sequence[str] = ()) -> World:
+    """Every timer name is declared twice in each of two units, the units all names share as they share the header."""
+    body = "".join(f"extern long {n};\nextern short {n};\n" for n in TIMER_NAMES)
+    use = "".join(f"  s += {n};\n" for n in TIMER_NAMES)
+    files = {f"src/{u}.CPP": f"{body}int {u}(void) {{\n  int s = 0;\n{use}  return s;\n}}\n" for u in ("m", "n")}
+    return World(tmp_path, files, ["src/m.CPP", "src/n.CPP"], fail)
+
+
+def test_names_that_share_every_unit_settle_in_one_build(tmp_path: Path) -> None:
+    world = timer_world(tmp_path)
+    result = typeunify.run(tmp_path, world.seams)
+    assert sorted(result["unified"]) == sorted(TIMER_NAMES) and result["unresolved"] == {}
+    assert result["batches"] == 1 and result["rounds"] == 1
+    assert len(world.calls) == 1 + 1 + 1  # baseline, one build for all six names, the verification
+
+
+def test_a_failing_name_among_names_that_share_units_rotates_alone(tmp_path: Path) -> None:
+    pick = timer_world(tmp_path / "pick")
+    typeunify.run(tmp_path / "pick", pick.seams, ["g_gameSettings"])
+    first = (
+        "long"
+        if "extern long g_gameSettings;\nextern long g_gameSettings;" in (tmp_path / "pick/src/m.CPP").read_text()
+        else "short"
+    )
+    world = timer_world(tmp_path / "real", fail=[f"extern {first} g_gameSettings;\nextern {first} g_gameSettings;"])
+    armed, world.fail = world.fail, []
+    original = world.make
+
+    def late(targets: Sequence[str]) -> tuple[int, str]:
+        world.fail = armed if len(world.calls) >= 1 else []  # the baseline builds; every later make meets the fault
+        return original(targets)
+
+    result = typeunify.run(tmp_path / "real", Seams(world.found, world.read, late))
+    assert sorted(result["unified"]) == sorted(TIMER_NAMES) and result["unresolved"] == {}
+    assert result["unified"]["g_gameSettings"]["type"] != first  # rotated to the next candidate
+    assert result["rounds"] >= 2 and result["batches"] >= 3  # the round, the suspects one by one, the rotation
