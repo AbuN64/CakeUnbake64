@@ -4,6 +4,7 @@ import os
 import shlex
 import subprocess
 import sys
+from contextlib import suppress
 
 from unbake import config
 
@@ -46,10 +47,8 @@ def test_object_list_stays_complete_while_another_stamp_make_rewrites_it(tmp_pat
         assert os.read(ready_r, 1) == b"R"
         assert target.read_bytes() == before  # another make must never parse the writer's partial assignment
     finally:
-        try:
+        with suppress(BrokenPipeError):  # a failed preprocessor has already closed its end
             os.write(release_w, b"G")
-        except BrokenPipeError:
-            pass  # a failed preprocessor has already closed its end
         os.close(release_w)
         os.close(ready_r)
         stdout, stderr = child.communicate()
