@@ -24,6 +24,7 @@ from unbake import (
     framing,
     mipsstream,
     objcode,
+    pad_tail,
     rnc_whole,
     rncrepack,
     snpage,
@@ -369,6 +370,8 @@ def scan(config: Config) -> Json:
         stretches = short_copies(roms, spans, v, left)
         copies.extend(stretches)
         left = blobs.subtract(left, blobs.merge([tuple(c["region"]) for c in stretches]))
+        tails, tails_refused = pad_tail.find(roms, spans, v, left, list(parts))
+        left = blobs.subtract(left, blobs.merge([tuple(c["region"]) for c in tails]))
         out[v] = {
             "unknown": blobs.length(targets),
             "streams": streams,
@@ -388,6 +391,8 @@ def scan(config: Config) -> Json:
             "extent_words": words,
             "extent_directories": tables,
             "copies": copies,
+            "pad_tails": tails,
+            "pad_tails_refused": tails_refused,
             "heads": cuts,
             "left": blobs.length(left),
         }

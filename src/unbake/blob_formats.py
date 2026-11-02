@@ -19,6 +19,7 @@ from unbake import (
     framed_copy,
     mipsstream,
     objcode,
+    pad_tail,
     rnc,
     rnc_whole,
     rncrepack,
@@ -47,6 +48,7 @@ READERS = frozenset(
         "rnc-copy",
         "rnc-whole",
         "framed-copy",
+        "pad-tail",
         "extent-words",
         "extent-directory",
     }
@@ -386,6 +388,25 @@ def prove(config: Config, row: Json, rom: bytes, document: Json) -> Json:
             return extent_directory.prove(rom, bounds, start, end, row["shape"])
         except (extent_directory.DirectoryError, KeyError, TypeError, ValueError) as error:
             raise ValueError(f"extent-directory: {error}") from error
+    if reader == "pad-tail":
+        twin: str = row.get("source_version") or ""
+        if twin not in config.project.version or twin == row["version"]:
+            raise ValueError(f"pad-tail: source version {twin} is not another version")
+        try:
+            return {
+                **pad_tail.prove(
+                    rom,
+                    _baserom(config, twin),
+                    start,
+                    end,
+                    row["source"],
+                    _accounted(config, row["version"]),
+                    _accounted(config, twin),
+                ),
+                "source_version": twin,
+            }
+        except (pad_tail.TailError, KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"pad-tail: {error}") from error
     if reader == "rnc-copy":
         return _rnc_copy(config, row, rom, document, start, end)
     if reader == "copy":

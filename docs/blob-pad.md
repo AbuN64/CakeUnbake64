@@ -46,3 +46,13 @@ without `type = "fill"`, `format = "pad"`, `state = "decoded"` and a `limit`, a 
 unbake blobs scan pad --json     # per version: limit, pad ranges, pad_bytes, refused, unknown_before/after
 unbake blobs prove REQUEST RECEIPT   # a request row {reader: "pad", region: [a, b], limit, evidence}
 ```
+
+## Stale tails in an alignment pad (`pad-tail`)
+
+A c-string or a copy ends where its record ends; the pad up to the next alignment can hold a few stale bytes (1 to 7)
+that no copy reader proves, because `blob_stale.SHORT_COPY` (8 bytes) stops them. `pad_tail` proves such a tail by a
+twin version: the 8 bytes before the tail (the record end, 4 or more distinct values, accounted in both versions), the
+tail bytes and the alignment (both end on a multiple of 4) are equal. `blobs scan stale` emits `reader: pad-tail`
+rows (`source_version`, `source`) under `pad_tails` and lists the refused tails (twin differs in a byte, in the record
+end or in the alignment; no twin) under `pad_tails_refused`. Both sides are rows: each version's tail is proven by the
+other's with the same rule. The module row is `pad_tail` in CONTRACTS.md; `blob_stale` calls it after `short_copies`.
