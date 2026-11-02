@@ -510,9 +510,7 @@ def whatif_command(config_: Config, params: Json) -> Json:
                 def many(changes: Sequence[tuple[Any, ...]]) -> list[Outcome]:
                     size = -(-len(changes) // jobs)
                     batches = [changes[i : i + size] for i in range(0, len(changes), size)]
-                    rows = pool.map(
-                        config_, "whatif.batch", _job, [(config_, spec, kind, deps, tops, b) for b in batches]
-                    )
+                    rows = pool.map("whatif.batch", _job, [(config_, spec, kind, deps, tops, b) for b in batches])
                     return [out for row in rows for out in row]
 
                 found: dict[str, Any] = search(
