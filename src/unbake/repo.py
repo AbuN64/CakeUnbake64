@@ -141,7 +141,11 @@ def _render(template_name: str, **values: object) -> bytes:
 def _checked(result: NativeResult, key: str, name: str) -> None:
     if result.exit != 0 or result.signal is not None:
         tail = result.stderr.decode(errors="replace").splitlines()
-        raise Refusal(Finding(key, f"{name}: {tail[-1] if tail else f'exit {result.exit}, signal {result.signal}'}"))
+        reason = f"{name}: {tail[-1] if tail else f'exit {result.exit}, signal {result.signal}'}"
+        evidence = result.outputs.get("evidence")
+        if evidence is not None:
+            reason += f"\nKept make evidence: {evidence}"
+        raise Refusal(Finding(key, reason))
 
 
 HEADER = "include/include_asm.h"

@@ -7,12 +7,14 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sys
 import tarfile
+import tempfile
 import urllib.request
 from collections import defaultdict, deque
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha1
 from pathlib import Path
 from string import Template
@@ -1091,12 +1093,65 @@ def local_mk(config: Config) -> bytes:
 
 
 # ---------------------------------------------------------------- running make
+_MAKE_FILE_LINE = re.compile(r"(?:^|[\s\[('`\"])([^\s\[\]('`\"]+?):[0-9]+(?=[:\s\]])", re.M)
+
+
+def _keep_make_failure(config: Config, result: NativeResult) -> NativeResult:
+    """Keep the failed make's bytes outside its disposable tree, before any caller reduces the diagnostic."""
+    root = config.project.root.resolve()
+    base = config.host.cache_dir.resolve() / "setup-evidence"
+    if base.is_relative_to(root):
+        base = root.parent / ".unbake-evidence"
+    base.mkdir(parents=True, exist_ok=True)
+    kept = Path(tempfile.mkdtemp(prefix="make-", dir=base))
+    (kept / "stdout").write_bytes(result.stdout)
+    (kept / "stderr").write_bytes(result.stderr)
+    cwd = Path(result.cwd).resolve() if result.cwd else root
+    files = {}
+    errors = {}
+    named = {
+        m.group(1) for m in _MAKE_FILE_LINE.finditer((result.stdout + b"\n" + result.stderr).decode(errors="replace"))
+    }
+    for name in sorted({"Makefile", *named}):
+        source = (cwd / name).resolve()
+        if not source.is_file():
+            continue
+        relative = (
+            source.relative_to(root)
+            if source.is_relative_to(root)
+            else Path("external") / source.relative_to(source.anchor)
+        )
+        target = kept / "files" / relative
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            files[name] = str(target.relative_to(kept))
+        except OSError as error:
+            errors[name] = str(error)
+    (kept / "result.json").write_text(
+        json.dumps(
+            {
+                "argv": result.argv,
+                "cwd": str(cwd),
+                "exit": result.exit,
+                "signal": result.signal,
+                "files": files,
+                "errors": errors,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    return replace(result, outputs={**result.outputs, "evidence": kept})
+
+
 def make(config: Config, targets: Sequence[str]) -> NativeResult:
     """A setup make run (extract, check): local.mk first, then one make. The Makefile reads the machine's tool paths
     (splat among them) from local.mk, and a clone has none until this writes it, so no target may run before it is
     current; a land builds only in a set-up clone."""
     store.write(config.project.root / "local.mk", local_mk(config))
-    return process.make(config, targets, config.host.slots or config.host.workers)
+    result = process.make(config, targets, config.host.slots or config.host.workers)
+    return _keep_make_failure(config, result) if result.exit != 0 or result.signal is not None else result
 
 
 def _make(config: Config, target: str) -> NativeResult:
@@ -1464,7 +1519,11 @@ def make_check(config: Config, held: Tree | None = None) -> Json:
         )
         lines = result.stderr.decode(errors="replace").splitlines()
         failed = [line for line in lines if "***" in line]  # make -k ran everything it could: every failed target
-        raise Refusal(Finding("setup.make", "\n".join(failed or lines[-20:]), missing=(f"make exit {result.exit}",)))
+        evidence = result.outputs.get("evidence")
+        reason = "\n".join(failed or lines[-20:])
+        if evidence is not None:
+            reason += f"\nKept make evidence: {evidence}"
+        raise Refusal(Finding("setup.make", reason, missing=(f"make exit {result.exit}",)))
 
 
 def verify(params: Json) -> Json:

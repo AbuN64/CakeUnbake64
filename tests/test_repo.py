@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tomllib
 from contextlib import contextmanager, nullcontext
+from pathlib import Path
 from string import Template
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -288,6 +290,47 @@ def test_setup_captures_once(world):
     assert result["extracted"] == ["a", "b"] and result["make"] == MADE
     world.toolchains.assert_called_once()
     world.progress.assert_called_once()
+
+
+@pytest.mark.parametrize("phase", ["stamp", "check"])
+def test_setup_make_refusal_keeps_named_files_after_worktree_deletion(world, monkeypatch, phase):
+    """The discarded proof tree cannot discard the malformed object list or its original make output."""
+    if phase == "stamp":
+        _write(world.root, "Makefile", "extract-stamp-%:\n\t@true\n")
+    malformed = b"OBJS_us-rev1 := build/us-rev1/a.o\n" + b"\n" * 61 + b"broken\xff object list\n"
+    diagnostic = (
+        b"earlier diagnostic\xff\n"
+        b"build/us-rev1/objs.mk:63: *** missing separator.  Stop.\n"
+        b"make: *** [Makefile:4: check] Error 2\n"
+    )
+    makefiles = []
+
+    def refuse(config, targets, jobs):
+        assert targets == (["extract-stamp-a"] if phase == "stamp" else ["check"])
+        _write(world.root, "build/us-rev1/objs.mk", "")
+        (world.root / "build/us-rev1/objs.mk").write_bytes(malformed)
+        makefiles.append((world.root / "Makefile").read_bytes())
+        return NativeResult(("make", *targets), str(world.root), 2, None, b"make output\n", diagnostic, 0, 0, 0, {})
+
+    monkeypatch.setattr(repo.process, "make", refuse)
+    with pytest.raises(Refusal) as caught:
+        world.setup()
+    (finding,) = caught.value.findings
+    assert finding.key == ("setup.splat" if phase == "stamp" else "setup.make")
+    assert diagnostic.decode(errors="replace").splitlines()[-1] in finding.reason
+    evidence = Path(finding.reason.split("Kept make evidence: ", 1)[1])
+    assert not evidence.is_relative_to(world.root)
+    manifest = json.loads((evidence / "result.json").read_bytes())
+    assert manifest["exit"] == 2 and manifest["signal"] is None
+    assert manifest["argv"] == ["make", "extract-stamp-a" if phase == "stamp" else "check"]
+    assert manifest["errors"] == {}
+    assert (evidence / manifest["files"]["build/us-rev1/objs.mk"]).read_bytes() == malformed
+    assert (evidence / manifest["files"]["Makefile"]).read_bytes() == makefiles[0]
+    shutil.rmtree(world.root)
+    assert (evidence / "stderr").read_bytes() == diagnostic
+    assert (evidence / "stdout").read_bytes() == b"make output\n"
+    assert (evidence / manifest["files"]["build/us-rev1/objs.mk"]).read_bytes() == malformed
+    assert (evidence / manifest["files"]["Makefile"]).read_bytes() == makefiles[0]
 
 
 def test_setup_runs_in_the_order_toolchains_extract_sync_make_progress(world, monkeypatch):
