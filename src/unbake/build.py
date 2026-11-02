@@ -1167,7 +1167,11 @@ def extract(config: Config, version: str | None = None) -> NativeResult:
         result = _make(config, f"extract-{version}" if version else "extract")
         if result.exit != 0:
             tail = result.stderr.decode(errors="replace").splitlines()
-            raise Refusal(Finding("setup.splat", reason="\n".join(tail[-20:]) or f"exit {result.exit}"))
+            reason = "\n".join(tail[-20:]) or f"exit {result.exit}"
+            evidence = result.outputs.get("evidence")
+            if evidence is not None:
+                reason += f"\nKept make evidence: {evidence}"
+            raise Refusal(Finding("setup.splat", reason=reason))
         return result
 
 

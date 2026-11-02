@@ -21,6 +21,7 @@ from unbake import config as configuration
 from unbake.contracts import Finding, NativeResult, Refusal, sha1
 
 STAGE = stages.stage  # the world fixture replaces it with a no-op
+MAKE_EXTRACT = repo.build.extract  # the world fixture replaces the native extraction seam
 
 pytestmark = pytest.mark.usefixtures("plain_roms")
 
@@ -292,11 +293,13 @@ def test_setup_captures_once(world):
     world.progress.assert_called_once()
 
 
-@pytest.mark.parametrize("phase", ["stamp", "check"])
+@pytest.mark.parametrize("phase", ["extract", "stamp", "check"])
 def test_setup_make_refusal_keeps_named_files_after_worktree_deletion(world, monkeypatch, phase):
     """The discarded proof tree cannot discard the malformed object list or its original make output."""
     if phase == "stamp":
         _write(world.root, "Makefile", "extract-stamp-%:\n\t@true\n")
+    elif phase == "extract":
+        monkeypatch.setattr(repo.build, "extract", MAKE_EXTRACT)
     malformed = b"OBJS_us-rev1 := build/us-rev1/a.o\n" + b"\n" * 61 + b"broken\xff object list\n"
     diagnostic = (
         b"earlier diagnostic\xff\n"
@@ -306,7 +309,7 @@ def test_setup_make_refusal_keeps_named_files_after_worktree_deletion(world, mon
     makefiles = []
 
     def refuse(config, targets, jobs):
-        assert targets == (["extract-stamp-a"] if phase == "stamp" else ["check"])
+        assert targets == [{"extract": "extract-a", "stamp": "extract-stamp-a", "check": "check"}[phase]]
         _write(world.root, "build/us-rev1/objs.mk", "")
         (world.root / "build/us-rev1/objs.mk").write_bytes(malformed)
         makefiles.append((world.root / "Makefile").read_bytes())
@@ -316,13 +319,13 @@ def test_setup_make_refusal_keeps_named_files_after_worktree_deletion(world, mon
     with pytest.raises(Refusal) as caught:
         world.setup()
     (finding,) = caught.value.findings
-    assert finding.key == ("setup.splat" if phase == "stamp" else "setup.make")
+    assert finding.key == ("setup.make" if phase == "check" else "setup.splat")
     assert diagnostic.decode(errors="replace").splitlines()[-1] in finding.reason
     evidence = Path(finding.reason.split("Kept make evidence: ", 1)[1])
     assert not evidence.is_relative_to(world.root)
     manifest = json.loads((evidence / "result.json").read_bytes())
     assert manifest["exit"] == 2 and manifest["signal"] is None
-    assert manifest["argv"] == ["make", "extract-stamp-a" if phase == "stamp" else "check"]
+    assert manifest["argv"] == ["make", {"extract": "extract-a", "stamp": "extract-stamp-a", "check": "check"}[phase]]
     assert manifest["errors"] == {}
     assert (evidence / manifest["files"]["build/us-rev1/objs.mk"]).read_bytes() == malformed
     assert (evidence / manifest["files"]["Makefile"]).read_bytes() == makefiles[0]
