@@ -15,7 +15,7 @@ import fixture
 import pytest
 
 from unbake import __version__, adapters, build
-from unbake.contracts import FileFacts, Refusal, Segment
+from unbake.contracts import FileFacts, NativeResult, Refusal, Segment
 from unbake.resources import cc_cache
 from unbake.tree import Module, Tree
 
@@ -509,8 +509,17 @@ def test_a_clean_make_check_records_the_exact_versions_of_the_tree(tmp_path, mon
 
 def test_a_failed_make_check_revokes_credit_and_names_every_failed_target(tmp_path, monkeypatch):
     config = make_config(tmp_path)
-    failure = SimpleNamespace(
-        exit=2, stderr=b"make: *** [build/us/Game.z64] Error 1\nmake: *** [build/eu-1/Game.z64] Error 1\n"
+    failure = NativeResult(
+        (),
+        str(tmp_path),
+        2,
+        None,
+        b"",
+        b"make: *** [build/us/Game.z64] Error 1\nmake: *** [build/eu-1/Game.z64] Error 1\n",
+        0,
+        0,
+        0,
+        {},
     )
     monkeypatch.setattr(build, "_make", lambda cfg, target: failure)
     with pytest.raises(Refusal) as refused:
@@ -1153,7 +1162,12 @@ def test_a_setup_make_writes_local_mk_first(tmp_path, monkeypatch):
     config = SimpleNamespace(project=SimpleNamespace(root=tmp_path), host=SimpleNamespace(slots=0, workers=2))
     monkeypatch.setattr(build, "local_mk", lambda config: b"SPLAT := /venv/bin/splat\n")
     seen = []
-    monkeypatch.setattr(build.process, "make", lambda c, t, j: seen.append((t, (tmp_path / "local.mk").read_bytes())))
+
+    def make(c, t, j):
+        seen.append((t, (tmp_path / "local.mk").read_bytes()))
+        return NativeResult((), str(tmp_path), 0, None, b"", b"", 0, 0, 0, {})
+
+    monkeypatch.setattr(build.process, "make", make)
     build.make(config, ["extract-us"])
     assert seen == [(["extract-us"], b"SPLAT := /venv/bin/splat\n")]
 

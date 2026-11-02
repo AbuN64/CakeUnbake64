@@ -146,7 +146,7 @@ endif
 # (and make restarted) only when the script changes.
 build/%/objs.mk: $(NAME).ld
 	$(Q)mkdir -p $(@D)
-	$(Q){ printf 'OBJS_$* :='; $(CPP) -P -undef -D$(VMACRO_$*) $< | grep -oE '[[:alnum:]_./+-]+[.]o' | sort -u | sed 's@^@ build/$*/@' | tr -d '\n'; echo; } > $@
+	$(Q){ printf 'OBJS_$* :='; $(CPP) -P -undef -D$(VMACRO_$*) $< | grep -oE '[[:alnum:]_./+-]+[.]o' | sort -u | sed 's@^@ build/$*/@' | tr -d '\n'; echo; } > $@.$$$$ && mv -f $@.$$$$ $@
 ifeq ($(CHECK),rom)
 -include $(VERSIONS:%=build/%/objs.mk)
 endif
