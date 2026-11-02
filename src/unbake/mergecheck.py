@@ -237,7 +237,7 @@ class Run:
     cls: str
     pin: int | None
     pieces: list[tuple[int, int, int]] = field(default_factory=list)
-    origin: int | None = None  # where the link put the run's first piece: the merged object's offsets count from it
+    origin: int | None = None  # the address the merged object's offsets count from: its start under SUBALIGN, else 0
 
 
 def _run(runs: list[Run], cls: str, pad: bool = False, pin: int | None = None) -> Run:
@@ -343,9 +343,9 @@ def spans(
                     if i >= mine[0]:
                         run = _run(classes, cls, pin=pin)
                         if run.origin is None:
-                            run.origin = at
-                        # a piece keeps the alignment of its offset in the run: the compiler counts from the object's
-                        # start, which SUBALIGN lets sit at any address, so the link's own address proves nothing more
+                            run.origin = at if row.get("subalign") else 0
+                        # under SUBALIGN the object's start sits at any address and the compiler counts a piece's
+                        # alignment from it: the piece keeps the alignment of its offset in the run, not of its address
                         run.pieces.append((size, _linked_align(at - run.origin, align), row.get("subalign") or 0))
         merged = 0
         for run in classes:
