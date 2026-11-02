@@ -50,7 +50,10 @@ class World:
                 out = self.root / t
                 out.parent.mkdir(parents=True, exist_ok=True)
                 out.write_text(
-                    re.sub(r"extern[^\n]*\n", "", (self.root / unit).read_text()).replace(".value", "") + version
+                    re.sub(
+                        r"(?:extern[^\n]*|#include[^\n]*)\n|^\s*\n", "", (self.root / unit).read_text(), flags=re.M
+                    ).replace(".value", "")
+                    + version
                 )  # no declarations; a one-field struct reads as its field
         return code, log
 
@@ -142,17 +145,18 @@ def test_batches_group_disjoint_names() -> None:
 
 
 # ---------------------------------------------------------------- pick, rotation, refusal
-def test_pick_keeps_the_most_declared_type_and_names_that_share_a_unit_share_one_build(tmp_path: Path) -> None:
+def test_clashing_externs_without_definitions_are_reported_without_a_build(tmp_path: Path) -> None:
     world = tree(tmp_path)
-    # g is used by both units, h by b alone: the two share b, and a make repeats the preprocess and record runs
+    before = {p: (tmp_path / p).read_text() for p in ("include/h.H", *world.units)}
     result = typeunify.run(tmp_path, world.seams)
-    assert result["unified"]["g"]["type"] == "long" and result["unified"]["h"]["type"] == "short"
-    assert result["unresolved"] == {} and result["batches"] == 1
-    assert (tmp_path / "include/h.H").read_text() == "extern long g;\nextern short h;\n"
-    assert len(world.calls) == 1 + 1 + 1  # baseline, one build for the round, the verification of every unit touched
+    assert result["unified"] == {}
+    assert result["unresolved"] == {n: {"": "no definition"} for n in ("g", "h")}
+    assert result["batches"] == 0 and result["verified"] == 0
+    assert {p: (tmp_path / p).read_text() for p in before} == before
+    assert len(world.calls) == 1
 
 
-def test_disjoint_names_share_one_build(tmp_path: Path) -> None:
+def test_disjoint_externs_are_not_definition_candidates(tmp_path: Path) -> None:
     world = World(
         tmp_path,
         {
@@ -162,34 +166,24 @@ def test_disjoint_names_share_one_build(tmp_path: Path) -> None:
         ["src/a.CPP", "src/b.CPP"],
     )
     result = typeunify.run(tmp_path, world.seams)
-    assert result["batches"] == 1 and sorted(result["unified"]) == ["g", "h"]
+    assert result["batches"] == 0 and result["unified"] == {}
+    assert sorted(result["unresolved"]) == ["g", "h"]
 
 
-def test_a_failing_type_rotates_to_the_next(tmp_path: Path) -> None:
-    world = tree(tmp_path, fail=["extern long g;\nextern"])  # a long g in include/h.H is the fault
+def test_an_extern_type_is_never_an_alternate_to_a_missing_definition(tmp_path: Path) -> None:
+    world = tree(tmp_path, fail=["extern long g;\nextern"])
     result = typeunify.run(tmp_path, world.seams, ["g"])
-    assert result["unified"]["g"]["type"] == "int"
-    assert (tmp_path / "include/h.H").read_text().startswith("extern int g;")
-    assert (tmp_path / "src/a.CPP").read_text().startswith("extern int g;")  # every declaration took the pick
+    assert result["unresolved"] == {"g": {"": "no definition"}}
+    assert (tmp_path / "src/a.CPP").read_text().startswith("extern long g;")
 
 
-def test_a_name_no_type_satisfies_is_reported_per_type_and_left_alone(tmp_path: Path) -> None:
-    world = tree(tmp_path, fail=["extern long g;", "extern int g;"])
+def test_an_unresolved_name_has_one_reason_without_type_trials(tmp_path: Path) -> None:
+    world = tree(tmp_path)
     before = {p: (tmp_path / p).read_text() for p in ("include/h.H", "src/a.CPP")}
-    # the baseline must build, so the failing texts are armed after it
-    armed = world.fail
-    world.fail = []
-    original = world.make
-
-    def late(targets: Sequence[str]) -> tuple[int, str]:
-        world.fail = armed if 1 <= len(world.calls) <= 2 else []  # the two attempts, not the baseline or the proof
-        return original(targets)
-
-    seams = Seams(world.found, world.read, late)
-    result = typeunify.run(tmp_path, seams, ["g"])
-    assert set(result["unresolved"]["g"]) == {"long", "int"}
-    assert all("does not build" in w and w.startswith(("us ", "de ")) for w in result["unresolved"]["g"].values())
+    result = typeunify.run(tmp_path, world.seams, ["g"])
+    assert result["unresolved"]["g"] == {"": "no definition"}
     assert {p: (tmp_path / p).read_text() for p in before} == before
+    assert len(world.calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -250,12 +244,11 @@ def test_a_name_touches_the_units_that_define_or_use_it(tmp_path: Path) -> None:
     assert typeunify.touched(census, h) == {("us", "src/b.CPP"), ("de", "src/b.CPP")}  # a only declares h
 
 
-def test_only_the_touched_objects_are_made_and_compared(tmp_path: Path) -> None:
+def test_missing_definitions_make_no_objects_after_the_baseline(tmp_path: Path) -> None:
     world = tree(tmp_path)
     result = typeunify.run(tmp_path, world.seams, ["h"])
-    assert result["unified"]["h"]["units"] == 2
-    built = [t for call in world.calls[1:-1] for t in call]
-    assert built == ["build/de/src/b.CPP.o", "build/us/src/b.CPP.o"]  # a does not use h
+    assert result["unified"] == {} and result["verified"] == 0
+    assert len(world.calls) == 1
 
 
 def late_make(world: World, tmp_path: Path, break_it: str):
@@ -264,7 +257,7 @@ def late_make(world: World, tmp_path: Path, break_it: str):
 
     def late(targets: Sequence[str]) -> tuple[int, str]:
         code, log = base(targets)
-        hit = [t for t in targets if "src/a.CPP" in t and len(world.calls) > 1]
+        hit = [t for t in targets if "src/a.CPP" in t and len(world.calls) > 2]
         for t in hit:
             if break_it == "compile":
                 (tmp_path / t).unlink()
@@ -281,6 +274,8 @@ def test_a_rewrite_that_stops_a_file_compiling_is_a_compile_failure_naming_file_
     tmp_path: Path,
 ) -> None:
     world = tree(tmp_path)
+    path = tmp_path / "src/b.CPP"
+    path.write_text(path.read_text() + "short h;\n")
     seams = Seams(world.found, world.read, late_make(world, tmp_path, "compile"))
     with pytest.raises(Refusal) as err:
         typeunify.run(tmp_path, seams, ["h"])
@@ -294,6 +289,8 @@ def test_a_rewrite_that_stops_a_file_compiling_is_a_compile_failure_naming_file_
 
 def test_an_object_that_differs_after_the_rewrites_is_drift_not_a_compile_failure(tmp_path: Path) -> None:
     world = tree(tmp_path)
+    path = tmp_path / "src/b.CPP"
+    path.write_text(path.read_text() + "short h;\n")
     seams = Seams(world.found, world.read, late_make(world, tmp_path, "differ"))
     with pytest.raises(Refusal) as err:
         typeunify.run(tmp_path, seams, ["h"])
@@ -355,10 +352,12 @@ def test_hex_array_bounds_are_written_decimal(tmp_path: Path) -> None:
     }
     world = World(tmp_path, files, ["src/a.CPP", "src/b.CPP"])
     result = typeunify.run(tmp_path, world.seams, ["m"], say=lambda _text: None)
-    assert "m" in result["unified"]
-    rewritten = (
-        tmp_path / "src/a.CPP"
-    ).read_text()  # the declaration unify wrote: the one in h.H is the pick as it was
+    assert result["unresolved"] == {"m": {"": "no definition"}}
+    census = typeunify.collect(world.found(), world.read)
+    src = typeplan.Sources(lambda p: (tmp_path / p).read_text())
+    got = typeplan.plan("m", typeplan.sites_of(census.per, "m"), 0, src, census.norm)
+    assert isinstance(got, typeplan.Plan)
+    rewritten = typeplan.render("src/a.CPP", [got], src)
     assert "m[][32]" in rewritten and "0x" not in rewritten
 
 
@@ -425,7 +424,7 @@ def test_one_line_per_name_says_the_pick_the_candidates_and_the_failing_unit(tmp
     typeunify.run(tmp_path, world.seams, ["g", "h"], say=said.append)
     assert len(said) == 2 and all(re.fullmatch(r"unify (g|h): .*; \d+\.\ds", s) for s in said)
     g = next(s for s in said if s.startswith("unify g:"))
-    assert "unified as int" in g and "2 candidate(s) tried" in g and "failing long" in g and "src/" in g
+    assert "unresolved" in g and "0 candidate(s) tried" in g and "no definition" in g
 
 
 def test_objects_a_cut_short_build_left_are_made_again(tmp_path: Path) -> None:
@@ -499,8 +498,8 @@ def test_an_anonymous_struct_extern_is_a_candidate_with_a_plan(tmp_path: Path) -
     assert typeplan.render("include/h.H", [second], src) == expected
     assert typeplan.render("src/a.CPP", [second], src) == expected + "int f(void) { return g_flags.value; }\n"
     result = typeunify.run(tmp_path, world.seams, ["g_flags"], say=lambda _text: None)
-    assert result["unified"]["g_flags"]["type"] == first.canon
-    assert (tmp_path / "src/b.CPP").read_text().endswith("int k(void) { return g_flags; }\n")
+    assert result["unresolved"] == {"g_flags": {"": "no definition"}}
+    assert (tmp_path / "src/b.CPP").read_text() == files["src/b.CPP"]
 
 
 def test_reads_of_a_scalar_become_reads_of_the_definitions_one_field_struct(tmp_path: Path) -> None:
@@ -787,22 +786,19 @@ def _label_world(tmp_path: Path, fail: Sequence[str] = ()) -> World:
     return world
 
 
-def test_the_array_stays_and_the_pointer_readers_load_through_it_when_its_objects_match(tmp_path: Path) -> None:
-    world = _label_world(
-        tmp_path, fail=["extern unsigned char *g_label;", "extern char *g_label;"]
-    )  # pointer objects differ
+def test_array_externs_without_a_definition_are_left_untouched(tmp_path: Path) -> None:
+    world = _label_world(tmp_path, fail=["extern unsigned char *g_label;", "extern char *g_label;"])
+    before = (tmp_path / "src/b.CPP").read_text()
     result = typeunify.run(tmp_path, world.seams, ["g_label"])
-    assert result["unified"]["g_label"]["type"] == "char[]" and result["unresolved"] == {}
-    assert "(*(char **)g_label)" in (tmp_path / "src/b.CPP").read_text()
-    assert (tmp_path / "src/a.CPP").read_text().startswith("extern char g_label[];")
+    assert result["unresolved"] == {"g_label": {"": "no definition"}}
+    assert (tmp_path / "src/b.CPP").read_text() == before
 
 
-def test_the_pointer_wins_and_the_array_readers_take_its_address_when_the_array_objects_differ(tmp_path: Path) -> None:
-    world = _label_world(tmp_path, fail=["extern char g_label[];"])  # the array objects differ
+def test_pointer_externs_without_a_definition_have_no_alternate_trials(tmp_path: Path) -> None:
+    world = _label_world(tmp_path, fail=["extern char g_label[];"])
     result = typeunify.run(tmp_path, world.seams, ["g_label"])
-    assert result["unified"]["g_label"]["type"].endswith("*") and result["unresolved"] == {}
-    assert "g_label[]" not in (tmp_path / "src/a.CPP").read_text()
-    assert "(char **)((" in (tmp_path / "src/a.CPP").read_text()  # the array read is the address of the pointer
+    assert result["unresolved"] == {"g_label": {"": "no definition"}}
+    assert len(world.calls) == 1
 
 
 # ---------------------------------------------------------------- UNIFY-FAST: the TIMER names (rig NAMES.tsv rows)
@@ -824,34 +820,19 @@ def timer_world(tmp_path: Path, fail: Sequence[str] = ()) -> World:
     return World(tmp_path, files, ["src/m.CPP", "src/n.CPP"], fail)
 
 
-def test_names_that_share_every_unit_settle_in_one_build(tmp_path: Path) -> None:
+def test_shared_externs_without_definitions_are_all_reported(tmp_path: Path) -> None:
     world = timer_world(tmp_path)
     result = typeunify.run(tmp_path, world.seams)
-    assert sorted(result["unified"]) == sorted(TIMER_NAMES) and result["unresolved"] == {}
-    assert result["batches"] == 1 and result["rounds"] == 1
-    assert len(world.calls) == 1 + 1 + 1  # baseline, one build for all six names, the verification
+    assert result["unified"] == {}
+    assert result["unresolved"] == {n: {"": "no definition"} for n in TIMER_NAMES}
+    assert result["batches"] == result["rounds"] == 0 and len(world.calls) == 1
 
 
-def test_a_failing_name_among_names_that_share_units_rotates_alone(tmp_path: Path) -> None:
-    pick = timer_world(tmp_path / "pick")
-    typeunify.run(tmp_path / "pick", pick.seams, ["g_gameSettings"])
-    first = (
-        "long"
-        if "extern long g_gameSettings;\nextern long g_gameSettings;" in (tmp_path / "pick/src/m.CPP").read_text()
-        else "short"
-    )
-    world = timer_world(tmp_path / "real", fail=[f"extern {first} g_gameSettings;\nextern {first} g_gameSettings;"])
-    armed, world.fail = world.fail, []
-    original = world.make
-
-    def late(targets: Sequence[str]) -> tuple[int, str]:
-        world.fail = armed if len(world.calls) >= 1 else []  # the baseline builds; every later make meets the fault
-        return original(targets)
-
-    result = typeunify.run(tmp_path / "real", Seams(world.found, world.read, late))
-    assert sorted(result["unified"]) == sorted(TIMER_NAMES) and result["unresolved"] == {}
-    assert result["unified"]["g_gameSettings"]["type"] != first  # rotated to the next candidate
-    assert result["rounds"] >= 2 and result["batches"] >= 3  # the round, the suspects one by one, the rotation
+def test_shared_externs_are_never_retried_name_by_name(tmp_path: Path) -> None:
+    world = timer_world(tmp_path)
+    result = typeunify.run(tmp_path, world.seams)
+    assert sorted(result["unresolved"]) == sorted(TIMER_NAMES)
+    assert result["unified"] == {} and len(world.calls) == 1
 
 
 def test_records_that_overlap_by_offset_are_merged_into_the_chosen_ones_unnamed_unions(tmp_path: Path) -> None:

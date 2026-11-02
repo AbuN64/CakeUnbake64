@@ -1,19 +1,4 @@
-"""`unbake census` and `unbake unify`: one declared type per name, proven by the objects of every version.
-
-`census` lists every declaration of every name read from the preprocessed units of all versions, the names with more
-than one type being the clashes, in the CLASH.tsv shape (typecensus). `unify` takes per clashing name the candidate type
-(typeplan) that leaves every object of every version byte-identical to the baseline, rewrites the other declarations,
-and rotates to the next candidate when one fails. The baseline is the objects of a build of the tree as it is.
-
-A name touches the units whose preprocessed text holds a file it edits or copies its declaration from and that
-define or use it (a body or an initializer that spells it, or a definition of it): only those objects are deleted,
-made again and compared. Names whose units do not meet share one batch, so a unit that fails or differs belongs to
-exactly one name of its batch and the others are settled by the same build. Once, after all rewrites, every unit
-that holds a file a kept rewrite touches is made again and compared with the baseline: a unit the finer reading
-missed is a drift and refuses the run. One line per name goes to the person watching (picked type,
-candidates tried, the failing unit of each, seconds). A build that did not run is
-refused, never reported as a pass: an empty log, a make exit with no unit named, or an object neither made nor named
-in a failure. A name no candidate satisfies is reported with the first failing unit of each candidate type."""
+"""Unify clashes at their single physical definition, with object proof and one final drift check."""
 
 from __future__ import annotations
 
@@ -27,11 +12,11 @@ from pathlib import Path
 
 from abucache import pool, stages
 
-from unbake import build, process, store, tree
+from unbake import build, hoist, mergecheck, process, store, tree
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Host, Json, Refusal
 from unbake.typecensus import Decl, Norm, Stmt, clashes, declarations, files_of, index, scan, table, tkey
-from unbake.typeplan import EXHAUSTED, Plan, Sources, plan, readers, render, sites_of
+from unbake.typeplan import Plan, Sources, definition_plan, readers, render, sites_of
 
 Unit = tuple[str, str]  # (version, source path)
 Facts = tuple[list[str], list[Stmt], frozenset[str], frozenset[str]]  # (typedefs, project statements, files, words)
@@ -244,6 +229,9 @@ def differing(units: Iterable[Unit], made: Mapping[Unit, str | None], base: Mapp
 def _write(root: Path, files: Iterable[str], held: Iterable[Plan], src: Sources) -> None:
     held = list(held)
     for path in sorted(files):
+        if path in src.missing and not any(p.header == path for p in held):
+            (root / path).unlink(missing_ok=True)
+            continue
         store.write(root / path, render(path, held, src).encode("latin-1"))
 
 
@@ -313,63 +301,89 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
         found = clashes(census.per)
     src = Sources(lambda p: (root / p).read_bytes().decode("latin-1"))
     todo = sorted(found if names is None else [n for n in names if n in found])
-    rank = dict.fromkeys(todo, 0)
     settled: dict[str, Plan] = {}
     failed: dict[str, dict[str, str]] = defaultdict(dict)
     spent: dict[str, float] = defaultdict(float)
     tried: set[Unit] = set()
     errors: dict[str, str] = {}
-    pending, rounds, built, rebuilt, careful = list(todo), 0, 0, 0, False
-    while pending:
-        rounds += 1
-        plans: dict[str, Plan] = {}
-        for name in pending:
-            with stages.stage("unify.plan"):
-                held = sites_of(census.per, name)
-                scope = {
-                    f for c in census.closure.values() if any(loc.rsplit(":", 1)[0] in c for loc in held) for f in c
-                }
-                got = plan(name, held, rank[name], src, census.norm, scope, census.closure.values())
-            if isinstance(got, Plan):
-                closures = [census.closure[u] for u in touched(census, got)] if got.reads else []
-                plans[name] = readers(got, sites_of(census.per, name), closures, src) if closures else got
+    plans: dict[str, Plan] = {}
+    # Read project texts once: users without a local declaration still need the owning header.
+    paths = sorted(
+        {f for files in census.closure.values() for f in files}
+        | {
+            p.relative_to(root).as_posix()
+            for folder in (*configuration.source_roots(), *configuration.header_roots())
+            for p in (root / folder).rglob("*")
+            if p.is_file() and configuration.is_text(p.as_posix())
+        }
+    )
+    texts = {f: src.text(f)[0] for f in paths if (root / f).is_file()}
+    users_of = index(texts)
+    headers = sorted(f for f in texts if configuration.is_header(f))
+    include_root = hoist.include_root(texts, headers) or configuration.header_roots()[0] + "/"
+    module_map = configuration.module_map_at(root)
+    owners: dict[str, str] = {}
+    if module_map:
+        mapping = (root / module_map).read_text()
+        targets = mergecheck.read_targets(mapping)
+        rows = mergecheck.read_modules(mapping)
+        members: dict[str, list[str]] = defaultdict(list)
+        for unit, module in rows:
+            members[module].append(unit)
+        owners = {u: mergecheck.merged_path(m, targets.get(m), members[m]) for u, m in rows}
+    for name in todo:
+        held = sites_of(census.per, name)
+        definitions = sorted(loc for loc, (kind, _, _) in held.items() if kind in ("fdef", "vdef"))
+        if len(definitions) != 1:
+            failed[name][""] = "no definition" if not definitions else "multiple definitions"
+            say(line(name, None, failed[name], 0))
+            continue
+        keys = {tkey(typ) for ds in census.per[name].values() for loc, kind, typ, _ in ds if kind in ("fdef", "vdef")}
+        if len(keys) != 1:
+            failed[name][""] = "definition type differs across versions"
+            say(line(name, None, failed[name], 0))
+            continue
+        defining = definitions[0].rsplit(":", 1)[0]
+        owner = owners.get(defining, defining)
+        owner_texts = {**texts, owner: texts.get(owner, texts[defining])}
+        header = hoist._header_path(owner, owner_texts, headers, include_root)
+        # Reuse an existing matching module header even if the definition has not included it yet.
+        matches = [h for h in headers if Path(h).stem.casefold() == Path(owner).stem.casefold()]
+        if header not in headers and len(matches) == 1:
+            header = matches[0]
+        users = set(users_of.get(name, ()))
+        with stages.stage("unify.plan"):
+            got = definition_plan(name, held, src, census.norm, header, users, paths, census.closure.values())
+        if isinstance(got, Plan):
+            closures = [census.closure[u] for u in touched(census, got)] if got.reads else []
+            plans[name] = readers(got, held, closures, src) if closures else got
+        else:
+            failed[name][""] = got
+            say(line(name, None, failed[name], 0))
+    built, rebuilt = 0, 0
+    if plans:
+        started = time.monotonic()
+        files = {f for p in plans.values() for f in p.files}
+        _write(root, files, plans.values(), src)
+        units_of = {n: reach(census, p) for n, p in plans.items()}
+        span = set().union(*(reach(census, p) for p in plans.values()))
+        tried |= span
+        built, rebuilt = 1, len(span)
+        with stages.stage("unify.rebuild"):
+            made = rebuild(root, seams, span, errors)
+        bad = set(differing(span, made, base))
+        # Isolate by object, never by trying names: every rewrite reaching a bad object is held.
+        for name, got in plans.items():
+            implicated = sorted(bad & units_of[name])
+            spent[name] = (time.monotonic() - started) / len(plans)
+            if implicated:
+                failed[name][got.canon] = "; ".join(
+                    f"{target(u)}: {'does not build' if made[u] is None else 'object differs'}" for u in implicated
+                )
             else:
-                if rank[name] == 0 or got != EXHAUSTED:  # running out of candidates is how a rotation ends
-                    failed[name][""] = got
-                say(line(name, None, failed[name], spent[name]))
-        pending = []
-        with stages.stage("unify.touch"):
-            units_of = {n: touched(census, p) for n, p in plans.items()}
-        # One make for the whole round: every make repeats the preprocess and record runs, so a round of many names
-        # costs one of them. A unit that differs and is touched by several names of the round cannot name its culprit:
-        # those names are suspects and go again, alone in their units (disjoint batches), at the same candidate.
-        groups = [sorted(plans)] if plans and not careful else batches(units_of)
-        careful = False
-        for group in groups:
-            started, built = time.monotonic(), built + 1
-            files = {f for n in group for f in plans[n].files}
-            _write(root, files, [*settled.values(), *(plans[n] for n in group)], src)
-            span = set().union(*(units_of[n] for n in group))
-            tried |= span
-            rebuilt += len(span)
-            with stages.stage("unify.rebuild"):
-                made = rebuild(root, seams, span, errors)
-            for name in group:
-                bad = differing(units_of[name], made, base)
-                spent[name] += (time.monotonic() - started) / len(group)
-                if bad and sum(bad[0] in units_of[n] for n in group) > 1:
-                    careful = True  # which name broke this unit is not known yet
-                    pending.append(name)
-                elif bad:
-                    why = "does not build" if made[bad[0]] is None else "object differs"
-                    cause = f" ({errors[target(bad[0])][:160]})" if target(bad[0]) in errors else ""
-                    failed[name][plans[name].canon] = f"{bad[0][0]} {bad[0][1]}: {why}{cause}"
-                    rank[name] += 1
-                    pending.append(name)
-                else:
-                    settled[name] = plans[name]
-                    say(line(name, plans[name], failed[name], spent[name]))
-            _write(root, files, settled.values(), src)  # the names that failed go back to their original text
+                settled[name] = got
+            say(line(name, settled.get(name), failed[name], spent[name]))
+        _write(root, files, settled.values(), src)
     reached = set().union(tried, *(reach(census, p) for p in settled.values()))
     with stages.stage("unify.verify"):
         verify_errors: dict[str, str] = {}
@@ -387,13 +401,19 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
         "clashing": len(found),
         "units": sum(len(v) for v in units.values()),
         "unified": {
-            n: {"type": p.canon, "why": p.why, "units": len(touched(census, p)), "seconds": round(spent[n], 3)}
+            n: {
+                "type": p.canon,
+                "why": p.why,
+                "header": p.header,
+                "units": len(touched(census, p)),
+                "seconds": round(spent[n], 3),
+            }
             for n, p in sorted(settled.items())
         },
         "unresolved": {n: dict(failed[n]) for n in todo if n not in settled},
         "seconds": {n: round(spent[n], 3) for n in todo},
         "batches": built,
-        "rounds": rounds,
+        "rounds": int(bool(plans)),
         "verified": len(back),
         "rebuilt": rebuilt,
         "files": sorted({f for p in settled.values() for f in p.files}),
@@ -534,7 +554,7 @@ def unify_command(cfg: Config, params: Json) -> Json:
     notes = [
         Finding(
             "unify.unresolved",
-            f"{n}: no declared type keeps every object: "
+            f"{n}: definition-owned declaration unresolved: "
             + "; ".join(f"{t or 'no plan'} => {w}" for t, w in why.items()),
             blocking=False,
         )

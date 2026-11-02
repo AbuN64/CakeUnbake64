@@ -2,19 +2,111 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "unbake:result.unify",
   "type": "object",
-  "required": ["names", "clashing", "units", "unified", "unresolved", "seconds", "batches", "rounds", "verified", "files"],
+  "required": [
+    "names",
+    "clashing",
+    "units",
+    "unified",
+    "unresolved",
+    "seconds",
+    "batches",
+    "rounds",
+    "verified",
+    "rebuilt",
+    "files"
+  ],
   "properties": {
-    "names": {"type": "integer", "minimum": 0},
-    "clashing": {"type": "integer", "minimum": 0},
-    "units": {"type": "integer", "minimum": 0},
-    "unified": {"type": "object", "additionalProperties": {"type": "object", "required": ["type", "why", "units", "seconds"]}},
-    "unresolved": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": {"type": "string"}}},
-    "seconds": {"type": "object", "additionalProperties": {"type": "number"}},
-    "batches": {"type": "integer", "minimum": 0},
-    "rounds": {"type": "integer", "minimum": 0},
-    "verified": {"type": "integer", "minimum": 0},
-    "files": {"type": "array", "items": {"type": "string"}},
-    "notes": {"type": "array", "items": {"type": "object"}}
+    "names": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "clashing": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "units": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "unified": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "type",
+          "why",
+          "header",
+          "units",
+          "seconds"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "why": {
+            "const": "definition"
+          },
+          "header": {
+            "type": "string",
+            "minLength": 1
+          },
+          "units": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "seconds": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "unresolved": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "minProperties": 1
+      }
+    },
+    "seconds": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "batches": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "rounds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "rebuilt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "verified": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
   },
   "additionalProperties": false
 }

@@ -23,6 +23,7 @@ is cut, so offsets are those of the original text."""
 
 from __future__ import annotations
 
+import posixpath
 import re
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -52,6 +53,7 @@ class Plan:
     params: tuple[str, ...] = ()  # the parameters of a function's chosen declaration
     callers: frozenset[str] = frozenset()  # the files whose calls of the name pass fewer arguments than `params`
     bodies: tuple[Body, ...] = ()  # the chosen record's definitions, their members merged with every candidate's
+    header: str = ""  # the sole declaration owner; edits remove declarations when set
     includes: tuple[
         tuple[str, str], ...
     ] = ()  # (source file, header): the header that defines the chosen tag, which the file's unit does not read
@@ -63,6 +65,7 @@ class Sources:
 
     read: Callable[[str], str]
     _text: dict[str, tuple[str, str]] = field(default_factory=dict)
+    missing: set[str] = field(default_factory=set)
 
     def text(self, path: str) -> tuple[str, str]:
         if path not in self._text:
@@ -477,7 +480,7 @@ def plan(
         if any(file == r[0] for r in reads) and (span := _span(src, file, int(loc.rsplit(":", 1)[1]), name))
     )
     bodies: tuple[Body, ...] = ()
-    if merged := _merged(name, order, canon, sites, src, norm, scope):
+    if not defkeys and (merged := _merged(name, order, canon, sites, src, norm, scope)):
         body, spans = merged
         bodies = tuple((f, s, e, "{ " + body + " }") for f, s, e in spans)
         ctext = _rebody(ctext, body) if _ANON.match(canon) else ctext
@@ -490,7 +493,64 @@ def plan(
     )
     files = frozenset({e[0] for e in edits} | {cloc.rsplit(":", 1)[0]} | callers | {b[0] for b in bodies})
     files |= {f for f, _ in includes}
-    return Plan(name, canon, why, ctext, tuple(edits), files, reads, keep, params, callers, bodies, includes)
+    return Plan(name, canon, why, ctext, tuple(edits), files, reads, keep, params, callers, bodies, includes=includes)
+
+
+def definition_plan(
+    name: str,
+    sites: Mapping[str, Site],
+    src: Sources,
+    norm: Norm,
+    header: str,
+    users: Iterable[str],
+    scope: Iterable[str],
+    closures: Iterable[frozenset[str]],
+) -> Plan | str:
+    """One physical definition owns the declaration; no alternate type is attempted."""
+    definitions = {loc for loc, (kind, _, _) in sites.items() if kind in ("fdef", "vdef")}
+    if not definitions:
+        return "no definition"
+    if len(definitions) != 1:
+        return "multiple definitions"
+    got = plan(name, sites, 0, src, norm, scope, closures)
+    if not isinstance(got, Plan):
+        return got
+    defining = next(iter(definitions))
+    file, line = defining.rsplit(":", 1)
+    span = _span(src, file, int(line), name)
+    ctext = _decl_text(src.text(file)[1][span[0] : span[1]], name) if span else None
+    if not ctext:
+        return "no source text for the definition"
+    if re.search(r"\b(?:struct|union)\s*\{", ctext):
+        return "cannot retain anonymous definition type in a separate declaration"
+    ctext = _spell(ctext, norm)
+    if sites[defining][0] == "vdef":
+        ctext = "extern " + ctext
+    edits = []
+    for loc, (kind, _, _) in sorted(sites.items()):
+        if kind in ("fdef", "vdef"):
+            continue
+        file, line = loc.rsplit(":", 1)
+        span = _span(src, file, int(line), name)
+        if not span:
+            return f"no source statement at {loc}"
+        edits.append((file, *span))
+    users = set(users) | {loc.rsplit(":", 1)[0] for loc in sites}
+    includes = set(got.includes) | {(f, header) for f in users if f != header}
+    try:
+        src.text(header)
+    except FileNotFoundError:
+        src.missing.add(header)
+        src._text[header] = ("", "")
+    return replace(
+        got,
+        header=header,
+        ctext=ctext,
+        bodies=(),
+        edits=tuple(edits),
+        includes=tuple(sorted(includes)),
+        files=got.files | users | {header},
+    )
 
 
 def readers(found: Plan, sites: Mapping[str, Site], closures: Iterable[frozenset[str]], src: Sources) -> Plan:
@@ -633,7 +693,11 @@ def _calls(b: str, name: str, params: Sequence[str], skip: Sequence[tuple[int, i
 
 def render(path: str, plans: Iterable[Plan], src: Sources) -> str:
     """The text of `path` with the edits of `plans` that fall in it, from the original text."""
-    t, b = src.text(path)
+    plans = list(plans)
+    try:
+        t, b = src.text(path)
+    except FileNotFoundError:
+        t, b = "", ""
     spans: defaultdict[tuple[int, int], list[Plan]] = defaultdict(list)
     for p in plans:
         for file, s, e in p.edits:
@@ -651,7 +715,14 @@ def render(path: str, plans: Iterable[Plan], src: Sources) -> str:
         at = max((m.end() for m in re.finditer(r"^[ \t]*#[ \t]*include\b.*$", b, re.M) if m.end() <= first), default=0)
         have = {m[1] for m in re.finditer(r'#[ \t]*include[ \t]*"([^"]+)"', b)}
         text = "".join(
-            f'\n#include "{h.removeprefix("include/")}"' for h in wanted if h.removeprefix("include/") not in have
+            f'\n#include "{spelled}"'
+            for h in wanted
+            for spelled in [
+                h.removeprefix("include/")
+                if h.startswith("include/")
+                else posixpath.relpath(h, posixpath.dirname(path))
+            ]
+            if spelled not in have
         )
         if text:
             ops.append((at, at, text if at else text[1:] + "\n"))
@@ -668,13 +739,16 @@ def render(path: str, plans: Iterable[Plan], src: Sources) -> str:
         for i, part in enumerate(ws(p) for p in parts):
             hit = [p for p in held if re.search(r"\b" + re.escape(p.name) + r"\b", part)]
             if len(parts) == 1 or hit:
-                used.append((hit[0] if hit else held[0]).ctext)
+                chosen = hit[0] if hit else held[0]
+                if chosen.header:
+                    continue
+                used.append(chosen.ctext)
                 texts.append(pre + used[-1] + ";")
             elif i == 0:
                 texts.append(pre + part + ";")
             else:
                 mm = re.match(
-                    r"^(.*?)\s*\**\s*\b\w+\b\s*(\[.*)?$", ws(parts[0])
+                    r"^(.*?)\s*\**\s*\b\w+\b\s*(?:\[.*|\(.*)?$", ws(parts[0])
                 )  # the type before the first declarator
                 texts.append(pre + ws((mm[1] if mm else "") + " " + part) + ";")
         new = ("\n" + indent).join(texts)
@@ -682,4 +756,13 @@ def render(path: str, plans: Iterable[Plan], src: Sources) -> str:
             new = "".join(f"{tag}; " for ctext in used for tag in _tags(ctext)) + new
         t = t[:s] + new + t[e:]
         b = b[:s] + " " * len(new) + b[e:]  # offsets of the lower spans, edited next, stay valid
+    declarations = [p for p in plans if p.header == path]
+    if declarations:
+        from unbake import hoist
+
+        lines: list[str] = []
+        for p in sorted(declarations, key=lambda p: p.name):
+            lines.extend(f"{tag};" for tag in _tags(p.ctext))
+            lines.append(p.ctext + ";")
+        t = hoist._compose(t, path, (), list(dict.fromkeys(lines)))
     return t
