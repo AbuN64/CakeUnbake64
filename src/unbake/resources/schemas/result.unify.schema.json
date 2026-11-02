@@ -13,7 +13,9 @@
     "rounds",
     "verified",
     "rebuilt",
-    "files"
+    "files",
+    "objects",
+    "held"
   ],
   "properties": {
     "names": {
@@ -105,6 +107,41 @@
       "type": "array",
       "items": {
         "type": "object"
+      }
+    },
+    "objects": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "error",
+          "names"
+        ],
+        "properties": {
+          "error": {
+            "description": "First compiler diagnostics for this bad object, or the object-difference reason.",
+            "type": "string",
+            "minLength": 1
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "held": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "minProperties": 1
       }
     }
   },

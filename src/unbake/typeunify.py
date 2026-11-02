@@ -226,6 +226,25 @@ def differing(units: Iterable[Unit], made: Mapping[Unit, str | None], base: Mapp
     return sorted(u for u in units if made[u] != base[u])
 
 
+def object_groups(bad: set[Unit], units_of: Mapping[str, frozenset[Unit]]) -> list[tuple[tuple[str, ...], set[Unit]]]:
+    """Connected names sharing a bad object: independent groups share one build per round."""
+    groups: list[tuple[set[str], set[Unit]]] = []
+    for unit in sorted(bad):
+        names = {n for n, units in units_of.items() if unit in units}
+        if not names:
+            raise Refusal(Finding("unify.isolation", f"no remaining rewrite reaches {target(unit)}"))
+        units = {unit}
+        rest = []
+        for held, objects in groups:
+            if names & held:
+                names |= held
+                units |= objects
+            else:
+                rest.append((held, objects))
+        groups = [*rest, (names, units)]
+    return [(tuple(sorted(names)), units) for names, units in groups]
+
+
 def _write(root: Path, files: Iterable[str], held: Iterable[Plan], src: Sources) -> None:
     held = list(held)
     for path in sorted(files):
@@ -306,6 +325,8 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
     spent: dict[str, float] = defaultdict(float)
     tried: set[Unit] = set()
     errors: dict[str, str] = {}
+    objects: dict[str, Json] = {}
+    held_objects: dict[str, dict[str, str]] = defaultdict(dict)
     plans: dict[str, Plan] = {}
     # Read project texts once: users without a local declaration still need the owning header.
     paths = sorted(
@@ -369,16 +390,82 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
         with stages.stage("unify.rebuild"):
             made = rebuild(root, seams, span, errors)
         bad = set(differing(span, made, base))
-        # Isolate by object, never by trying names: every rewrite reaching a bad object is held.
-        for name, got in plans.items():
-            implicated = sorted(bad & units_of[name])
-            spent[name] = (time.monotonic() - started) / len(plans)
-            if implicated:
-                failed[name][got.canon] = "; ".join(
-                    f"{target(u)}: {'does not build' if made[u] is None else 'object differs'}" for u in implicated
+        active = dict(plans)
+        while bad:
+            for u in sorted(bad):
+                why = (
+                    "does not build: " + errors.get(target(u), "no compiler error in the log")
+                    if made[u] is None
+                    else "object differs"
                 )
-            else:
-                settled[name] = got
+                objects.setdefault(target(u), {"error": why, "names": []})
+            tasks = object_groups(bad, {n: units_of[n] for n in active})
+            rejected: set[str] = set()
+            while tasks:
+                split = []
+                for candidates, affected in tasks:
+                    if len(candidates) == 1:
+                        name = candidates[0]
+                        rejected.add(name)
+                        for u in sorted(affected):
+                            path = target(u)
+                            why = (
+                                "does not build: " + errors.get(path, "no compiler error in the log")
+                                if made[u] is None
+                                else "object differs"
+                            )
+                            held_objects[name][path] = why
+                            objects[path]["names"].append(name)
+                    else:
+                        mid = len(candidates) // 2
+                        split.append((candidates[:mid], candidates[mid:], affected))
+                if not split:
+                    break
+                # The other half stays in the background in later trials. This also
+                # isolates interacting edits and multiple culprits in the same object.
+                omitted = {n for _, right, _ in split for n in right}
+                trial = [p for n, p in active.items() if n not in omitted]
+                _write(root, files, trial, src)
+                testing = set().union(*(affected for _, _, affected in split))
+                with stages.stage("unify.isolate"):
+                    trial_made = rebuild(root, seams, testing, errors)
+                built += 1
+                rebuilt += len(testing)
+                broken_trial = set(differing(testing, trial_made, base))
+                tasks = []
+                for left, right, affected in split:
+                    broken_left = affected & broken_trial
+                    if broken_left:
+                        tasks.append((left, broken_left))
+                        for u in broken_left:
+                            made[u] = trial_made[u]
+                    else:
+                        tasks.append((right, affected))
+            for name in sorted(rejected):
+                del active[name]
+            _write(root, files, active.values(), src)
+            # A second independent culprit may have been masked by the first error.
+            testing = {u for u in bad if any(u in units_of[n] for n in active)}
+            with stages.stage("unify.isolate.verify"):
+                made = rebuild(root, seams, testing, errors)
+            if testing:
+                built += 1
+                rebuilt += len(testing)
+            remaining_bad = set(differing(testing, made, base))
+            # Removing one culprit can also clear another object's interacting
+            # failure, even when that object passed an earlier half-trial.
+            for u in sorted(bad - remaining_bad):
+                path = target(u)
+                for name in sorted(rejected):
+                    if u in units_of[name] and name not in objects[path]["names"]:
+                        objects[path]["names"].append(name)
+                        held_objects[name][path] = objects[path]["error"]
+            bad = remaining_bad
+        settled.update(active)
+        for name, got in plans.items():
+            spent[name] = (time.monotonic() - started) / len(plans)
+            if name in held_objects:
+                failed[name][got.canon] = "; ".join(f"{p}: {e}" for p, e in sorted(held_objects[name].items()))
             say(line(name, settled.get(name), failed[name], spent[name]))
         _write(root, files, settled.values(), src)
     reached = set().union(tried, *(reach(census, p) for p in settled.values()))
@@ -410,7 +497,9 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
         "unresolved": {n: dict(failed[n]) for n in todo if n not in settled},
         "seconds": {n: round(spent[n], 3) for n in todo},
         "batches": built,
-        "rounds": int(bool(plans)),
+        "rounds": built,
+        "objects": dict(sorted(objects.items())),
+        "held": {n: dict(sorted(v.items())) for n, v in sorted(held_objects.items())},
         "verified": len(back),
         "rebuilt": rebuilt,
         "files": sorted({f for p in settled.values() for f in p.files}),

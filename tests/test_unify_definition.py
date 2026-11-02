@@ -170,18 +170,21 @@ def test_multiple_physical_definitions_are_never_forced(
     assert (tmp_path / FUNCTION_HEADER).read_text() == before
 
 
-def test_all_names_touching_one_bad_object_are_held(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bad_object_pins_only_the_name_that_breaks_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     world = World(tmp_path)
     user = tmp_path / CALLER
     user.write_text(user.read_text() + f"extern char {DATA}[];\nvoid *shared(void) {{ return {DATA}; }}\n")
-    before = user.read_text()
     world.different.add(CALLER)
     result = invoke(world, monkeypatch)
-    assert result["unified"] == {}
-    assert {FUNCTION, DATA, MISSING} == set(result["unresolved"])
-    assert user.read_text() == before
-    assert not (tmp_path / DATA_HEADER).exists()
-    assert len(world.calls) == 3
+    assert set(result["unified"]) == {DATA}
+    assert set(result["unresolved"]) == {FUNCTION, MISSING}
+    assert FUNCTION in user.read_text() and "extern char" not in user.read_text()
+    assert (tmp_path / DATA_HEADER).exists()
+    assert set(result["held"]) == {FUNCTION}
+    assert all(v["names"] == [FUNCTION] for v in result["objects"].values())
+    assert len(world.calls) == 5  # baseline, wave, split, reduced wave, final drift
+    assert all(CALLER + ".o" in t for t in world.calls[2])
+    assert len(world.calls[2]) == 2  # only the two bad version objects, never the whole wave
 
 
 def test_existing_same_type_declarations_are_removed_and_other_names_survive(
@@ -268,3 +271,118 @@ def test_one_physical_definition_with_version_dependent_types_is_not_forced(
     result = invoke(world, monkeypatch)
     assert result["unresolved"][FUNCTION] == {"": "definition type differs across versions"}
     assert (tmp_path / FUNCTION_HEADER).read_text() == before
+
+
+@pytest.mark.parametrize("interaction", [False, True])
+def test_one_object_with_two_culprits_or_an_interaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interaction: bool
+) -> None:
+    world = World(tmp_path)
+    user = tmp_path / CALLER
+    user.write_text(user.read_text() + f"extern char {DATA}[];\nvoid *shared(void) {{ return {DATA}; }}\n")
+    original = world.make
+
+    def make(targets: Sequence[str]) -> tuple[int, str]:
+        code, log = original(targets)
+        function = "struct PlayerLoadoutSelectionView *player);" in (tmp_path / FUNCTION_HEADER).read_text()
+        data = (tmp_path / DATA_HEADER).exists()
+        for t in targets:
+            if CALLER + ".o" in t and ((function and data) if interaction else (function or data)):
+                (tmp_path / t).write_text("different")
+        return code, log
+
+    world.seams = Seams(world.units, world.read, make)
+    result = invoke(world, monkeypatch)
+    assert set(result["unified"]) == ({FUNCTION} if interaction else set())
+    assert set(result["held"]) == ({DATA} if interaction else {FUNCTION, DATA})
+
+
+def test_failed_object_and_held_name_keep_compiler_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = World(tmp_path)
+    world.broken.add(CALLER)
+    original = world.make
+
+    def make(targets: Sequence[str]) -> tuple[int, str]:
+        code, log = original(targets)
+        if code:
+            log = "".join(f"{t[:-2]}.i:12: error: unknown type name 'u32'\n" for t in targets) + log
+        return code, log
+
+    world.seams = Seams(world.units, world.read, make)
+    result = invoke(world, monkeypatch)
+    assert all("unknown type name 'u32'" in o["error"] for o in result["objects"].values())
+    assert all("unknown type name 'u32'" in e for e in result["held"][FUNCTION].values())
+
+
+def test_object_groups_join_transitively_and_keep_independent_groups() -> None:
+    a, b, c = ("us", "a"), ("us", "b"), ("us", "c")
+    groups = typeunify.object_groups({a, b, c}, {"x": frozenset({a}), "y": frozenset({a, b}), "z": frozenset({c})})
+    assert groups == [(("x", "y"), {a, b}), (("z",), {c})]
+
+
+@pytest.mark.parametrize("kind", ["object", "compiler"])
+def test_shared_owning_header_bisects_many_innocent_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    world = World(tmp_path)
+    names = [f"Innocent{i}" for i in range(8)]
+    definition = tmp_path / DEFINITION
+    header = tmp_path / FUNCTION_HEADER
+    definition.write_text(definition.read_text() + "".join(f"void {n}(int value) {{ }}\n" for n in names))
+    header.write_text(header.read_text() + "".join(f"int {n}(int value);\n" for n in names))
+    caller = tmp_path / CALLER
+    caller.write_text('#include "ACHIEVE/MATCH_QUALIFIES/MATCH_QUALIFIES.H"\n' + caller.read_text())
+    (world.different if kind == "object" else world.broken).add(CALLER)
+    original = world.make
+
+    def make(targets: Sequence[str]) -> tuple[int, str]:
+        code, log = original(targets)
+        diagnostics = "".join(
+            f"{t[:-2]}.i:12: error: unknown type name 'PlayerLoadoutSelectionView'\n"
+            for t in targets
+            if not (tmp_path / t).exists()
+        )
+        return code, diagnostics + log
+
+    world.seams = Seams(world.units, world.read, make)
+    result = invoke(world, monkeypatch)
+    assert set(result["unified"]) == {DATA, *names}
+    assert set(result["held"]) == {FUNCTION}
+    error = (
+        "object differs"
+        if kind == "object"
+        else "does not build: error: unknown type name 'PlayerLoadoutSelectionView'"
+    )
+    objects = {typeunify.target((version, CALLER)) for version in world.units()}
+    assert result["objects"] == {obj: {"error": error, "names": [FUNCTION]} for obj in objects}
+    assert result["held"][FUNCTION] == dict.fromkeys(objects, error)
+    final_header = header.read_text()
+    assert all(f"void {name}(int value);" in final_header for name in names)
+    assert "struct PlayerLoadoutSelectionView *player);" not in final_header
+    assert len(world.calls) == 7  # three halvings for nine names, one reduced wave, final drift
+    assert all(len(batch) == 2 and all(CALLER + ".o" in t for t in batch) for batch in world.calls[2:-1])
+
+
+def test_interacting_object_cleared_by_another_objects_culprit_is_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = World(tmp_path)
+    for unit in (CALLER, BARE_CALLER):
+        path = tmp_path / unit
+        path.write_text(path.read_text() + f"extern char {DATA}[];\nvoid *shared(void) {{ return {DATA}; }}\n")
+    original = world.make
+
+    def make(targets: Sequence[str]) -> tuple[int, str]:
+        code, log = original(targets)
+        function = "struct PlayerLoadoutSelectionView *player);" in (tmp_path / FUNCTION_HEADER).read_text()
+        data = (tmp_path / DATA_HEADER).exists()
+        for t in targets:
+            if function and (CALLER + ".o" in t or (BARE_CALLER + ".o" in t and data)):
+                (tmp_path / t).write_text("different")
+        return code, log
+
+    world.seams = Seams(world.units, world.read, make)
+    result = invoke(world, monkeypatch)
+    assert set(result["unified"]) == {DATA}
+    assert len(result["objects"]) == len(result["held"][FUNCTION]) == 4
+    assert all(o["names"] == [FUNCTION] for o in result["objects"].values())
