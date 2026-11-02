@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """The rig deploy steps of CakeUnbake64: one step per `.deploy` line, each an entry point of this file. The close runs
 them in file order on the rig at the landed revision, from the root of the tree, with
-LANDED_Projects_AbuN64_CakeUnbake64 set and `deploy-env TOOLKIT=<live link>` in the environment; it appends its own
+LANDED_Projects_AbuN64_CakeUnbake64 set and `deploy-input TOOLKIT` (the live link) in the environment; it appends its own
 landing arguments, which no step reads.
-This repository owns its own rig toolkit, the live link `deploy-env TOOLKIT=` names, and no other repository names it.
+This repository owns its own rig toolkit, the live link `deploy-input TOOLKIT` names, and no other repository names it.
 Its commands (unbake, unbake-run) are published by name into the one command directory `commands` beside the toolkit
 link, the directory the rig job PATH holds; a consumer calls them by name only. A step prints its facts and exits 0, or
 prints one line on stderr and exits 1; it calls no other tool of the close and none of another repository's toolkit.
@@ -25,9 +25,9 @@ prints one line on stderr and exits 1; it calls no other tool of the close and n
              removed, keeping the live one and `<toolkit>.previous`, with any leftover temporary sibling and any
              `<toolkit>.<SHA>` link left dangling. Nothing is removed before the readback holds.
 
-  deploy-env TOOLKIT=<live link>
+  deploy-input TOOLKIT
   rig run ci/deploy_rig.py name
-  rig activate ci/deploy_rig.py <live link> build
+  rig activate ci/deploy_rig.py $TOOLKIT build
   rig run ci/deploy_rig.py readback"""
 
 import hashlib
@@ -173,7 +173,7 @@ def landed(environ: dict[str, str]) -> tuple[str, str]:
         raise Refused(f"{ENV} is not a 40-hex SHA: {sha!r}")
     toolkit = environ.get("TOOLKIT", "")
     if not toolkit.startswith("/"):
-        raise Refused(f"TOOLKIT is not an absolute path (a `deploy-env TOOLKIT=<live link>` line): {toolkit!r}")
+        raise Refused(f"TOOLKIT is not an absolute path (a `deploy-input TOOLKIT` line): {toolkit!r}")
     return sha, toolkit
 
 
