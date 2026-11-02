@@ -148,6 +148,9 @@ def test_a_whole_short_stretch_equal_to_accounted_bytes_is_a_copy_the_windows_mi
 
 
 def test_a_short_stretch_needs_distinct_values_and_a_source_that_is_whole_accounted_bytes():
-    roms = {"a": rom((0x100, NOISE[:64]), (0x200, bytes([5, 6]) * 8)), "b": rom((0x400, NOISE[0:12]), (0x500, bytes([5, 6]) * 8))}
+    roms = {
+        "a": rom((0x100, NOISE[:64]), (0x200, bytes([5, 6]) * 8)),
+        "b": rom((0x400, NOISE[0:12]), (0x500, bytes([5, 6]) * 8)),
+    }
     spans = {"a": [(0x100, 0x108), (0x200, 0x210)], "b": []}
     assert blob_stale.short_copies(roms, spans, "b", [(0x400, 0x40C), (0x500, 0x510)]) == []  # source cut / two values

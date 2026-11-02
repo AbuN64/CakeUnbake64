@@ -1,2 +1,0 @@
-bin/dev-setup && bin/lint && bin/test
-host=rig

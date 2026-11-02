@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import re
 import struct
-from bisect import bisect_right
 from collections import defaultdict
 from importlib import import_module
 from pathlib import Path
