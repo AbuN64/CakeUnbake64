@@ -5,8 +5,8 @@ The make seam counts the sequential makes and the units they compile."""
 from __future__ import annotations
 
 import re
-from itertools import pairwise
 from collections.abc import Sequence
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
