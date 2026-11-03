@@ -215,8 +215,9 @@ result and `--out` hold the seconds spent (a batch's time is shared by its names
 With `--result FILE` (and `--out`) unify writes both files again after every isolate round, each whole and atomically,
 so a run killed by a job bound leaves the names it had rejected: `complete` is false and only decided names are listed.
 Run the same command again on the tree restored to the state the cut run started from (`git checkout`): the names
-the file rejected are not tried again, and the final `--result` and `--out` equal an uninterrupted run's, apart from
-the counts of builds (`batches`, `rounds`, `rebuilt`), which are this run's. A file of another baseline or other names
+the file rejected are not tried again, and the final `--result` and `--out` are byte-identical to an uninterrupted
+run's (the counts of builds, `batches`, `rounds` and `rebuilt`, are the run's own work and stay out of the file).
+A file of another baseline or other names
 refuses with `unify.resume`; an empty or finished file starts afresh.
 
 Refusals (exit 1, nothing is reported as a pass): `unify.units` (no built unit: run `unbake setup`),

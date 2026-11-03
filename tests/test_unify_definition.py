@@ -241,7 +241,7 @@ def test_a_unify_cut_short_in_its_isolate_rounds_leaves_its_decisions_and_the_re
     resumed = invoke(again, monkeypatch, result=partial, out=table)
     assert len(again.calls) == 3  # baseline, wave, final check: the rejected name is not isolated again
     assert stable(resumed) == stable(result)
-    assert stable(json.loads(partial.read_text())) == stable(json.loads(whole.with_suffix(".json").read_text()))
+    assert partial.read_bytes() == whole.with_suffix(".json").read_bytes()
     assert table.read_bytes() == whole.with_suffix(".tsv").read_bytes()
 
 

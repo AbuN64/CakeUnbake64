@@ -24,6 +24,7 @@ Facts = tuple[list[str], list[Stmt], frozenset[str], frozenset[str]]  # (typedef
 _FAILED = re.compile(r"\*\*\* \[(?:[^\]\s]+: )?([^\]\s]+\.o)\]")
 _WORD = re.compile(r"[A-Za-z_]\w*")
 _POINTER = re.compile(r"\(\s*\*")
+WORK = ("batches", "rounds", "rebuilt")  # counts of the builds one run made: not part of what it decided
 ERROR_LINES = 3  # compiler error lines kept per failing object
 
 
@@ -692,8 +693,11 @@ def _keeper(result: Path | None, out: Path | None) -> Callable[[Json], None]:
     last one."""
 
     def keep(document: Json) -> None:
-        if result:
-            store.write(result, (json.dumps(document, indent=1, sort_keys=True) + "\n").encode())
+        if (
+            result
+        ):  # the counts of builds are the run's own work: a resumed run's file equals a whole run's without them
+            decided = {k: v for k, v in document.items() if k not in WORK}
+            store.write(result, (json.dumps(decided, indent=1, sort_keys=True) + "\n").encode())
         if out:
             store.write(out, _rows(document).encode())
 
