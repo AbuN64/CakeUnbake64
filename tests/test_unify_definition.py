@@ -316,7 +316,7 @@ def test_failed_object_and_held_name_keep_compiler_error(tmp_path: Path, monkeyp
 
 def test_object_groups_join_transitively_and_keep_independent_groups() -> None:
     a, b, c = ("us", "a"), ("us", "b"), ("us", "c")
-    groups = typeunify.object_groups({a, b, c}, {"x": frozenset({a}), "y": frozenset({a, b}), "z": frozenset({c})})
+    groups = typeunify._object_groups({a, b, c}, {"x": frozenset({a}), "y": frozenset({a, b}), "z": frozenset({c})})
     assert groups == [(("x", "y"), {a, b}), (("z",), {c})]
 
 

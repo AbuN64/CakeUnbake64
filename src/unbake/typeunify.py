@@ -226,13 +226,13 @@ def differing(units: Iterable[Unit], made: Mapping[Unit, str | None], base: Mapp
     return sorted(u for u in units if made[u] != base[u])
 
 
-def object_groups(bad: set[Unit], units_of: Mapping[str, frozenset[Unit]]) -> list[tuple[tuple[str, ...], set[Unit]]]:
+def _object_groups(bad: set[Unit], units_of: Mapping[str, frozenset[Unit]]) -> list[tuple[tuple[str, ...], set[Unit]]]:
     """Connected names sharing a bad object: independent groups share one build per round."""
     groups: list[tuple[set[str], set[Unit]]] = []
     for unit in sorted(bad):
         names = {n for n, units in units_of.items() if unit in units}
         if not names:
-            raise Refusal(Finding("unify.isolation", f"no remaining rewrite reaches {target(unit)}"))
+            raise Refusal(Finding("unify.build", f"no remaining rewrite reaches {target(unit)}"))
         units = {unit}
         rest = []
         for held, objects in groups:
@@ -399,7 +399,7 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
                     else "object differs"
                 )
                 objects.setdefault(target(u), {"error": why, "names": []})
-            tasks = object_groups(bad, {n: units_of[n] for n in active})
+            tasks = _object_groups(bad, {n: units_of[n] for n in active})
             rejected: set[str] = set()
             while tasks:
                 split = []
