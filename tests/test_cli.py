@@ -430,6 +430,7 @@ def test_every_result_carries_the_cache_counts_of_its_command_even_when_short(
             "hits": 1,
             "misses": 2,
             "kinds": {"build": {"hits": 0, "misses": 2}, "score": {"hits": 1, "misses": 0}},
+            "replayed": 0,
         }
 
 
