@@ -457,6 +457,7 @@ def run(
         files = {f for p in fresh.values() for f in p.files}
         _write(root, files, fresh.values(), src)
         units_of = {n: reach(census, p) for n, p in fresh.items()}
+        touches = {n: touched(census, p) for n, p in fresh.items()}
         span = set().union(*units_of.values())
         tried |= span
         built, rebuilt = 1, len(span)
@@ -500,11 +501,16 @@ def run(
                 omitted = {n for _, right, _ in split for n in right}
                 trial = [p for n, p in active.items() if n not in omitted]
                 _write(root, files, trial, src)
-                testing = set().union(*(affected for _, _, affected in split))
+                # An object the left half does not touch is built as in the last trial that passed it, so it
+                # cannot break in this one: only the objects the left half touches are rebuilt.
+                testing = set().union(
+                    *({u for u in affected if any(u in touches[n] for n in left)} for left, _, affected in split)
+                )
                 with stages.stage("unify.isolate"):
                     trial_made = rebuild(root, seams, testing, errors)
-                built += 1
-                rebuilt += len(testing)
+                if testing:
+                    built += 1
+                    rebuilt += len(testing)
                 broken_trial = set(differing(testing, trial_made, base))
                 tasks = []
                 for left, right, affected in split:
