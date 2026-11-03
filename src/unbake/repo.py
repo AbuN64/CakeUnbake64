@@ -495,7 +495,7 @@ def _code_aliases(config: Config, current: Any, version: str) -> set[str]:
     return {
         n
         for n in candidates
-        if aliases[n][2] is None and aliases[n][3] == "data" and n in facts
+        if aliases[n][2] is None and aliases[n][3] not in ("func", "label") and n in facts
         for vram, rom, _, _ in [facts[n]]
         if rom is not None
         and any(
