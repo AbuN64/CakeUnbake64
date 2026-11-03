@@ -466,16 +466,55 @@ def _narrowed(config: Config, current: Any, lines: Callable[[str], list[str]]) -
     return touched
 
 
+def _code_aliases(config: Config, current: Any, version: str) -> set[str]:
+    """Unsized linker-only identities inside explicitly sized C code, in this version's ROM/RAM mapping.
+
+    A symbol_addrs or earlier-build row is a byte-owning fact, even if aliases.txt repeats it. A sized alias
+    likewise describes bytes (for example literals_), not just an address. Neither can bypass ownership.
+    """
+    root = config.project.root
+    paths = symbols.fact_paths(version)
+    rows = [symbols.parse(p.read_text(), name) if (p := root / name).is_file() else {} for name in paths]
+    primary, aliases, earlier = rows
+    candidates = aliases.keys() - primary.keys() - earlier.keys()
+    if not candidates:
+        return set()
+    facts = api.symbols(config, version)
+    spans = [
+        facts[n]
+        for module in current.modules
+        if not configuration.is_assembly(module.path)
+        for n in module.owns.get(version, ())
+        if n in facts
+        and facts[n][3] == "func"
+        and facts[n][1] is not None
+        and (facts[n][2] or 0) > 0
+        and n not in module.stand_ins.get(version, ())
+        and module.sections.get(version, {}).get(n, ".text") == ".text"
+    ]
+    return {
+        n
+        for n in candidates
+        if aliases[n][2] is None and aliases[n][3] == "data" and n in facts
+        for vram, rom, _, _ in [facts[n]]
+        if rom is not None
+        and any(
+            start is not None and size is not None and 0 <= rom - start < size and vram - address == rom - start
+            for address, start, size, _ in spans
+        )
+    }
+
+
 def stand_ins(config: Config, current: Any) -> dict[str, bytes | None]:
-    """The files to write so that a name has a stand-in exactly when no file defines it in C: a stand-in a C body
-    supersedes is removed, and every name of tree.unowned(v) gets a line, under the `#if` of the versions it is
-    unowned in when that is not every version (another version may know the name only as a second name of owned
-    bytes, or not at all: it has no extracted file of that name), in the file owning the previous address of its
-    segment, right after that name's own stand-in (else at the end); when nothing precedes it, in the file owning the
-    next address, right before that name's stand-in (else after the leading includes); a new src/<segment>/<ADDR>.<ext>
-    only when the segment has no owner at all. A library routine (foreign code, see libasm.homes) goes at the end
-    of its library file instead, never into a game file. A data name takes the section of the data next to it: its
-    bytes were part of that name's until now."""
+    """Plan stand-ins for unowned names, excluding linker-only identities inside proven C code.
+
+    Remove stand-ins superseded by C bodies. Guard new stand-ins by the versions that need them: other versions
+    may know the name only as another identity of owned bytes, or not at all. Place each after the previous owner
+    in its segment (after its stand-in, else at the end), or before the next owner when nothing precedes it
+    (before its stand-in, else after the includes). Create src/<segment>/<ADDR>.<ext> only without any owner.
+    Foreign code goes at the end of its library file, never a game file (libasm.homes). A data name takes the
+    section of its neighbour: its bytes were part of that name's until now.
+    """
     root, ext = config.project.root, _extension(current.modules)
     texts: dict[str, list[str]] = {}
     touched: set[str] = set()
@@ -522,9 +561,9 @@ def stand_ins(config: Config, current: Any) -> dict[str, bytes | None]:
     touched |= _narrowed(config, current, lines)
     library = libasm.homes(config, current)  # library routines kept out of game files
     sections = {(v, n): s for m in current.modules for v, names in m.sections.items() for n, s in names.items()}
-    missing = {v: set(current.unowned(v)) for v in config.project.versions}
+    missing = {v: set(current.unowned(v)) - _code_aliases(config, current, v) for v in config.project.versions}
     for v in config.project.versions:
-        unowned = current.unowned(v)
+        unowned = missing[v]
         if not unowned:
             continue
         facts = api.symbols(config, v)

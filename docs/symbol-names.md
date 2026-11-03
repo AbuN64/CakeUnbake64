@@ -67,3 +67,18 @@ Sources: [GCC assembler labels](https://gcc.gnu.org/onlinedocs/gcc/Asm-Labels.ht
 [Microsoft PE/COFF specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format),
 [Apple Mach-O structures](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h),
 [Microsoft decorated names](https://learn.microsoft.com/en-us/cpp/build/reference/decorated-names).
+
+## Linker-only identities inside C code
+
+`versions/<version>/aliases.txt` can retain an address identity whose bytes now belong to a C function. For example,
+`g_libsnHostRequestQueue = 0x800F0F40; // rom:0xF1B40` remains a linker name when that address lies inside an
+explicitly sized C function in the same version. It allocates no bytes: a C data definition, `INCLUDE_DATA`, or
+`INCLUDE_RODATA` there would duplicate the function's instructions. Setup and sync preserve the alias and require
+no data stand-in for it.
+
+This applies only to an unsized data identity present exclusively in aliases.txt, within the function's half-open
+span (start included, end excluded), with matching ROM and RAM offsets. The function must have a C body in that
+version, not assembly or an INCLUDE_ASM stand-in. An unsized function proves no span. A symbol_addrs.txt or
+earlier_build_symbols.txt row still describes an independent piece, even if aliases.txt repeats it; a sized alias
+also describes bytes. Those byte-owning facts, and aliases outside proven C code, still need ownership. When sync
+would add a missing stand-in it refuses `sync.stand-in` before writing its generated files.
