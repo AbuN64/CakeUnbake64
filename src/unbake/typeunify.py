@@ -243,11 +243,14 @@ def _decide(
     trials: Sequence[Sequence[Unit]],
     base: Mapping[Unit, str],
     errors: dict[str, str] | None = None,
+    known: Mapping[Unit, str | None] | None = None,
 ) -> tuple[dict[Unit, str | None], int]:
     """Build the objects of several trials (each in the order to try them) until each trial has met an object that is
     not the baseline's or has built all of its own. Answers unit -> hash (None: did not build) for the objects built,
-    and the number of makes. An object a trial did not reach stays undecided; one it did not need is not built."""
-    made: dict[Unit, str | None] = {}
+    and the number of makes. An object a trial did not reach stays undecided; one it did not need is not built.
+    `known` is the hash of objects already built in the very state the trials give them: they count as built and cost
+    no make, so a trial holding a known failing object is decided without one."""
+    made: dict[Unit, str | None] = {u: h for u, h in (known or {}).items() if any(u in t for t in trials)}
     seen = [0] * len(trials)
     live = set(range(len(trials)))
     size, makes = FIRST_CHUNK, 0
@@ -338,12 +341,14 @@ def _waves(
 
 
 def _write(root: Path, files: Iterable[str], held: Iterable[Plan], src: Sources) -> None:
+    """Write the files as the held rewrites render them: its own stage line, as time between trials is not make time."""
     held = list(held)
-    for path in sorted(files):
-        if path in src.missing and not any(p.header == path for p in held):
-            (root / path).unlink(missing_ok=True)
-            continue
-        store.write(root / path, render(path, held, src).encode("latin-1"))
+    with stages.stage("unify.write"):
+        for path in sorted(files):
+            if path in src.missing and not any(p.header == path for p in held):
+                (root / path).unlink(missing_ok=True)
+                continue
+            store.write(root / path, render(path, held, src).encode("latin-1"))
 
 
 def baseline(root: Path, seams: Seams, units: Mapping[str, Sequence[str]]) -> dict[Unit, str]:
@@ -441,33 +446,36 @@ def run(
     held_objects: dict[str, dict[str, str]] = defaultdict(dict)
     plans: dict[str, Plan] = {}
     built, rebuilt = 0, 0
+    # (object, the rewrites that reach it and were written) -> what it built to: the same state is never built twice
+    memo: dict[tuple[Unit, frozenset[str]], str | None] = {}
     passed: dict[
         Unit, tuple[frozenset[str], str]
     ] = {}  # unit -> (rewrites reaching it, object) of its last passing trial
     # Read project texts once: users without a local declaration still need the owning header.
-    paths = sorted(
-        {f for files in census.closure.values() for f in files}
-        | {
-            p.relative_to(root).as_posix()
-            for folder in (*configuration.source_roots(), *configuration.header_roots())
-            for p in (root / folder).rglob("*")
-            if p.is_file() and configuration.is_text(p.as_posix())
-        }
-    )
-    texts = {f: src.text(f)[0] for f in paths if (root / f).is_file()}
-    users_of = index(texts)
-    headers = sorted(f for f in texts if configuration.is_header(f))
-    include_root = hoist.include_root(texts, headers) or configuration.header_roots()[0] + "/"
-    module_map = configuration.module_map_at(root)
-    owners: dict[str, str] = {}
-    if module_map:
-        mapping = (root / module_map).read_text()
-        targets = mergecheck.read_targets(mapping)
-        rows = mergecheck.read_modules(mapping)
-        members: dict[str, list[str]] = defaultdict(list)
-        for unit, module in rows:
-            members[module].append(unit)
-        owners = {u: mergecheck.merged_path(m, targets.get(m), members[m]) for u, m in rows}
+    with stages.stage("unify.setup"):
+        paths = sorted(
+            {f for files in census.closure.values() for f in files}
+            | {
+                p.relative_to(root).as_posix()
+                for folder in (*configuration.source_roots(), *configuration.header_roots())
+                for p in (root / folder).rglob("*")
+                if p.is_file() and configuration.is_text(p.as_posix())
+            }
+        )
+        texts = {f: src.text(f)[0] for f in paths if (root / f).is_file()}
+        users_of = index(texts)
+        headers = sorted(f for f in texts if configuration.is_header(f))
+        include_root = hoist.include_root(texts, headers) or configuration.header_roots()[0] + "/"
+        module_map = configuration.module_map_at(root)
+        owners: dict[str, str] = {}
+        if module_map:
+            mapping = (root / module_map).read_text()
+            targets = mergecheck.read_targets(mapping)
+            rows = mergecheck.read_modules(mapping)
+            members: dict[str, list[str]] = defaultdict(list)
+            for unit, module in rows:
+                members[module].append(unit)
+            owners = {u: mergecheck.merged_path(m, targets.get(m), members[m]) for u, m in rows}
     for name in todo:
         held = sites_of(census.per, name)
         definitions = sorted(loc for loc, (kind, _, _) in held.items() if kind in ("fdef", "vdef"))
@@ -532,7 +540,8 @@ def run(
 
     def save() -> None:
         if keep:
-            keep(report(False, {}, 0))
+            with stages.stage("unify.save"):
+                keep(report(False, {}, 0))
 
     cut: Json = resume or {"held": {}, "objects": {}, "seconds": {}}
     for name, paths in cut["held"].items():
@@ -558,6 +567,8 @@ def run(
         built, rebuilt = 1, len(span)
         with stages.stage("unify.rebuild"):
             made = rebuild(root, seams, span, errors)
+        for u, object_hash in made.items():
+            memo[u, frozenset(n for n in fresh if u in units_of[n])] = object_hash
         bad = set(differing(span, made, base))
         active = dict(fresh)
         touchers: dict[Unit, set[str]] = defaultdict(set)  # object -> the rewrites that touch it
@@ -571,6 +582,8 @@ def run(
                 # The one closing check: every object reached, built once with the rewrites that remain. It finds a
                 # culprit that an earlier culprit masked, and those only: the rounds trust an explained object.
                 back = _closing(root, seams, census, tried, {**settled, **active}, verify_errors)
+                for u, object_hash in back.items():
+                    memo[u, frozenset(n for n in active if u in units_of[n])] = object_hash
                 masked = {u for u, h in back.items() if h != base[u] and any(u in touches[n] for n in active)}
                 if not masked:
                     break
@@ -601,13 +614,16 @@ def run(
             ) -> None:
                 nonlocal built, rebuilt
                 written = set().union(*(trials[i][0] for i in picks))
-                _write(root, files, [p for n, p in active.items() if n in written], src)
                 # the objects that failed most often in earlier trials first: a trial holding a culprit stops early
                 ordered = [sorted(trials[i][1], key=lambda u: (-suspect[u], u)) for i in picks]
+                states = {u: (u, frozenset(n for n in written if u in units_of[n])) for objs in ordered for u in objs}
+                seen = {u: memo[k] for u, k in states.items() if k in memo}
+                _write(root, files, [p for n, p in active.items() if n in written], src)
                 with stages.stage("unify.isolate"):
-                    trial_made, makes = _decide(root, seams, ordered, base, errors)
+                    trial_made, makes = _decide(root, seams, ordered, base, errors, seen)
+                memo.update({states[u]: h for u, h in trial_made.items() if u not in seen})
                 built += makes
-                rebuilt += len(trial_made)
+                rebuilt += len(trial_made) - len(seen.keys() & trial_made.keys())
                 for i in picks:
                     include, objs = trials[i]
                     results[i] = {u: trial_made[u] for u in objs if u in trial_made}  # the others stay undecided
@@ -694,11 +710,14 @@ def run(
                 if u in passed and passed[u][0] == frozenset(n for n in active if u in units_of[n])
             }
             fresh_units = sorted(testing - known.keys(), key=lambda u: (-suspect[u], u))
+            states = {u: (u, frozenset(n for n in active if u in units_of[n])) for u in fresh_units}
+            seen = {u: memo[k] for u, k in states.items() if k in memo}
             with stages.stage("unify.isolate.verify"):
-                decided, makes = _decide(root, seams, [fresh_units], base, errors)
+                decided, makes = _decide(root, seams, [fresh_units], base, errors, seen)
+            memo.update({states[u]: h for u, h in decided.items() if u not in seen})
             made = {**{u: made[u] for u in carried}, **known, **decided}
             built += makes
-            rebuilt += len(decided)
+            rebuilt += len(decided) - len(seen.keys() & decided.keys())
             unknown = testing - made.keys()
             remaining_bad = carried | set(differing(testing & made.keys(), made, base))
             # Removing one culprit can also clear another object's interacting
@@ -897,7 +916,8 @@ def unify_command(cfg: Config, params: Json) -> Json:
     out = Path(params["out"]) if params.get("out") else None
     keep = _keeper(result_path, out)
     result = run(cfg.project.root, seams(cfg), _names(params.get("names")), keep=keep, resume=_partial(result_path))
-    keep(result)
+    with stages.stage("unify.save"):
+        keep(result)
     notes = [
         Finding(
             "unify.unresolved",
