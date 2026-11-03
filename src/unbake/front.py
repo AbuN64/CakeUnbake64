@@ -91,9 +91,11 @@ def _drop_stored(manifest: Path, objects: Path, root: Path) -> int:
 
 
 def _answered(manifest: Path, root: Path) -> tuple[int, int]:
-    """(compiles the batch answered, compiles the build recorded): the rest run the compiler in the second make."""
+    """(compiles the batch answered, compiles the build recorded): an answer is an assembly or a replayed failure
+    (`<out>.cc`, `<out>.cc.fail`); the rest run the compiler in the second make."""
     parsed = [p for _, args in cc_cache.commands(str(manifest)) if (p := cc_cache.parse(args)) is not None]
-    return sum((root / (out + ".cc")).exists() for _, out in parsed), len(parsed)
+    answers = sum((root / (out + ".cc")).exists() or (root / (out + ".cc.fail")).exists() for _, out in parsed)
+    return answers, len(parsed)
 
 
 def _misses(manifest: Path, objects: Path, root: Path) -> list[str]:
@@ -121,7 +123,7 @@ def _clear(manifest: Path, root: Path) -> None:
     if manifest.exists():
         for _, args in cc_cache.commands(str(manifest)):
             if (parsed := cc_cache.parse(args)) is not None:
-                for suffix in (".cc", ".cc.miss"):
+                for suffix in (".cc", ".cc.fail", ".cc.key", ".cc.miss"):
                     (root / (parsed[1] + suffix)).unlink(missing_ok=True)
     objects = manifest.with_name(manifest.name + ".obj")
     if objects.exists():

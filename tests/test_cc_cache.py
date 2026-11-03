@@ -725,5 +725,70 @@ def test_the_second_build_of_a_failing_compile_runs_no_compiler_and_says_it_fail
     said: list[str] = []
     two_builds(tmp_path, cc, out, monkeypatch, said)
     assert len((tmp_path / "bad.runs").read_text().split()) == 1  # the second build replayed the first one's failure
-    assert [" failed=3" in line for line in said if " miss " in line] == [False, True]
+    assert [line for line in said if "compiles from the cache" in line] == [
+        "make.front: 0 of 1 compiles from the cache, 1 compile",
+        "make.front: 1 of 1 compiles from the cache, 0 compile",
+    ]
+    assert len([line for line in said if " miss " in line]) == 1  # the first round's; the replay is no miss
     assert capfd.readouterr().err.count("x.i:1: error: broken") == 2
+
+
+def test_a_repeated_round_answers_a_passing_and_a_failing_unit_from_the_cache_and_runs_no_compiler(
+    tmp_path, capfd, monkeypatch
+):
+    """The regression slice of dkumJOKlQbjJ's unify.err: a round whose identical keys came again counted 0 of N from the
+    cache (3622 of 3637 were failed trial compiles the cache held) and started the front for each. Two front.build
+    rounds over one passing and one failing unit: the second has both from the cache and the compiler runs 0 times."""
+    cc, cache, root = tmp_path / "bin" / "cc1", tmp_path / "content.cc", tmp_path / "tree"
+    cc.parent.mkdir()
+    cc.write_text(
+        f"#!/bin/sh\necho run >> {tmp_path}/runs\n"
+        'while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift;; *.i) src=$1;; esac; shift; done\n'
+        'if grep -q broken "$src"; then echo "$src:1: error: broken" >&2; exit 3; fi\n'
+        'tr a-z A-Z < "$src" > "$out"\n'
+    )
+    cc.chmod(0o755)
+    root.mkdir()
+    for name, text in (("good", "int a;"), ("bad", "int broken;")):
+        (root / f"{name}.i").write_text(text)
+    said: list[str] = []
+    codes: list[list[int]] = []
+
+    def batch(store: Path, where: Path, manifest: Path, workers: int, mode: str = "--batch") -> None:
+        for i in range(workers):
+            cc_cache.batch(str(store), str(where), str(manifest), i, workers)
+
+    monkeypatch.setattr(front_module.process, "batch", batch)
+    monkeypatch.setattr(front_module.stages, "say", lambda text: said.append(text))
+
+    def start(record: str | None, preprocess: bool) -> int:
+        env = {k: v for k, v in os.environ.items() if k != "ABU_CC_COLLECT"}
+        if record:
+            env["ABU_CC_COLLECT"] = record
+        done = [
+            subprocess.run(
+                ["sh", str(FRONT), str(cache), str(cc), "-quiet", "-O2", f"{n}.i", "-o", f"{n}.s"],
+                cwd=root,
+                env=env,
+                check=False,
+            ).returncode
+            for n in ("good", "bad")
+        ]
+        if not record:
+            codes.append(done)
+        return max(done)
+
+    for _ in range(2):
+        front_module.build(start, root, cache, 2)
+        for n in ("good", "bad"):
+            (root / f"{n}.s").unlink(missing_ok=True)
+    counts = [line for line in said if "compiles from the cache" in line]
+    assert counts == [
+        "make.front: 0 of 2 compiles from the cache, 2 compile",
+        "make.front: 2 of 2 compiles from the cache, 0 compile",
+    ]
+    assert codes == [[0, 3], [0, 3]]  # the replayed failure fails the unit as the compiler did
+    assert len((tmp_path / "runs").read_text().split()) == 2  # one run per unit, both in the first round
+    assert len([line for line in said if " miss " in line]) == 2  # only the first round's, none in the second
+    assert capfd.readouterr().err.count("bad.i:1: error: broken") == 2
+    assert not list(root.glob("*.cc*"))  # the answers were taken or cleared

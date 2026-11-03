@@ -301,21 +301,30 @@ def maybe_prune(cache: str) -> None:
         prune(cache, time.time())
 
 
-def take_answer(compiler: str, args: list[str], out: str, text: bytes) -> bool:
-    """The batch's answer for this unit (`<out>.cc`, see `batch`) moved to `out` when its key is the hash of this very
-    command and text; a leftover answer or key of any other kind is dropped."""
+def take_answer(compiler: str, args: list[str], out: str, text: bytes) -> int | None:
+    """The batch's answer for this unit (see `batch`), taken when its key is the hash of this very command and text: an
+    assembly (`<out>.cc`) is moved to `out` (0); a failure (`<out>.cc.fail`: the exit code and what the compiler said)
+    is said again and its exit code returned, so the compiler never runs for a text it already failed on. None: no
+    answer for this command and text (a leftover answer or key of any other kind is dropped)."""
     try:
         with open(out + ".cc.key", encoding="ascii") as handle:
             wanted = handle.read().strip()
         if wanted == answer_key(compiler, args, text):
+            if os.path.exists(out + ".cc.fail"):
+                code, stderr = unpack(read(out + ".cc.fail"))
+                _remove(out + ".cc.fail")
+                _remove(out + ".cc.key")
+                sys.stderr.buffer.write(stderr)
+                sys.stderr.buffer.flush()
+                return int.from_bytes(code, "big")
             os.replace(out + ".cc", out)
             _remove(out + ".cc.key")
-            return True
-    except OSError:
+            return 0
+    except (OSError, ValueError):
         pass
-    _remove(out + ".cc")
-    _remove(out + ".cc.key")
-    return False
+    for suffix in (".cc", ".cc.fail", ".cc.key"):
+        _remove(out + suffix)
+    return None
 
 
 def compile_and_keep(cache: str, name: str, compiler: str, args: list[str], out: str) -> int:
@@ -347,8 +356,8 @@ def run(cache: str, compiler: str, args: list[str]) -> int:
     source, out = parsed
     try:
         text = read(source)
-        if take_answer(compiler, args, out, text):
-            return 0
+        if (taken := take_answer(compiler, args, out, text)) is not None:
+            return taken
         name = key(compiler, args, text)
     except OSError:
         return call(compiler, args)
@@ -676,8 +685,8 @@ def compile_step(words: list[str]) -> int:
         parsed = parse(args)
         if parsed is not None:
             with contextlib.suppress(OSError):
-                if take_answer(compiler, args, parsed[1], read(parsed[0])):
-                    return 0
+                if (taken := take_answer(compiler, args, parsed[1], read(parsed[0]))) is not None:
+                    return taken
     return subprocess.call(words)
 
 
@@ -893,7 +902,9 @@ def commands(manifest: str) -> list[tuple[str, list[str]]]:
 def batch(cache: str, root: str, manifest: str, index: int, count: int) -> int:
     """Resolve, without the compiler, every recorded compile whose number is `index` modulo `count`: its assembly goes
     to `<out>.cc` and its answer key (`answer_key`) to `<out>.cc.key`; the front moves the answer into place only for
-    exactly that command and input. A compile the cache cannot answer is left to the front, which runs the compiler.
+    exactly that command and input. A compile the cache holds a failure of is answered the same way (`<out>.cc.fail`,
+    see `take_answer`) and counts as resolved. A compile the cache cannot answer is left to the front, which runs the
+    compiler.
     Returns how many it resolved."""
     done = 0
     for number, (compiler, args) in enumerate(commands(manifest)):
@@ -904,14 +915,18 @@ def batch(cache: str, root: str, manifest: str, index: int, count: int) -> int:
         try:
             text = read(source)
             found = lookup(cache, compiler, args, text)
-            if found is None:
-                record = miss_record(compiler, args, text, key(compiler, args, text))
-                if (failed := lookup_failure(cache, compiler, args, text)) is not None:
-                    record = record.rstrip(b"\n") + f" failed={failed[0]}\n".encode()
-                write(out + ".miss", record)
+            if found is None and (failed := lookup_failure(cache, compiler, args, text)) is not None:
+                _remove(out + ".miss")
+                _remove(out)
+                write(out + ".fail", pack([failed[0].to_bytes(2, "big"), failed[1]]))
+            elif found is None:
+                _remove(out + ".fail")
+                write(out + ".miss", miss_record(compiler, args, text, key(compiler, args, text)))
                 continue
-            _remove(out + ".miss")
-            write(out, found)
+            else:
+                _remove(out + ".miss")
+                _remove(out + ".fail")
+                write(out, found)
             write(out + ".key", (answer_key(compiler, args, text) + "\n").encode())
         except OSError:
             continue
