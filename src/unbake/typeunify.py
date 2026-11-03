@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import time
 from collections import Counter, defaultdict
@@ -307,9 +308,18 @@ def line(name: str, got: Plan | None, failed: Mapping[str, str], seconds: float)
     )
 
 
-def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Callable[[str], None] = stages.say) -> Json:
+def run(
+    root: Path,
+    seams: Seams,
+    names: Sequence[str] | None = None,
+    say: Callable[[str], None] = stages.say,
+    keep: Callable[[Json], None] | None = None,
+    resume: Json | None = None,
+) -> Json:
     """Settle one type for each clashing name (or each of `names`); the tree keeps the rewrites that held. `say` takes
-    one line per name as soon as it is settled or out of candidates."""
+    one line per name as soon as it is settled or out of candidates. `keep` takes the result as far as it is decided
+    (`complete` false) after every isolate round, so a run cut short leaves its rounds; `resume` is such a result of a
+    cut run on the same tree: the names it rejected stay rejected and are not tried again."""
     units = seams.units()
     if not any(units.values()):
         raise Refusal(Finding("unify.units", "no compiled unit found: build the tree first (unbake setup)"))
@@ -320,6 +330,17 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
         found = clashes(census.per)
     src = Sources(lambda p: (root / p).read_bytes().decode("latin-1"))
     todo = sorted(found if names is None else [n for n in names if n in found])
+    signature = hashlib.sha1(
+        json.dumps([sorted(f"{v}\t{u}\t{h}" for (v, u), h in base.items()), todo]).encode()
+    ).hexdigest()
+    if resume is not None and resume["baseline"] != signature:
+        raise Refusal(
+            Finding(
+                "unify.resume",
+                "the partial result was made from another baseline or another set of names: restore the tree to the"
+                " state the cut run started from and give the same names, or remove the partial result",
+            )
+        )
     settled: dict[str, Plan] = {}
     failed: dict[str, dict[str, str]] = defaultdict(dict)
     spent: dict[str, float] = defaultdict(float)
@@ -328,6 +349,7 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
     objects: dict[str, Json] = {}
     held_objects: dict[str, dict[str, str]] = defaultdict(dict)
     plans: dict[str, Plan] = {}
+    built, rebuilt = 0, 0
     # Read project texts once: users without a local declaration still need the owning header.
     paths = sorted(
         {f for files in census.closure.values() for f in files}
@@ -378,19 +400,69 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
         else:
             failed[name][""] = got
             say(line(name, None, failed[name], 0))
-    built, rebuilt = 0, 0
-    if plans:
+
+    def why_of(name: str) -> dict[str, str]:
+        out = dict(failed[name])
+        if name in held_objects and name in plans:
+            out[plans[name].canon] = "; ".join(f"{p}: {e}" for p, e in sorted(held_objects[name].items()))
+        return out
+
+    def report(complete: bool, accepted: Mapping[str, Plan], verified: int) -> Json:
+        unresolved = {n: why for n in todo if n not in accepted and (why := why_of(n))}
+        return {
+            "complete": complete,
+            "baseline": signature,
+            "names": len(todo),
+            "clashing": len(found),
+            "units": sum(len(v) for v in units.values()),
+            "unified": {
+                n: {
+                    "type": p.canon,
+                    "why": p.why,
+                    "header": p.header,
+                    "units": len(touched(census, p)),
+                    "seconds": round(spent[n], 3),
+                }
+                for n, p in sorted(accepted.items())
+            },
+            "unresolved": unresolved,
+            "seconds": {n: round(spent[n], 3) for n in todo if n in accepted or n in unresolved},
+            "batches": built,
+            "rounds": built,
+            "objects": {p: {**o, "names": sorted(o["names"])} for p, o in sorted(objects.items())},
+            "held": {n: dict(sorted(v.items())) for n, v in sorted(held_objects.items())},
+            "verified": verified,
+            "rebuilt": rebuilt,
+            "files": sorted({f for p in accepted.values() for f in p.files}),
+        }
+
+    def save() -> None:
+        if keep:
+            keep(report(False, {}, 0))
+
+    cut: Json = resume or {"held": {}, "objects": {}, "seconds": {}}
+    for name, paths in cut["held"].items():
+        if name not in plans:
+            raise Refusal(Finding("unify.resume", f"{name} was rejected by the cut run but has no plan now"))
+        held_objects[name].update(paths)
+        spent[name] = cut["seconds"][name]
+        tried |= reach(census, plans[name])  # the final check still reads what its rewrite touched
+        failed[name].update(why_of(name))
+        say(line(name, None, failed[name], spent[name]))
+    objects.update(cut["objects"])
+    fresh = {n: p for n, p in plans.items() if n not in held_objects}
+    if fresh:
         started = time.monotonic()
-        files = {f for p in plans.values() for f in p.files}
-        _write(root, files, plans.values(), src)
-        units_of = {n: reach(census, p) for n, p in plans.items()}
-        span = set().union(*(reach(census, p) for p in plans.values()))
+        files = {f for p in fresh.values() for f in p.files}
+        _write(root, files, fresh.values(), src)
+        units_of = {n: reach(census, p) for n, p in fresh.items()}
+        span = set().union(*units_of.values())
         tried |= span
         built, rebuilt = 1, len(span)
         with stages.stage("unify.rebuild"):
             made = rebuild(root, seams, span, errors)
         bad = set(differing(span, made, base))
-        active = dict(plans)
+        active = dict(fresh)
         while bad:
             for u in sorted(bad):
                 why = (
@@ -402,6 +474,7 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
             tasks = _object_groups(bad, {n: units_of[n] for n in active})
             rejected: set[str] = set()
             while tasks:
+                save()
                 split = []
                 for candidates, affected in tasks:
                     if len(candidates) == 1:
@@ -441,6 +514,7 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
                             made[u] = trial_made[u]
                     else:
                         tasks.append((right, affected))
+            save()
             for name in sorted(rejected):
                 del active[name]
             _write(root, files, active.values(), src)
@@ -461,11 +535,11 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
                         objects[path]["names"].append(name)
                         held_objects[name][path] = objects[path]["error"]
             bad = remaining_bad
+            save()
         settled.update(active)
-        for name, got in plans.items():
-            spent[name] = (time.monotonic() - started) / len(plans)
-            if name in held_objects:
-                failed[name][got.canon] = "; ".join(f"{p}: {e}" for p, e in sorted(held_objects[name].items()))
+        for name in fresh:
+            spent[name] = (time.monotonic() - started) / len(fresh)
+            failed[name].update(why_of(name))
             say(line(name, settled.get(name), failed[name], spent[name]))
         _write(root, files, settled.values(), src)
     reached = set().union(tried, *(reach(census, p) for p in settled.values()))
@@ -480,30 +554,7 @@ def run(root: Path, seams: Seams, names: Sequence[str] | None = None, say: Calla
         raise Refusal(
             Finding("unify.drift", "after the rewrites an object differs from the baseline", missing=tuple(drift[:20]))
         )
-    return {
-        "names": len(todo),
-        "clashing": len(found),
-        "units": sum(len(v) for v in units.values()),
-        "unified": {
-            n: {
-                "type": p.canon,
-                "why": p.why,
-                "header": p.header,
-                "units": len(touched(census, p)),
-                "seconds": round(spent[n], 3),
-            }
-            for n, p in sorted(settled.items())
-        },
-        "unresolved": {n: dict(failed[n]) for n in todo if n not in settled},
-        "seconds": {n: round(spent[n], 3) for n in todo},
-        "batches": built,
-        "rounds": built,
-        "objects": dict(sorted(objects.items())),
-        "held": {n: dict(sorted(v.items())) for n, v in sorted(held_objects.items())},
-        "verified": len(back),
-        "rebuilt": rebuilt,
-        "files": sorted({f for p in settled.values() for f in p.files}),
-    }
+    return report(True, settled, len(back))
 
 
 READ_CHUNK = 16  # units one worker reads per job: the statements of their shared headers travel once
@@ -626,17 +677,49 @@ def census_command(cfg: Config, params: Json) -> Json:
     }
 
 
+def _rows(result: Json) -> str:
+    """The --out table: a row per decided name."""
+    rows = ["name\tstatus\ttype\tseconds\tfailing per candidate type\n"]
+    for name, secs in sorted(result["seconds"].items()):
+        got = result["unified"].get(name)
+        bad = "; ".join(f"{t or 'no plan'} => {w}" for t, w in result["unresolved"].get(name, {}).items())
+        rows.append(f"{name}\t{'unified' if got else 'unresolved'}\t{got['type'] if got else ''}\t{secs}\t{bad}\n")
+    return "".join(rows)
+
+
+def _keeper(result: Path | None, out: Path | None) -> Callable[[Json], None]:
+    """What writes the result (as JSON) and the --out table: each write replaces the file whole, so a kill leaves the
+    last one."""
+
+    def keep(document: Json) -> None:
+        if result:
+            store.write(result, (json.dumps(document, indent=1, sort_keys=True) + "\n").encode())
+        if out:
+            store.write(out, _rows(document).encode())
+
+    return keep
+
+
+def _partial(path: Path | None) -> Json | None:
+    """The result a cut run left at `path`, or none: no file, an empty one or a finished result start afresh."""
+    if path is None or not path.is_file() or not path.stat().st_size:
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        complete = document["complete"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise Refusal(Finding("unify.resume", f"{path} is not a unify result: {exc}")) from exc
+    return None if complete else document
+
+
 def unify_command(cfg: Config, params: Json) -> Json:
-    """`unbake unify`: the rewrite itself; --names restricts it, --out writes one row per name."""
-    result = run(cfg.project.root, seams(cfg), _names(params.get("names")))
-    out = params.get("out")
-    if out:
-        rows = ["name\tstatus\ttype\tseconds\tfailing per candidate type\n"]
-        for name, secs in sorted(result["seconds"].items()):
-            got = result["unified"].get(name)
-            bad = "; ".join(f"{t or 'no plan'} => {w}" for t, w in result["unresolved"].get(name, {}).items())
-            rows.append(f"{name}\t{'unified' if got else 'unresolved'}\t{got['type'] if got else ''}\t{secs}\t{bad}\n")
-        store.write(Path(out), "".join(rows).encode())
+    """`unbake unify`: the rewrite itself; --names restricts it, --out writes one row per name, --result keeps the
+    result as it is decided and resumes from it when a run was cut short."""
+    result_path = Path(params["result"]) if params.get("result") else None
+    out = Path(params["out"]) if params.get("out") else None
+    keep = _keeper(result_path, out)
+    result = run(cfg.project.root, seams(cfg), _names(params.get("names")), keep=keep, resume=_partial(result_path))
+    keep(result)
     notes = [
         Finding(
             "unify.unresolved",

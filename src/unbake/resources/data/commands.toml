@@ -337,7 +337,8 @@ help = "Give every name declared with more than one type the one declared type t
 handler = "typeunify.unify_command"
 params = [
   { name = "names", kind = "option", type = "path", required = false, multiple = false, help = "only the names in this file (a name per line, or a table in the CLASH.tsv shape); default every clashing name" },
-  { name = "out", kind = "option", type = "path", required = false, multiple = false, help = "write one row per name (status, type, seconds, failing unit per candidate type) here" },
+  { name = "out", kind = "option", type = "path", required = false, multiple = false, help = "write one row per name (status, type, seconds, failing unit per candidate type) here; written after every isolate round, so a cut run leaves the names it decided" },
+  { name = "result", kind = "option", type = "path", required = false, multiple = false, help = "keep the result (JSON) here as it is decided; when a run was cut short this file is its partial result (`complete` false) and the next run resumes from it: the names it rejected are not tried again (restore the tree to the cut run's start first)" },
 ]
 
 [command.type-pool]

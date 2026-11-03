@@ -83,9 +83,9 @@ class World:
         return (2 if failed else 0), "".join(f"make: *** [Makefile:1: {p}] Error 1\n" for p in failed)
 
 
-def invoke(world: World, monkeypatch: pytest.MonkeyPatch) -> dict:
+def invoke(world: World, monkeypatch: pytest.MonkeyPatch, **params: object) -> dict:
     monkeypatch.setattr(typeunify, "seams", lambda cfg: world.seams)
-    result = typeunify.unify_command(SimpleNamespace(project=SimpleNamespace(root=world.root)), {})
+    result = typeunify.unify_command(SimpleNamespace(project=SimpleNamespace(root=world.root)), params)
     schema = Path(typeunify.__file__).parent / "resources/schemas/result.unify.schema.json"
     Draft202012Validator(json.loads(schema.read_text())).validate(result)
     return result
@@ -185,6 +185,74 @@ def test_bad_object_pins_only_the_name_that_breaks_it(tmp_path: Path, monkeypatc
     assert len(world.calls) == 5  # baseline, wave, split, reduced wave, final drift
     assert all(CALLER + ".o" in t for t in world.calls[2])
     assert len(world.calls[2]) == 2  # only the two bad version objects, never the whole wave
+
+
+class Killed(BaseException):
+    """The job bound: the process is gone between two builds."""
+
+
+def shared_object_world(root: Path) -> World:
+    """FUNCTION and DATA meet in one object that differs while both are rewritten; FUNCTION is the culprit."""
+    world = World(root)
+    user = root / CALLER
+    user.write_text(user.read_text() + f"extern char {DATA}[];\nvoid *shared(void) {{ return {DATA}; }}\n")
+    world.different.add(CALLER)
+    return world
+
+
+def stable(result: dict) -> dict:
+    """The decisions of a result: its counts of builds belong to the run that made them."""
+    return {k: v for k, v in result.items() if k not in ("batches", "rounds", "rebuilt")}
+
+
+def test_a_unify_cut_short_in_its_isolate_rounds_leaves_its_decisions_and_the_resume_matches_a_whole_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(typeunify.time, "monotonic", lambda: 0.0)
+    whole = tmp_path / "whole"
+    paths = {"result": whole.with_suffix(".json"), "out": whole.with_suffix(".tsv")}
+    result = invoke(shared_object_world(whole), monkeypatch, **paths)
+    assert result["complete"] is True and set(result["held"]) == {FUNCTION}
+
+    cut_root = tmp_path / "cut"
+    cut = shared_object_world(cut_root)
+    make = cut.make
+
+    def dies(targets: Sequence[str]) -> tuple[int, str]:
+        if len(cut.calls) == 3:  # baseline, wave and split built: the reduced wave is where the bound falls
+            raise Killed
+        return make(targets)
+
+    cut.seams = Seams(cut.units, cut.read, dies)
+    partial, table = cut_root.with_suffix(".json"), cut_root.with_suffix(".tsv")
+    with pytest.raises(Killed):
+        invoke(cut, monkeypatch, result=partial, out=table)
+    left = json.loads(partial.read_text())
+    schema = json.loads((Path(typeunify.__file__).parent / "resources/schemas/result.unify.schema.json").read_text())
+    Draft202012Validator(schema).validate(left)
+    assert left["complete"] is False and left["unified"] == {}
+    assert set(left["held"]) == {FUNCTION} and left["unresolved"][FUNCTION]
+    assert [r.split("\t")[:2] for r in table.read_text().splitlines()[1:]] == [
+        [FUNCTION, "unresolved"],
+        [MISSING, "unresolved"],
+    ]
+
+    again = shared_object_world(tmp_path / "again")  # the tree as the cut run found it
+    resumed = invoke(again, monkeypatch, result=partial, out=table)
+    assert len(again.calls) == 3  # baseline, wave, final check: the rejected name is not isolated again
+    assert stable(resumed) == stable(result)
+    assert stable(json.loads(partial.read_text())) == stable(json.loads(whole.with_suffix(".json").read_text()))
+    assert table.read_bytes() == whole.with_suffix(".tsv").read_bytes()
+
+
+def test_a_partial_result_of_another_baseline_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    partial = tmp_path / "unify.json"
+    partial.write_text(json.dumps({"complete": False, "baseline": "other", "held": {}, "seconds": {}, "objects": {}}))
+    with pytest.raises(typeunify.Refusal) as refused:
+        invoke(World(tmp_path / "tree"), monkeypatch, result=partial)
+    assert refused.value.findings[0].key == "unify.resume"
+    partial.write_text("")  # a job that wrote nothing is no partial result
+    assert invoke(World(tmp_path / "again"), monkeypatch, result=partial)["complete"] is True
 
 
 def test_existing_same_type_declarations_are_removed_and_other_names_survive(

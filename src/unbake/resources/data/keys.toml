@@ -834,6 +834,10 @@ sentence = "generated files changed but no host config was found to run unbake s
 owner = "typeunify"
 sentence = "the build of a rewrite did not run: an empty log, a make exit naming no unit, or an object neither made nor failed"
 
+[key."unify.resume"]
+owner = "typeunify"
+sentence = "the --result file is not a unify result, or the cut run it holds started from another baseline or other names"
+
 [key."unify.baseline"]
 owner = "typeunify"
 sentence = "a unit does not build from the tree as it is, so there is no baseline to compare against"

@@ -189,6 +189,7 @@ without changing one byte of any object of any version.
 unbake census --out CLASH.tsv                   # every clash, in the CLASH.tsv shape; writes only --out
 unbake unify --out UNIFY.tsv                    # every clashing name
 unbake unify --names CLASH.tsv --out UNIFY.tsv  # only the names in the first column (a name per line also works)
+unbake unify --result UNIFY.json --out UNIFY.tsv  # keep the result as it is decided; resume a cut run from it
 ```
 
 Inputs. Both commands need a built tree (`unbake setup`): the compiled units are the `build/<version>/**/*.o` that
@@ -211,10 +212,17 @@ A name no candidate satisfies stays as it was and is reported (`unresolved`, a n
 with the first failing unit of each candidate type and whether it did not build or its object differed. Per name the
 result and `--out` hold the seconds spent (a batch's time is shared by its names).
 
+With `--result FILE` (and `--out`) unify writes both files again after every isolate round, each whole and atomically,
+so a run killed by a job bound leaves the names it had rejected: `complete` is false and only decided names are listed.
+Run the same command again on the tree restored to the state the cut run started from (`git checkout`): the names
+the file rejected are not tried again, and the final `--result` and `--out` equal an uninterrupted run's, apart from
+the counts of builds (`batches`, `rounds`, `rebuilt`), which are this run's. A file of another baseline or other names
+refuses with `unify.resume`; an empty or finished file starts afresh.
+
 Refusals (exit 1, nothing is reported as a pass): `unify.units` (no built unit: run `unbake setup`),
 `unify.baseline` (a unit does not build before any rewrite), `unify.build` (the build did not run: an empty log, a
 make exit that names no failing unit, as with a toolchain variable unset, or an object neither made nor named in a
-failure), `unify.compile` (after the rewrites a source file no longer compiles: names the file, the compiler's first error lines and the rewrites that touched it), `unify.drift` (after the rewrites an object differs from the baseline).
+failure), `unify.compile` (after the rewrites a source file no longer compiles: names the file, the compiler's first error lines and the rewrites that touched it), `unify.drift` (after the rewrites an object differs from the baseline), `unify.resume` (the `--result` file is not a unify result, or its cut run started from another baseline or other names).
 
 ## Project
 

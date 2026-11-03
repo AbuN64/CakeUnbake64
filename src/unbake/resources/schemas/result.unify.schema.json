@@ -3,6 +3,8 @@
   "$id": "unbake:result.unify",
   "type": "object",
   "required": [
+    "complete",
+    "baseline",
     "names",
     "clashing",
     "units",
@@ -18,6 +20,15 @@
     "held"
   ],
   "properties": {
+    "complete": {
+      "description": "False for the result of a run still deciding (or cut short): only the names decided so far; the next run resumes from it.",
+      "type": "boolean"
+    },
+    "baseline": {
+      "description": "Digest of the baseline objects and names the result was made from: a resume must match it.",
+      "type": "string",
+      "minLength": 1
+    },
     "names": {
       "type": "integer",
       "minimum": 0
