@@ -80,18 +80,55 @@ def test_other_flags_are_another_entry(tmp_path):
     assert runs(cc) == 2
 
 
-def test_a_failed_compile_is_not_stored(tmp_path):
-    cc = tmp_path / "bad"
-    cc.write_text("#!/bin/sh\necho run >> $0.runs\nexit 3\n")
+def failing_cc(tmp_path: Path, code: int = 3) -> Path:
+    """A compiler beside nothing else that fails with a message; its runs are counted in a file apart."""
+    (tmp_path / "bin").mkdir(exist_ok=True)
+    cc = tmp_path / "bin" / "bad"
+    cc.write_text(f"#!/bin/sh\necho run >> {tmp_path}/bad.runs\necho 'x.i:1: error: broken' >&2\nexit {code}\n")
     cc.chmod(0o755)
+    return cc
+
+
+def test_a_failed_compile_is_kept_and_replayed_with_its_code_and_message(tmp_path, capfd):
+    cc = failing_cc(tmp_path)
     root, cache = tree(tmp_path, "a", "x"), tmp_path / "cc"
     os.chdir(root)
     try:
         assert cc_cache.run(cache, str(cc), ["x.i", "-o", "x.s"]) == 3
+        capfd.readouterr()
+        assert cc_cache.run(cache, str(cc), ["x.i", "-o", "x.s"]) == 3
+        assert "x.i:1: error: broken" in capfd.readouterr().err
+        (root / "x.i").write_text("y")  # another text is another entry
         assert cc_cache.run(cache, str(cc), ["x.i", "-o", "x.s"]) == 3
     finally:
         os.chdir(tmp_path)
-    assert runs(cc) == 2
+    assert len((tmp_path / "bad.runs").read_text().split()) == 2
+
+
+def test_a_compiler_killed_by_a_signal_is_not_kept(tmp_path):
+    cc = tmp_path / "killed"
+    cc.write_text(f"#!/bin/sh\necho run >> {tmp_path}/killed.runs\nkill -9 $$\n")
+    cc.chmod(0o755)
+    root, cache = tree(tmp_path, "a", "x"), tmp_path / "cc"
+    os.chdir(root)
+    try:
+        assert cc_cache.run(cache, str(cc), ["x.i", "-o", "x.s"]) < 0
+        assert cc_cache.run(cache, str(cc), ["x.i", "-o", "x.s"]) < 0
+    finally:
+        os.chdir(tmp_path)
+    assert len((tmp_path / "killed.runs").read_text().split()) == 2
+
+
+def test_a_cache_that_cannot_keep_an_entry_fails_the_compile_and_says_why(tmp_path, capfd):
+    cc, root = fake_cc(tmp_path), tree(tmp_path, "a", "int a;")
+    cache = tmp_path / "cc"
+    cache.write_text("a file where the folder should be")
+    os.chdir(root)
+    try:
+        assert cc_cache.run(cache, str(cc), ["-quiet", "x.i", "-o", "x.s"]) != 0
+    finally:
+        os.chdir(tmp_path)
+    assert "cc_cache: cannot keep" in capfd.readouterr().err
 
 
 def test_a_command_without_output_runs_as_given(tmp_path):
@@ -621,3 +658,72 @@ def test_units_sharing_a_header_closure_read_each_header_once_per_process(tmp_pa
     assert reads.count(names[2]) == 2 and len(reads) == len(names) + 1
     headers[3].unlink()
     assert not cc_cache.unchanged(recorded) and cc_cache.digests(names) is None
+
+
+SLICE_MISS = (
+    "make.front: miss compile build/de/SOURCE/ACHIEVE/MATCH_QUALIFIES/achieve_match_setup.CPP.s "
+    "compiler=66d32fc229c2b211 head=c66992c856d1a070 text=a2cced1b8a9c023b key=a709cbc199bc3d02"
+)  # dkumJOKlQbjJ's unify.err: the first pass missed it and so did the second, whose key parts were the same
+
+
+def two_builds(
+    tmp_path: Path, cc: Path, out: str, monkeypatch: pytest.MonkeyPatch, said: list[str]
+) -> tuple[Path, list[bool]]:
+    """front.build twice over one tree, as the make of a unify round runs it: the first make only collects the compile
+    (the front records it and fails it), one batch answers what the cache holds, the second make compiles the rest.
+    Returns the root and, per build, whether the batch's answer was in place when the second make started."""
+    root, cache = tmp_path / "tree", tmp_path / "content.cc"
+    source = out.removesuffix(".s") + ".i"
+    (root / source).parent.mkdir(parents=True)
+    (root / source).write_text("int achieve_match_setup;")
+    command = ["sh", str(FRONT), str(cache), str(cc), "-quiet", "-O2", source, "-o", out]
+    answered: list[bool] = []
+
+    def batch(store: Path, where: Path, manifest: Path, workers: int, mode: str = "--batch") -> None:
+        for i in range(workers):  # the seam: the workers of process.batch, run here
+            cc_cache.batch(str(store), str(where), str(manifest), i, workers)
+
+    monkeypatch.setattr(front_module.process, "batch", batch)
+    monkeypatch.setattr(front_module.stages, "say", lambda text: said.append(text))
+
+    def start(record: str | None, preprocess: bool) -> int:
+        env = {k: v for k, v in os.environ.items() if k != "ABU_CC_COLLECT"}
+        if record:
+            env["ABU_CC_COLLECT"] = record
+        else:
+            answered.append((root / (out + ".cc")).exists())
+        return subprocess.run(command, cwd=root, env=env, check=False).returncode
+
+    for _ in range(2):
+        (root / out).unlink(missing_ok=True)
+        front_module.build(start, root, cache, 2)
+    return root, answered
+
+
+def test_the_second_build_of_a_recorded_compile_is_answered_by_its_batch(tmp_path, monkeypatch):
+    """The slice's compile (same output name) through collect, batch and compile, twice: the first build misses and
+    compiles once, the second batch answers the same key from the cache, so the second make runs no compiler."""
+    cc, out = fake_cc(tmp_path), SLICE_MISS.split()[3]
+    (tmp_path / "bin").mkdir()
+    moved = tmp_path / "bin" / "cc1"  # a log beside the compiler would be a file of its identity
+    moved.write_text(cc.read_text().replace("$0.runs", f"{tmp_path}/runs"))
+    moved.chmod(0o755)
+    said: list[str] = []
+    root, answered = two_builds(tmp_path, moved, out, monkeypatch, said)
+    assert answered == [False, True]
+    assert [line for line in said if "compiles from the cache" in line] == [
+        "make.front: 0 of 1 compiles from the cache, 1 compile",
+        "make.front: 1 of 1 compiles from the cache, 0 compile",
+    ]
+    assert [line.split(" compiler=")[0] for line in said if " miss " in line] == [SLICE_MISS.split(" compiler=")[0]]
+    assert len((tmp_path / "runs").read_text().split()) == 1
+    assert (root / out).read_text() == "INT ACHIEVE_MATCH_SETUP;"
+
+
+def test_the_second_build_of_a_failing_compile_runs_no_compiler_and_says_it_failed_before(tmp_path, capfd, monkeypatch):
+    cc, out = failing_cc(tmp_path), SLICE_MISS.split()[3]
+    said: list[str] = []
+    two_builds(tmp_path, cc, out, monkeypatch, said)
+    assert len((tmp_path / "bad.runs").read_text().split()) == 1  # the second build replayed the first one's failure
+    assert [" failed=3" in line for line in said if " miss " in line] == [False, True]
+    assert capfd.readouterr().err.count("x.i:1: error: broken") == 2

@@ -37,6 +37,8 @@ except ImportError:  # pragma: no cover
 # build (about ten thousand times after a header edit), so its start is most of its cost.
 
 MAX_AGE = 4 * 86400  # seconds an entry survives without a hit
+FAILED = ".fail"  # the entry of a compile that failed: beside where its assembly would be
+MAX_FAILED_CODE = 127  # above it (or a signal: negative) the compiler was killed, which says nothing of its input
 PRUNE_ODDS = 400  # one call in this many walks the cache and drops what aged out
 
 
@@ -249,26 +251,45 @@ def call(compiler: str, args: list[str]) -> int:
     return subprocess.call([compiler, *args])
 
 
+def entry_path(cache: str, compiler: str, args: list[str], text: bytes) -> str:
+    name = key(compiler, args, text)
+    return os.path.join(cache, name[:2], name[2:])
+
+
 def lookup(cache: str, compiler: str, args: list[str], text: bytes) -> bytes | None:
     """The stored assembly of exactly this text under this compiler and these arguments; None: the compiler must run."""
-    name = key(compiler, args, text)
-    entry = os.path.join(cache, name[:2], name[2:])
+    entry = entry_path(cache, compiler, args, text)
     try:
         data = zlib.decompress(read(entry))
-        os.utime(entry)  # a hit keeps it alive
-        return data
     except (OSError, zlib.error):
         return None
+    with contextlib.suppress(OSError):
+        os.utime(entry)  # a hit keeps it alive; an entry we cannot touch still answers
+    return data
+
+
+def lookup_failure(cache: str, compiler: str, args: list[str], text: bytes) -> tuple[int, bytes] | None:
+    """(exit code, stderr) the compiler gave for exactly this text under these arguments; None: it never failed here.
+    A unit that cannot compile (a trial of unify's candidate type edits breaks hundreds, again in every round that
+    keeps the edit) is as deterministic as one that does: the same key fails the same way."""
+    entry = entry_path(cache, compiler, args, text) + FAILED
+    try:
+        code, stderr = unpack(zlib.decompress(read(entry)))
+        wanted = int.from_bytes(code, "big")
+    except (OSError, zlib.error, ValueError):
+        return None
+    with contextlib.suppress(OSError):
+        os.utime(entry)
+    return wanted, stderr
 
 
 def store(entry: str, made: bytes) -> None:
+    """Keep `made` under `entry`; an OSError (a full or read-only cache, a path that is not a folder) is the caller's to
+    report: a cache that silently keeps nothing serves no hit and the build stays slow with no word why."""
     part = f"{entry}.{os.getpid()}.part"
-    try:
-        os.makedirs(os.path.dirname(entry), exist_ok=True)
-        write(part, zlib.compress(made, 3))
-        os.replace(part, entry)
-    except OSError:
-        pass  # a full or read-only cache costs only the saving
+    os.makedirs(os.path.dirname(entry), exist_ok=True)
+    write(part, zlib.compress(made, 3))
+    os.replace(part, entry)
 
 
 def maybe_prune(cache: str) -> None:
@@ -297,6 +318,27 @@ def take_answer(compiler: str, args: list[str], out: str, text: bytes) -> bool:
     return False
 
 
+def compile_and_keep(cache: str, name: str, compiler: str, args: list[str], out: str) -> int:
+    """Run the compiler; its assembly (exit 0) or its failure (exit 1..MAX_FAILED_CODE, with what it said) is kept under
+    `name`. A keep that fails is an error of this call: the build must see that the cache does not keep."""
+    import subprocess
+
+    done = subprocess.run([compiler, *args], stderr=subprocess.PIPE, check=False)
+    sys.stderr.buffer.write(done.stderr)
+    sys.stderr.buffer.flush()
+    code = done.returncode
+    entry = os.path.join(cache, name[:2], name[2:])
+    try:
+        if code == 0:
+            store(entry, read(out))
+        elif 0 < code <= MAX_FAILED_CODE:
+            store(entry + FAILED, pack([code.to_bytes(2, "big"), done.stderr]))
+    except OSError as error:
+        sys.stderr.write(f"cc_cache: cannot keep {entry} ({error.strerror or error}): the cache serves no hit for it\n")
+        return code or 1
+    return code
+
+
 def run(cache: str, compiler: str, args: list[str]) -> int:
     cache = os.fspath(cache)
     parsed = parse(args)
@@ -314,9 +356,11 @@ def run(cache: str, compiler: str, args: list[str]) -> int:
     if found is not None:
         write(out, found)
         return 0
-    code = call(compiler, args)
-    if code == 0:
-        store(os.path.join(cache, name[:2], name[2:]), read(out))
+    if (failed := lookup_failure(cache, compiler, args, text)) is not None:
+        sys.stderr.buffer.write(failed[1])
+        sys.stderr.buffer.flush()
+        return failed[0]
+    code = compile_and_keep(cache, name, compiler, args, out)
     maybe_prune(cache)
     return code
 
@@ -861,7 +905,10 @@ def batch(cache: str, root: str, manifest: str, index: int, count: int) -> int:
             text = read(source)
             found = lookup(cache, compiler, args, text)
             if found is None:
-                write(out + ".miss", miss_record(compiler, args, text, key(compiler, args, text)))
+                record = miss_record(compiler, args, text, key(compiler, args, text))
+                if (failed := lookup_failure(cache, compiler, args, text)) is not None:
+                    record = record.rstrip(b"\n") + f" failed={failed[0]}\n".encode()
+                write(out + ".miss", record)
                 continue
             _remove(out + ".miss")
             write(out, found)
