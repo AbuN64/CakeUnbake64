@@ -563,7 +563,7 @@ def stand_ins(config: Config, current: Any) -> dict[str, bytes | None]:
     sections = {(v, n): s for m in current.modules for v, names in m.sections.items() for n, s in names.items()}
     missing = {v: set(current.unowned(v)) - _code_aliases(config, current, v) for v in config.project.versions}
     for v in config.project.versions:
-        unowned = missing[v]
+        unowned = tuple(n for n in current.unowned(v) if n in missing[v])
         if not unowned:
             continue
         facts = api.symbols(config, v)
