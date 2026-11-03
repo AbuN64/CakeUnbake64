@@ -1,0 +1,27 @@
+{
+ "job": "rig-20261103T184841Z",
+ "exit": 0,
+ "seconds": 545,
+ "bound": 1000,
+ "RageWarsDecomp": "f626ced59eda45e5051b63a6285cdd67143740fa",
+ "CakeUnbake64": "8720441b1a9686eeb0af4ff64e619acf96069429",
+ "ok": true,
+ "hits": 32860,
+ "misses": 45,
+ "cache": {
+  "hits": 32860,
+  "misses": 45,
+  "kinds": {
+   "make.front": {
+    "hits": 4281,
+    "misses": 18
+   },
+   "make.front.objects": {
+    "hits": 28579,
+    "misses": 27
+   }
+  },
+  "replayed": 4272
+ },
+ "source": "RUN2 line of job.log (unify.2.json on the rig); rig ran at RageWarsDecomp f626ced, CakeUnbake64 8720441"
+}
