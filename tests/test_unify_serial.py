@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from test_unify_definition import BARE_CALLER, CALLER, DEFINITION, FUNCTION, FUNCTION_HEADER, World, invoke
 
-from unbake import typeunify
+from unbake import compilerrors, typeunify
 
 
 class Noisy(World):
@@ -45,15 +45,15 @@ def test_failed_objects_read_their_errors_in_one_pass_over_the_log(
 ) -> None:
     world = Noisy(tmp_path)
     world.broken |= {DEFINITION, CALLER, BARE_CALLER}
-    scans = Scans(typeunify._ERROR)
-    monkeypatch.setattr(typeunify, "_ERROR", scans)
+    scans = Scans(compilerrors.ERROR)
+    monkeypatch.setattr(compilerrors, "ERROR", scans)
     real_findall = re.findall
 
     def findall(pattern: Any, text: str, *a: Any) -> Any:
         scans.count += isinstance(text, str) and len(text) > 200 and "\\.i:" in str(pattern)
         return real_findall(pattern, text, *a)
 
-    monkeypatch.setattr(typeunify.re, "findall", findall)
+    monkeypatch.setattr(compilerrors.re, "findall", findall)
     result = invoke(world, monkeypatch)
     errors = {o["error"] for o in result["objects"].values()}
     assert len(result["objects"]) == 6  # three sources in two versions fail in one make
@@ -64,7 +64,7 @@ def test_failed_objects_read_their_errors_in_one_pass_over_the_log(
 
 def test_first_errors_keeps_three_lines_per_object_from_one_scan() -> None:
     log = "".join(f"build/v/a.c.i:{n}: error: e{n}\n" for n in range(5)) + "build/v/b.c.i:2: warning: w\n"
-    got = typeunify._first_errors(log, ["build/v/a.c.o", "build/v/b.c.o", "build/v/c.c.o"])
+    got = compilerrors.first_errors(log, ["build/v/a.c.o", "build/v/b.c.o", "build/v/c.c.o"])
     assert got == {
         "build/v/a.c.o": "error: e0 | error: e1 | error: e2",
         "build/v/b.c.o": "no compiler error in the log",

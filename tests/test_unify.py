@@ -214,6 +214,24 @@ def test_a_tree_that_does_not_build_has_no_baseline(tmp_path: Path) -> None:
     assert refused.value.findings[0].key == "unify.baseline"
 
 
+def test_the_baseline_names_each_broken_object_with_its_first_compiler_errors(tmp_path: Path) -> None:
+    log = (
+        "build/us/src/a.CPP.i:3:1: error: first\nbuild/us/src/a.CPP.i:4:1: warning: skipped\n"
+        "build/us/src/a.CPP.i:5:1: error: second\n"
+        "make: *** [Makefile:526: build/us/src/a.CPP.o] Error 33\n"
+        "make: *** [Makefile:526: build/us/src/b.CPP.o] Error 33\n"
+    )
+    seams = Seams(lambda: {"us": ["src/a.CPP", "src/b.CPP", "src/c.CPP"]}, lambda items: [], lambda t: (2, log))
+    with pytest.raises(Refusal) as refused:
+        typeunify.baseline(tmp_path, seams, {"us": ["src/a.CPP", "src/b.CPP"]})
+    (finding,) = refused.value.findings
+    assert finding.key == "unify.baseline"
+    assert finding.missing == (
+        "build/us/src/a.CPP.o: error: first | error: second",
+        "build/us/src/b.CPP.o: no compiler error in the log",
+    )
+
+
 def test_no_units_is_refused(tmp_path: Path) -> None:
     with pytest.raises(Refusal) as refused:
         typeunify.run(tmp_path, Seams(lambda: {"us": []}, lambda items: [], lambda targets: (0, "x")))

@@ -307,6 +307,33 @@ def test_setup_passes_with_a_bare_abucache_requirement_and_any_installed_abucach
     assert result["extracted"] == ["a", "b"] and result["make"] == MADE
 
 
+def test_setup_make_refusal_names_each_failed_unit_with_its_first_compiler_errors(world, monkeypatch):
+    stderr = (
+        b"build/us-rev1/src/a.CPP.i:7:3: error: 'x' undeclared\n"
+        b"build/us-rev1/src/b.CPP.i:2:1: error: expected ';'\n"
+        b"make: *** [Makefile:526: build/us-rev1/src/a.CPP.o] Error 33\n"
+        b"make: *** [Makefile:526: build/us-rev1/src/b.CPP.o] Error 33\n"
+        b"make: *** [Makefile:526: build/us-rev1/src/c.CPP.o] Error 33\n"
+    )
+    monkeypatch.setattr(
+        repo.process,
+        "make",
+        lambda config, targets, jobs: NativeResult(
+            ("make", *targets), str(world.root), 2, None, b"", stderr, 0, 0, 0, {}
+        ),
+    )
+    with pytest.raises(Refusal) as caught:
+        world.setup()
+    (finding,) = caught.value.findings
+    assert finding.key == "setup.make"
+    head = finding.reason.split("\nKept make evidence: ")[0].splitlines()
+    assert head == [
+        "build/us-rev1/src/a.CPP.o: error: 'x' undeclared",
+        "build/us-rev1/src/b.CPP.o: error: expected ';'",
+        "build/us-rev1/src/c.CPP.o: no compiler error in the log",
+    ]
+
+
 @pytest.mark.parametrize("phase", ["extract", "stamp", "check"])
 def test_setup_make_refusal_keeps_named_files_after_worktree_deletion(world, monkeypatch, phase):
     """The discarded proof tree cannot discard the malformed object list or its original make output."""

@@ -14,7 +14,7 @@ from unittest.mock import Mock
 import fixture
 import pytest
 
-from unbake import __version__, adapters, build
+from unbake import __version__, adapters, build, compilerrors
 from unbake.contracts import FileFacts, NativeResult, Refusal, Segment
 from unbake.resources import cc_cache
 from unbake.tree import Module, Tree
@@ -527,6 +527,77 @@ def test_a_failed_make_check_revokes_credit_and_names_every_failed_target(tmp_pa
         build.make_check(config, make_tree())
     assert refused.value.findings[0].key == "setup.make" and "build/us/Game.z64" in refused.value.findings[0].reason
     assert json.loads((tmp_path / ".unbake/check.json").read_bytes())["exact"] == []
+
+
+MAKE_LOG = (
+    b"build/us/src/a.CPP.i:12:5: error: 'foo' undeclared\n"
+    b"build/us/src/a.CPP.i:12:9: warning: unused\n"
+    b"build/us/src/a.CPP.i:30:1: error: expected ';'\n"
+    b"build/us/src/b.CPP.i:3:1: fatal error: nothing.h: No such file\n"
+    b"make: *** [Makefile:526: build/us/src/a.CPP.o] Error 33\n"
+    b"make: *** [Makefile:526: build/us/src/b.CPP.o] Error 33\n"
+    b"make: *** [Makefile:526: build/eu-1/src/a.CPP.o] Error 33\n"
+    b"make: *** [Makefile:526: build/us/src/a.CPP.o] Error 33\n"
+)
+
+
+def _failed_make(code=2, evidence=None):
+    outputs = {} if evidence is None else {"evidence": evidence}
+    return NativeResult((), "", code, None, b"", MAKE_LOG, 0, 0, 0, outputs)
+
+
+def _assert_units_with_errors(reason):
+    lines = reason.splitlines()
+    assert "build/us/src/a.CPP.o: error: 'foo' undeclared | error: expected ';'" in lines
+    assert "build/us/src/b.CPP.o: fatal error: nothing.h: No such file" in lines
+    assert "build/eu-1/src/a.CPP.o: no compiler error in the log" in lines
+    assert len([line for line in lines if line.startswith("build/us/src/a.CPP.o")]) == 1  # told once
+    assert "***" not in reason and "warning" not in reason
+
+
+def test_a_failed_make_check_names_each_failed_unit_with_its_first_compiler_errors(tmp_path, monkeypatch):
+    config = make_config(tmp_path)
+    monkeypatch.setattr(build, "_make", lambda cfg, target: _failed_make(evidence=tmp_path / "kept"))
+    with pytest.raises(Refusal) as refused:
+        build.make_check(config, make_tree())
+    (finding,) = refused.value.findings
+    assert finding.key == "setup.make" and finding.missing == ("make exit 2",)
+    _assert_units_with_errors(finding.reason)
+    assert finding.reason.endswith(f"Kept make evidence: {tmp_path / 'kept'}")
+
+
+def test_a_failed_extract_names_each_failed_unit_with_its_first_compiler_errors(tmp_path, monkeypatch):
+    config = make_config(tmp_path)
+    monkeypatch.setattr(build.store, "unshare", lambda path: None)
+    monkeypatch.setattr(build, "_make", lambda cfg, target: _failed_make(evidence=tmp_path / "kept"))
+    with pytest.raises(Refusal) as refused:
+        build.extract(config)
+    (finding,) = refused.value.findings
+    assert finding.key == "setup.splat"
+    _assert_units_with_errors(finding.reason)
+    assert finding.reason.endswith(f"Kept make evidence: {tmp_path / 'kept'}")
+
+
+def test_a_failed_make_without_a_failed_unit_ends_with_the_last_lines_of_its_log(tmp_path, monkeypatch):
+    config = make_config(tmp_path)
+    log = "".join(f"line {n}\n" for n in range(30)).encode()
+    failure = NativeResult((), "", 2, None, b"", log, 0, 0, 0, {})
+    monkeypatch.setattr(build, "_make", lambda cfg, target: failure)
+    with pytest.raises(Refusal) as refused:
+        build.make_check(config, make_tree())
+    assert refused.value.findings[0].reason.splitlines() == [f"line {n}" for n in range(10, 30)]
+
+
+def test_a_unit_whose_preprocess_stamp_failed_is_told_by_its_source_error():
+    log = (
+        "src/c.CPP:4:2: error: stray '#'\n"
+        "make: *** [Makefile:9: build/us/src/c.CPP.i.ok] Error 1\n"
+        "make: *** [Makefile:9: build/us/src/d.CPP.i.ok] Error 1\n"
+    )
+    assert compilerrors.reason(log).splitlines() == [
+        "build/us/src/c.CPP.o: error: stray '#'",
+        "build/us/src/d.CPP.o: its preprocess failed",
+    ]
 
 
 def test_text_sizes_give_each_object_its_code_up_to_the_next_owned_bytes(tmp_path):

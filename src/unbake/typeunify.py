@@ -15,7 +15,7 @@ from pathlib import Path
 
 from abucache import pool, stages
 
-from unbake import build, hoist, mergecheck, process, store, tree
+from unbake import build, compilerrors, hoist, mergecheck, process, store, tree
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Host, Json, Refusal
 from unbake.typecensus import Decl, Norm, Stmt, clashes, declarations, files_of, index, scan, table, tkey
@@ -23,14 +23,9 @@ from unbake.typeplan import Plan, Sources, plan, readers, render, sites_of
 
 Unit = tuple[str, str]  # (version, source path)
 Facts = tuple[list[str], list[Stmt], frozenset[str], frozenset[str]]  # (typedefs, project statements, files, words)
-_FAILED = re.compile(r"\*\*\* \[(?:[^\]\s]+: )?([^\]\s]+\.o)\]")
-# a unit whose preprocess stamp failed (a header the rewrites left out) builds no object either: its stamp is the unit's
-_STAMP = re.compile(r"\*\*\* \[(?:[^\]\s]+: )?([^\]\s]+)\.i\.ok\]")
-_ERROR = re.compile(r"^(.+?)\.i:\d+:(?:\d+:)? (?!warning)(.*)$", re.M)
 _WORD = re.compile(r"[A-Za-z_]\w*")
 _POINTER = re.compile(r"\(\s*\*")
 WORK = ("batches", "rounds", "rebuilt")  # counts of the builds one run made: not part of what it decided
-ERROR_LINES = 3  # compiler error lines kept per failing object
 # An isolate trial builds its objects in chunks of FIRST_CHUNK, then GROWTH times more each make, most suspect first,
 # and is decided by the first chunk holding an object that is not the baseline's: a failing trial costs one small
 # make, a passing one still builds every object it touches (at most log(n) makes).
@@ -203,28 +198,6 @@ def _sha(path: Path) -> str | None:
     return hashlib.sha1(path.read_bytes()).hexdigest() if path.is_file() else None
 
 
-def _first_errors(log: str, failed: Iterable[str]) -> dict[str, str]:
-    """The first compiler error lines of each failed object, from one pass over the log (a scan of the log per failed
-    object is failed x log size of serial work after make returned)."""
-    wanted = {path[:-2]: path for path in failed}
-    lines: dict[str, list[str]] = {path: [] for path in wanted.values()}
-    for match in _ERROR.finditer(log):
-        path = wanted.get(match[1])
-        if path is not None and len(lines[path]) < ERROR_LINES:
-            lines[path].append(match[2])
-    return {path: " | ".join(first) if first else "no compiler error in the log" for path, first in lines.items()}
-
-
-def _stamp_errors(log: str, stamps: Iterable[str]) -> dict[str, str]:
-    """The first error line of each object whose preprocess stamp failed: it names the unit's source, not its `.i`."""
-    out: dict[str, str] = {}
-    for path in stamps:
-        source = path.split("/", 2)[2][:-2]
-        found = re.search(rf"^{re.escape(source)}:\d+:(?:\d+:)? ((?:fatal )?error.*)$", log, re.M)
-        out[path] = found[1] if found else "its preprocess failed"
-    return out
-
-
 def rebuild(
     root: Path, seams: Seams, units: Iterable[Unit], errors: dict[str, str] | None = None
 ) -> dict[Unit, str | None]:
@@ -242,8 +215,8 @@ def rebuild(
     pending = sorted(wanted)
     while pending:
         code, log = seams.make(pending)
-        failed = {m for m in _FAILED.findall(log) if m in pending}
-        stamps = {f"{m}.o" for m in _STAMP.findall(log) if f"{m}.o" in pending} - failed
+        failed = {m for m in compilerrors.FAILED.findall(log) if m in pending}
+        stamps = {f"{m}.o" for m in compilerrors.STAMP.findall(log) if f"{m}.o" in pending} - failed
         if code != 0 and not failed and not stamps:
             tail = " | ".join(line.strip() for line in log.splitlines()[-6:] if line.strip())
             raise Refusal(
@@ -254,8 +227,8 @@ def rebuild(
             )
         named |= failed | stamps
         if errors is not None:
-            errors.update(_first_errors(log, failed))
-            errors.update(_stamp_errors(log, stamps))
+            errors.update(compilerrors.first_errors(log, failed))
+            errors.update(compilerrors.stamp_errors(log, stamps))
         absent = [p for p in pending if p not in named and not (root / p).is_file()]
         if len(absent) == len(pending):
             raise Refusal(
@@ -446,12 +419,12 @@ def _farm(root: Path, home: Path, files: Collection[str], skip: Collection[str] 
 
 def baseline(root: Path, seams: Seams, units: Mapping[str, Sequence[str]]) -> dict[Unit, str]:
     """The object hash of every unit built from the tree as it is: a unit that does not build refuses the run."""
-    made = rebuild(root, seams, [(v, u) for v in units for u in units[v]])
+    errors: dict[str, str] = {}
+    made = rebuild(root, seams, [(v, u) for v in units for u in units[v]], errors)
     broken = sorted(target(u) for u, h in made.items() if h is None)
     if broken:
-        raise Refusal(
-            Finding("unify.baseline", "the tree does not build before any rewrite", missing=tuple(broken[:20]))
-        )
+        lines = tuple(f"{path}: {errors.get(path, compilerrors.NO_ERROR)}" for path in broken)
+        raise Refusal(Finding("unify.baseline", "the tree does not build before any rewrite", missing=lines))
     return {u: h for u, h in made.items() if h is not None}
 
 
@@ -465,7 +438,7 @@ def _compile_findings(
         by_file[unit[1]].append(unit)
     out: list[Finding] = []
     for path, units in sorted(by_file.items())[:20]:
-        why = errors.get(target(units[0]), "no compiler error in the log")
+        why = errors.get(target(units[0]), compilerrors.NO_ERROR)
         rewrites = "; ".join(
             f"{n} as {p.canon} ({', '.join(sorted(p.files))})"
             for n, p in sorted(settled.items())
@@ -686,7 +659,7 @@ def run(
                 bad, made = masked, back
             for u in sorted(bad):
                 why = (
-                    "does not build: " + errors.get(target(u), "no compiler error in the log")
+                    "does not build: " + errors.get(target(u), compilerrors.NO_ERROR)
                     if made[u] is None
                     else "object differs"
                 )
@@ -795,7 +768,7 @@ def run(
                         for u, object_hash in sorted(affected.items()):
                             path = target(u)
                             why = (
-                                "does not build: " + errors.get(path, "no compiler error in the log")
+                                "does not build: " + errors.get(path, compilerrors.NO_ERROR)
                                 if object_hash is None
                                 else "object differs"
                             )

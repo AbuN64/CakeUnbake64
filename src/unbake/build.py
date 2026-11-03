@@ -22,7 +22,20 @@ from typing import TYPE_CHECKING
 
 from abucache import pool, stages
 
-from unbake import __version__, adapters, front, linkfill, process, report, store, symbols, tree, versions, windows
+from unbake import (
+    __version__,
+    adapters,
+    compilerrors,
+    front,
+    linkfill,
+    process,
+    report,
+    store,
+    symbols,
+    tree,
+    versions,
+    windows,
+)
 from unbake import config as configuration
 from unbake.contracts import (
     Config,
@@ -1166,8 +1179,7 @@ def extract(config: Config, version: str | None = None) -> NativeResult:
         store.unshare(root / version if version else root)
         result = _make(config, f"extract-{version}" if version else "extract")
         if result.exit != 0:
-            tail = result.stderr.decode(errors="replace").splitlines()
-            reason = "\n".join(tail[-20:]) or f"exit {result.exit}"
+            reason = compilerrors.reason(result.stderr.decode(errors="replace")) or f"exit {result.exit}"
             evidence = result.outputs.get("evidence")
             if evidence is not None:
                 reason += f"\nKept make evidence: {evidence}"
@@ -1521,10 +1533,9 @@ def make_check(config: Config, held: Tree | None = None) -> Json:
             build_inputs=inputs(config),
             build_failed=f"make exit {result.exit}",
         )
-        lines = result.stderr.decode(errors="replace").splitlines()
-        failed = [line for line in lines if "***" in line]  # make -k ran everything it could: every failed target
         evidence = result.outputs.get("evidence")
-        reason = "\n".join(failed or lines[-20:])
+        # make -k ran everything it could: every failed unit, each with its first compiler error lines
+        reason = compilerrors.reason(result.stderr.decode(errors="replace"))
         if evidence is not None:
             reason += f"\nKept make evidence: {evidence}"
         raise Refusal(Finding("setup.make", reason, missing=(f"make exit {result.exit}",)))
