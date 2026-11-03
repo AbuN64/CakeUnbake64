@@ -95,13 +95,17 @@ def test_accepts_local_environment_and_forwards_arguments(checkout: Path, spaces
     (checkout / ".venv/pyvenv.cfg").write_text(f"command = /usr/bin/python3 -m venv --clear {checkout}/.venv\n")
     if changed:
         (checkout / "pyproject.toml").write_text("# dependency changed\n")
+        executable(  # the setup itself is pinned by test_dev_setup: here only that test runs it again
+            checkout / "bin/dev-setup",
+            "#!/bin/bash\necho pip >> calls\nsha256sum pyproject.toml > .venv/.pyproject.sha256\n",
+        )
     result = invoke(checkout, "tests/test_example.py", "-k", "some test")
     assert result.returncode == 0, result.stdout + result.stderr
     calls = (checkout / "calls").read_text()
     assert "<-m> <pytest>" in calls
     assert "<tests/test_example.py> <-k> <some test>" in calls
     # CakeUnbake64 refreshes changed dependencies; RecipeMaker64 retains its toolkit workflow.
-    refreshes = "sha256sum pyproject.toml" in (checkout / "bin/test").read_text()
+    refreshes = "\n    bin/dev-setup\n" in (checkout / "bin/test").read_text()
     assert ("pip\n" in calls) == (changed and refreshes)
     if changed and refreshes:
         assert calls.startswith("pip\n")
