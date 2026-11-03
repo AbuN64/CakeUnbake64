@@ -22,22 +22,7 @@ import rabbitizer
 import yaml
 from abucache import memo, pool, stages
 
-from unbake import (
-    adapters,
-    api,
-    build,
-    ci,
-    journal,
-    libasm,
-    linkfill,
-    place,
-    process,
-    report,
-    store,
-    symbols,
-    tree,
-    treelock,
-)
+from unbake import api, build, ci, journal, libasm, linkfill, place, process, report, store, symbols, tree, treelock
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Json, NativeResult, Refusal, digest, sha1
 
@@ -1718,7 +1703,6 @@ def setup(config: Config, params: Json) -> Json:
     makes again, so it runs under the tree lock held exclusively: a tree copied from this one (a stamp or lane seed
     holds the lock shared) never gets a half-written extraction (10-25: a seed copied during a pool refresh lacked
     build/de/undefined_syms_auto.txt and every link of the stamp failed). The tree lock comes before the store lock."""
-    adapters.ensure_abucache(config)
     if not _extracting(config):
         return _setup(config, params)
     with treelock.hold(config.project.root, exclusive=True, who="unbake setup (extracting)"):

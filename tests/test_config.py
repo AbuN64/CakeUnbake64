@@ -679,13 +679,3 @@ def test_a_row_directory_must_sit_under_a_configured_source_root() -> None:
     assert configuration._folder("sdk/libx/", True, ("src", "sdk")) is True
     assert configuration._folder("sdk/", True, ("src", "sdk")) is False
     assert configuration._folder("../sdk/libx/", True, ("sdk",)) is False
-
-
-def test_abucache_section_is_optional_and_reads_the_url_and_clone(tmp_path: Path) -> None:
-    assert configuration.load_host(fixture.host(tmp_path)).abucache_url is None
-    other = tmp_path / "other"
-    other.mkdir()
-    path = fixture.host(other)
-    path.write_text(path.read_text() + '\n[abucache]\nurl = "https://git.example.lan/c.git"\nclone = "/x/c.git"\n')
-    loaded = configuration.load_host(path)
-    assert (loaded.abucache_url, loaded.abucache_clone) == ("https://git.example.lan/c.git", Path("/x/c.git"))

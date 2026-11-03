@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import importlib
-import json
-import os
 import re
 import shlex
 import sys
-import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
-from importlib import metadata
 from pathlib import Path
 from typing import Any
 
@@ -376,105 +371,6 @@ def tool_identity(config: Config, id: str) -> str:
     """The hash of the bytes of every tool the compile and assemble commands name, and of the row's pins."""
     chain = toolchain(config, id)
     return abucache.compile.identity(chain.tool_files(), [f"{k}={v}" for k, v in sorted(chain.row["pins"].items())])
-
-
-_SOURCE_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _pin() -> str:
-    """The abucache commit this unbake requires (`abucache @ git+https://...@<sha>`): read from the pyproject.toml of
-    the source tree when unbake runs from one (an install made before a pin bump records the old pin), else from the
-    requirement the installed distribution recorded."""
-    pyproject = _SOURCE_ROOT / "pyproject.toml"
-    if pyproject.is_file():
-        requires: Sequence[str] = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["dependencies"]
-    else:
-        requires = metadata.requires("unbake") or ()
-    requirement = next(r for r in requires if r.startswith("abucache"))
-    found = re.search(r"@([0-9a-f]{40})$", requirement)
-    return found[1] if found else ""
-
-
-def _installed() -> str:
-    """The commit the installed abucache was built from (pip records it in the distribution's direct_url.json)."""
-    text = metadata.distribution("abucache").read_text("direct_url.json")
-    return str(json.loads(text).get("vcs_info", {}).get("commit_id", "")) if text else ""
-
-
-def check_abucache() -> None:
-    """The installed abucache is the one commit this unbake's own requirement names."""
-    pin, installed = _pin(), _installed()
-    if installed != pin:
-        raise Refusal(
-            Finding(
-                "tool.version",
-                path="pyproject.toml:dependencies",
-                reason=f"abucache commit mismatch: expected {pin[:12] or 'none'}, found {installed[:12] or 'none'}",
-            )
-        )
-
-
-def _native(config: Config, name: str, argv: Sequence[str | Path]) -> NativeResult:
-    root = config.project.root
-    return process.run(name, argv, root, tmp=process.scratch(root))
-
-
-def _stderr_tail(result: NativeResult, default: str) -> str:
-    lines = result.stderr.decode(errors="replace").strip().splitlines()
-    return " | ".join(line.strip() for line in lines[-4:]) if lines else default
-
-
-def _fetch_abucache(config: Config, pin: str) -> Path:
-    """The bare clone from host `abucache.clone`, holding the pinned commit under refs/heads/pin-<sha> (pip clones
-    heads only). A clone that lacks it fetches exactly that commit from host `abucache.url`: never from the origin
-    the clone happens to carry."""
-    url, clone = config.host.abucache_url, config.host.abucache_clone
-    if url is None or clone is None:
-        reason = f"abucache commit {pin} is not installed and the host config has no [abucache] url and clone"
-        raise Refusal(Finding("tool.version", path="host:abucache", reason=reason))
-    git: list[str | Path] = [process.tool(config, "git"), "--git-dir", clone]
-    ref = f"refs/heads/pin-{pin}"
-    if not (clone / "HEAD").is_file():
-        clone.parent.mkdir(parents=True, exist_ok=True)
-        made = _native(config, "git init", [git[0], "init", "-q", "--bare", clone])
-        if made.exit != 0:
-            raise Refusal(Finding("tool.version", path="host:abucache", reason=_stderr_tail(made, f"git init {clone}")))
-    if _native(config, "git rev-parse", [*git, "rev-parse", "-q", "--verify", ref]).exit != 0:
-        got = _native(config, "git fetch", [*git, "fetch", "-q", url, f"{pin}:{ref}"])
-        if got.exit != 0:
-            reason = f"abucache commit {pin} not fetched from {url}: {_stderr_tail(got, 'git fetch failed')}"
-            raise Refusal(Finding("tool.version", path="host:abucache", reason=reason))
-    # pip clones the bare repository and checks the pin out of it: its HEAD names the branch that holds the pin
-    pointed = _native(config, "git symbolic-ref", [*git, "symbolic-ref", "HEAD", ref])
-    if pointed.exit != 0:
-        raise Refusal(Finding("tool.version", path="host:abucache", reason=_stderr_tail(pointed, "git symbolic-ref")))
-    return clone
-
-
-def ensure_abucache(config: Config) -> None:
-    """Setup's first step: when the installed abucache is not the pinned commit, fetch exactly that commit (see
-    _fetch_abucache), install it, and start this command again on it (the modules already imported are the old ones)."""
-    pin = _pin()
-    if _installed() == pin:
-        return
-    clone = _fetch_abucache(config, pin)
-    argv = [
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "-q",
-        "--no-deps",
-        "--force-reinstall",
-        f"abucache @ git+{clone.as_uri()}@{pin}",
-    ]
-    done = _native(config, "pip install", argv)
-    if done.exit != 0:
-        reason = f"abucache commit {pin} not installed from {clone}: {_stderr_tail(done, 'pip install failed')}"
-        raise Refusal(Finding("tool.version", path="host:abucache", reason=reason))
-    importlib.invalidate_caches()  # the metadata finder remembers the site-packages listing it read before the install
-    check_abucache()
-    os.execv(sys.executable, sys.orig_argv)
 
 
 def toolchain(config: Config, id: str) -> TemplateToolchain:

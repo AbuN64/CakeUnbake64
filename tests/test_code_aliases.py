@@ -3,7 +3,7 @@
 import fixture
 import pytest
 
-from unbake import adapters, repo, tree
+from unbake import repo, tree
 from unbake.contracts import Refusal, Segment, sha1
 
 pytestmark = pytest.mark.usefixtures("toolchains")
@@ -49,7 +49,6 @@ def code_aliases(tmp_path, monkeypatch):
         (config.project.root / f"asm/{version}").mkdir(parents=True, exist_ok=True)
         return fixture.native_result()
 
-    monkeypatch.setattr(adapters, "ensure_abucache", lambda config: None)
     monkeypatch.setattr(repo.build, "install_toolchains", lambda *args: None)
     monkeypatch.setattr(repo.build, "extract", extract)
     return cfg

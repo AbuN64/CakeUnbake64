@@ -7,6 +7,7 @@ import os
 import shutil
 import tomllib
 from contextlib import contextmanager, nullcontext
+from importlib import metadata
 from pathlib import Path
 from string import Template
 from types import SimpleNamespace
@@ -291,6 +292,19 @@ def test_setup_captures_once(world):
     assert result["extracted"] == ["a", "b"] and result["make"] == MADE
     world.toolchains.assert_called_once()
     world.progress.assert_called_once()
+
+
+@pytest.mark.parametrize("commit", ["43bb0bee" + "0" * 32, "f" * 40, ""])
+def test_setup_passes_with_a_bare_abucache_requirement_and_any_installed_abucache_commit(world, monkeypatch, commit):
+    """unbake names abucache bare and installers resolve the landed commit: setup never compares the installed
+    abucache's direct_url commit against anything (a pin check once refused every setup with an empty pin)."""
+    direct_url = json.dumps(
+        {"url": "https://example.invalid/cache-64", "vcs_info": {"vcs": "git", "commit_id": commit}}
+    )
+    monkeypatch.setattr(metadata, "requires", lambda name: ["click==8.5.0", "abucache"])
+    monkeypatch.setattr(metadata, "distribution", lambda name: SimpleNamespace(read_text=lambda file: direct_url))
+    result = world.setup()
+    assert result["extracted"] == ["a", "b"] and result["make"] == MADE
 
 
 @pytest.mark.parametrize("phase", ["extract", "stamp", "check"])
