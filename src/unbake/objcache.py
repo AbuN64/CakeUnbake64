@@ -11,7 +11,10 @@ assembly it was made from, are in place) and MISS when the program has to run.
 Every lookup and store goes through abucache's count seam (`ContentCache.count`) into the store's own tally, one line
 per event, so the processes of one make run, and of any other tree on the host, add to the same count. `stats` reads
 the tally from OFFSET (default 0) to its end: `stores: N`, `hits: N`, `misses: N` and the `offset: N` the next run
-starts from; read it before a make run for its OFFSET and after for the counts of that run."""
+starts from; read it before a make run for its OFFSET and after for the counts of that run.
+
+Every process ends with `_finish`: the manifest naming the keys it touched (a missed get names the key its put will
+store), which is what keeps the stored objects from abucache's collect."""
 
 from __future__ import annotations
 
@@ -20,6 +23,7 @@ import hashlib
 import os
 import re
 import sys
+import traceback
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -281,6 +285,20 @@ def batch(cache: ContentCache, manifest: str, index: int, count: int) -> int:
     return hits
 
 
+def _finish(cache: ContentCache, keep_commits: int = 20) -> None:
+    """End of an object-store process: the manifest of the keys it read and wrote, for the tree it ran in. abucache's
+    collect deletes every entry no live manifest names once it is older than its grace period; these processes are not
+    the build's own (unbake.store.finish only knows the keys the build process touched), so without their manifest each
+    stored object was reaped a few hours later and the next fresh tree compiled it again. A failure of the bookkeeping
+    is said on stderr and never changes the answer."""
+    try:
+        from unbake import store
+
+        cache.finish(Path.cwd(), store.identity(), store.installed, keep_commits)
+    except Exception:
+        traceback.print_exc()
+
+
 def main(argv: list[str]) -> int:
     """OBJSTORE is `objcache STORE LIMIT`; the rule appends `get|put OUT CC FLAGS SIZE PROGRAM FILE...`."""
     if len(argv) in (3, 4) and argv[1] == "stats":
@@ -288,7 +306,9 @@ def main(argv: list[str]) -> int:
             sys.stdout.write(f"{name}: {value}\n")
         return 0
     if len(argv) == 7 and argv[3] == "batch":
-        batch(open_cache(Path(argv[1]), int(argv[2]), _tally(Path(argv[1]))), argv[4], int(argv[5]), int(argv[6]))
+        cache = open_cache(Path(argv[1]), int(argv[2]), _tally(Path(argv[1])))
+        batch(cache, argv[4], int(argv[5]), int(argv[6]))
+        _finish(cache)
         return 0
     if len(argv) < 9 or argv[3] not in ("get", "put"):
         raise SystemExit(
@@ -298,7 +318,9 @@ def main(argv: list[str]) -> int:
     action = get if argv[3] == "get" else put
     cache = open_cache(Path(argv[1]), int(argv[2]), _tally(Path(argv[1])))
     out, compiler, flags, textsize, program = argv[4:9]
-    return action(cache, out, compiler, flags, textsize, program, argv[9:])
+    code = action(cache, out, compiler, flags, textsize, program, argv[9:])
+    _finish(cache)
+    return code
 
 
 if __name__ == "__main__":

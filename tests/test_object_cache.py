@@ -423,3 +423,48 @@ def test_the_compiles_of_the_objects_the_store_answered_are_dropped(tmp_path):
     front._clear(cc, tmp_path)
     assert not manifest.exists()
     assert not list(tmp_path.rglob("*.oc*"))
+
+
+ACHIEVE = "build/de/SOURCE/ACHIEVE/ACHIEVE/ACHIEVE.CPP.o"  # the pair the rig's two unify runs both missed
+
+
+def test_objcache_put_is_kept_from_a_collect_so_the_next_get_hits(tmp_path, monkeypatch):
+    """The regression slice: a get that misses, the put of the same out/flags/textsize/program/extracted and the same
+    `.i`, then a get with the same inputs hits, also after abucache's collect of the entries no manifest names. The
+    object store's processes (`main`) end with the manifest of the keys they touched; without it the collect reaped
+    every stored object and the second fresh-state run missed the same 4000 objects."""
+    import time
+
+    from abucache import store as abustore
+    from abucache.store import ContentCache, forget, open_cache
+
+    monkeypatch.setattr(abustore, "_tree", lambda root: "")  # no git process in a unit test
+    monkeypatch.setattr(abustore, "_live_trees", lambda root, keep: set())
+    monkeypatch.setattr(ContentCache, "_start_collect", lambda *args: None)  # no detached collect of the test's store
+    tree = tmp_path / "tree"
+    (tree / "build/de/SOURCE/ACHIEVE/ACHIEVE").mkdir(parents=True)
+    (tree / "asm").mkdir()
+    (tree / "asm/a.s").write_text(".text\n")
+    stem = tree / ACHIEVE.removesuffix(".o")
+    stem.with_suffix(".CPP.i").write_text("int achieve;")
+    compiler = tmp_path / "tc" / "cc"
+    compiler.parent.mkdir()
+    compiler.write_text("cc")
+    store = tmp_path / "store"
+    args = [ACHIEVE, str(compiler), "-g0 -O2", "0x5a0", "cc x.i && as x.s", "asm/a.s"]
+    monkeypatch.chdir(tree)
+
+    def run(action: str) -> int:
+        forget()
+        return objcache.main(["objcache", str(store), "1000000000", action, *args])
+
+    assert run("get") == objcache.MISS
+    (tree / ACHIEVE).write_bytes(b"object")
+    assert run("put") == 0
+    forget()
+    cache = open_cache(store, 1000000000)
+    assert cache.collect(now=time.time() + 7 * 3600) == 0  # past the grace period: only unnamed entries go
+    forget()
+    (tree / ACHIEVE).unlink()
+    assert run("get") == 0
+    assert (tree / ACHIEVE).read_bytes() == b"object"
