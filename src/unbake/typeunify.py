@@ -265,6 +265,15 @@ def _decide(
     return made, makes
 
 
+def _closing(
+    root: Path, seams: Seams, census: Census, tried: set[Unit], accepted: Mapping[str, Plan], errors: dict[str, str]
+) -> dict[Unit, str | None]:
+    """The closing check: every object a rewrite reaches or a trial built, built once with the accepted rewrites."""
+    reached = set().union(tried, *(reach(census, p) for p in accepted.values()))
+    with stages.stage("unify.verify"):
+        return rebuild(root, seams, reached, errors)
+
+
 def differing(units: Iterable[Unit], made: Mapping[Unit, str | None], base: Mapping[Unit, str]) -> list[Unit]:
     """The units of `units`, in order, whose new object is missing (the build failed) or not the baseline's."""
     return sorted(u for u in units if made[u] != base[u])
@@ -536,6 +545,8 @@ def run(
         say(line(name, None, failed[name], spent[name]))
     objects.update(cut["objects"])
     fresh = {n: p for n, p in plans.items() if n not in held_objects}
+    back: dict[Unit, str | None] | None = None  # the closing check, when the search made it
+    verify_errors: dict[str, str] = {}
     if fresh:
         started = time.monotonic()
         files = {f for p in fresh.values() for f in p.files}
@@ -553,7 +564,17 @@ def run(
         for n, touching in touches.items():
             for u in touching:
                 touchers[u].add(n)
-        while bad:
+        unknown: set[Unit] = set()  # failed in an earlier state, not rebuilt since a rejection changed its text
+        owed: dict[Unit, set[str]] = defaultdict(set)  # object -> the rejected names that may have cleared it
+        while True:
+            if not bad:
+                # The one closing check: every object reached, built once with the rewrites that remain. It finds a
+                # culprit that an earlier culprit masked, and those only: the rounds trust an explained object.
+                back = _closing(root, seams, census, tried, {**settled, **active}, verify_errors)
+                masked = {u for u, h in back.items() if h != base[u] and any(u in touches[n] for n in active)}
+                if not masked:
+                    break
+                bad, made = masked, back
             for u in sorted(bad):
                 why = (
                     "does not build: " + errors.get(target(u), "no compiler error in the log")
@@ -568,6 +589,7 @@ def run(
                 for names, objs in _object_groups(bad, {n: units_of[n] for n in active})
             ]
             rejected: set[str] = set()
+            explained: set[Unit] = set()  # bad objects whose culprit this round found
             results: dict[int, dict[Unit, str | None]] = {}
             suspect = Counter(bad)  # object -> how many builds of it were not the baseline's
 
@@ -604,6 +626,7 @@ def run(
                     if len(candidates) == 1:
                         name = candidates[0]
                         rejected.add(name)
+                        explained.update(affected)
                         for u, object_hash in sorted(affected.items()):
                             path = target(u)
                             why = (
@@ -653,29 +676,41 @@ def run(
             for name in sorted(rejected):
                 del active[name]
             _write(root, files, active.values(), src)
-            # A second independent culprit may have been masked by the first error.
-            testing = {u for u in bad if any(u in units_of[n] for n in active)}
+            # What the round left to know. An explained object is trusted until the closing check. Another bad object
+            # keeps its failure when no rejected rewrite reaches it (its text is the one it failed with); the rest
+            # (and every object still unknown) is rebuilt in suspect order and stops at its first failing chunk, which
+            # the next round searches: a clean build of all of them is the one full verify, the unbuilt stay unknown.
+            dirty = set().union(*(units_of[n] for n in rejected))
+            carried = {u for u in bad - explained if u not in dirty}
+            for u in (bad | unknown) - carried:
+                owed[u] |= rejected
+            for u in carried:
+                owed.pop(u, None)
+            testing = {u for u in (bad | unknown) - explained - carried if any(u in units_of[n] for n in active)}
             # An object a passing trial built with exactly the rewrites that remain is already verified.
             known = {
                 u: passed[u][1]
                 for u in testing
                 if u in passed and passed[u][0] == frozenset(n for n in active if u in units_of[n])
             }
-            fresh_units = testing - known.keys()
+            fresh_units = sorted(testing - known.keys(), key=lambda u: (-suspect[u], u))
             with stages.stage("unify.isolate.verify"):
-                made = {**known, **rebuild(root, seams, fresh_units, errors)}
-            if fresh_units:
-                built += 1
-                rebuilt += len(fresh_units)
-            remaining_bad = set(differing(testing, made, base))
+                decided, makes = _decide(root, seams, [fresh_units], base, errors)
+            made = {**{u: made[u] for u in carried}, **known, **decided}
+            built += makes
+            rebuilt += len(decided)
+            unknown = testing - made.keys()
+            remaining_bad = carried | set(differing(testing & made.keys(), made, base))
             # Removing one culprit can also clear another object's interacting
             # failure, even when that object passed an earlier half-trial.
-            for u in sorted(bad - remaining_bad):
+            for u in sorted((bad | testing) - explained - remaining_bad - unknown):
                 path = target(u)
-                for name in sorted(rejected):
+                for name in sorted(owed.pop(u, set())):
                     if u in touches[name] and name not in objects[path]["names"]:
                         objects[path]["names"].append(name)
                         held_objects[name][path] = objects[path]["error"]
+            for u in remaining_bad:
+                owed.pop(u, None)
             bad = remaining_bad
             save()
         settled.update(active)
@@ -684,10 +719,8 @@ def run(
             failed[name].update(why_of(name))
             say(line(name, settled.get(name), failed[name], spent[name]))
         _write(root, files, settled.values(), src)
-    reached = set().union(tried, *(reach(census, p) for p in settled.values()))
-    with stages.stage("unify.verify"):
-        verify_errors: dict[str, str] = {}
-        back = rebuild(root, seams, reached, verify_errors)
+    if back is None:
+        back = _closing(root, seams, census, tried, settled, verify_errors)
     broken = sorted(u for u, h in back.items() if h is None)
     if broken:
         raise Refusal(*_compile_findings(broken, verify_errors, census, settled))

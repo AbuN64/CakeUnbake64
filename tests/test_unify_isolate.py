@@ -19,7 +19,7 @@ INNOCENT = 16
 SERIAL_MAKES = 9  # 48 compiled units: makes of [16, 10, 2, 2, 2, 2, 2, 2, 10] units
 # One search over the 16-name slice below: baseline, the rewrites together (round 1), 14 isolate makes, the one
 # verify, the final drift check. The serial passes made 29 rounds and held innocent names.
-ROUNDS = 16
+ROUNDS = 15
 UNITS = 70
 
 
@@ -149,3 +149,62 @@ def test_a_trial_stops_at_its_first_failing_chunk_and_holds_the_same_names(
     assert set(early["held"]) == set(full["held"]) and set(early["unified"]) == set(full["unified"])
     assert sum(map(len, early_world.calls)) < sum(map(len, full_world.calls))
     assert early_verifies <= full_verifies + 1
+
+
+def test_round_verifies_rebuild_only_what_changed_and_the_closing_check_is_the_one_full_verify(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression slice of wave1c unify run a: every round rebuilt the whole set of tested objects (3638, 3329, 3329,
+    3324, 3329 compiles) for each culprit round. Here the same shape (a header every caller includes, culprits that
+    break all callers, two callers or one): with early-stopping trials (rounds that leave objects undecided) the
+    held names are the same, and no make after the rewrites' wave rebuilds every object more than twice."""
+    early, world, _ = _wide_search(tmp_path, monkeypatch, 2)
+    assert set(early["held"]) == {"Aaa03", "Aaa07", "Aaa12"}
+    assert all(early["held"][n] for n in early["held"])
+    wave = len(world.calls[1])
+    full = [c for c in world.calls[2:] if len(c) >= wave]
+    assert len(full) <= 2 and len(world.calls[-1]) >= wave  # the closing check is one of them
+    # the verifies between rounds stop at their first failing chunk: none is a make of every tested object
+    assert all(len(c) < wave for c in world.calls[2:-1])
+
+
+class Masked(Culprits):
+    """An object differs while Aaa03 is in the header, or while Aaa07 and Aaa12 both are: a culprit that only shows
+    once the first is out and that no half-trial on its own sees."""
+
+    def make(self, targets: Sequence[str]) -> tuple[int, str]:
+        self.calls.append(list(targets))
+        header = (self.root / FUNCTION_HEADER).read_text()
+        has = {n for n in ("Aaa03", "Aaa07", "Aaa12") if f"extern int {n};" in header}
+        for target in targets:
+            differs = "Aaa03" in has or {"Aaa07", "Aaa12"} <= has
+            out = self.root / target
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(target + (" differs" if differs and "EXTRA" in target else ""))
+        return 0, ""
+
+
+def test_a_culprit_masked_by_another_is_found_by_the_closing_check_and_searched_once_more(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    names = [f"Aaa{i:02d}" for i in range(INNOCENT)]
+    callers = [f"SOURCE/EXTRA/EXTRA{i:02d}.CPP" for i in range(EXTRA)]
+    world = Masked(tmp_path, {})
+    definition, header = tmp_path / DEFINITION, tmp_path / FUNCTION_HEADER
+    definition.write_text(definition.read_text() + "".join(f"int {n} = 0;\n" for n in names))
+    header.write_text(header.read_text() + "".join(f"extern long {n};\n" for n in names))
+    for path in callers:
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / path).write_text(
+            '#include "ACHIEVE/MATCH_QUALIFIES/MATCH_QUALIFIES.H"\nint use_'
+            + path[-6:-4]
+            + "(void) { return "
+            + " + ".join(names)
+            + "; }\n"
+        )
+    monkeypatch.setattr(typeunify, "FIRST_CHUNK", 2)
+    result = invoke(world, monkeypatch)
+    assert "Aaa03" in result["held"] and result["complete"] is True
+    assert not [n for n in result["unified"] if n in result["held"]]
+    wave = len(world.calls[1])
+    assert len([c for c in world.calls[2:] if len(c) >= wave]) <= 2 + 1

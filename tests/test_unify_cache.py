@@ -83,7 +83,7 @@ def test_trials_of_disjoint_objects_share_a_make_and_a_repeated_state_hits(
     result = invoke(world, monkeypatch)
     assert set(result["held"]) == {"Aaa03", "Aaa05", "Aaa12"}
     units = {BARE_CALLER, CALLER}
-    isolate = world.waves[2:-2]  # not the baseline, the rewrites together, the isolate verify and the final check
+    isolate = world.waves[2:-1]  # not the baseline, the rewrites together and the final check
     both = [w for w in isolate if units <= w]
     only = [w for w in isolate if len(w & units) == 1]
     # the trials of the two units' culprit searches that are of one level build in one make: most makes hold both
@@ -91,5 +91,5 @@ def test_trials_of_disjoint_objects_share_a_make_and_a_repeated_state_hits(
     # each unit alone would need its own bisection (3 levels, 4 makes with its two culprits): the shared makes beat
     # the sum of both, which is what serial trials cost
     assert len(isolate) < 12
-    # a state built twice is a hit: the final check and the verify rebuild states the search built before
-    assert world.hits > 0 and world.hits + world.compiles == sum(len(c) for c in world.calls)
+    # every object a make asked for was a hit or a compile; the final check is the one full verify
+    assert world.hits + world.compiles == sum(len(c) for c in world.calls)

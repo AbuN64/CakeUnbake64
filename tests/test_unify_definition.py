@@ -429,7 +429,7 @@ def test_shared_owning_header_bisects_many_innocent_names(
     final_header = header.read_text()
     assert all(f"void {name}(int value);" in final_header for name in names)
     assert "struct PlayerLoadoutSelectionView *player);" not in final_header
-    assert len(world.calls) == 7  # three halvings for nine names, one reduced wave, final drift
+    assert len(world.calls) == 6  # three halvings for nine names, one wave, final drift: all explained, no round verify
     assert all(len(batch) == 2 and all(CALLER + ".o" in t for t in batch) for batch in world.calls[2:-1])
 
 
