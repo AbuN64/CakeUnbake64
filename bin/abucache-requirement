@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# The one resolver of abucache for every installer of unbake (bin/dev-setup, the rig deploy build, ci): unbake names
+# abucache bare, so the requirement is the commit abucache has landed (its default branch head), never a pin, a tag
+# or an index. Prints `abucache @ git+<url>@<sha>`.
+set -euo pipefail
+abucache_url=https://github.com/AbuN64/cache-64
+landed=$(git ls-remote "$abucache_url" HEAD | cut -f1)
+[[ "$landed" =~ ^[0-9a-f]{40}$ ]] || { echo "no landed abucache commit at $abucache_url" >&2; exit 1; }
+echo "abucache @ git+$abucache_url@$landed"

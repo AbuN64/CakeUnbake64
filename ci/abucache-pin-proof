@@ -8,11 +8,11 @@ old=${1:?usage: ci/abucache-pin-proof OLD_SHA}
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 work=$(mktemp -d "${TMPDIR:?TMPDIR names the scratch directory}/abucache-pin-proof.XXXXXX")
 trap 'rm -rf "$work"' EXIT
-url=$(sed -n 's/.*abucache @ git+\([^@]*\)@[0-9a-f]\{40\}.*/\1/p' "$root/pyproject.toml")
-[[ -n "$url" ]] || { echo "pyproject.toml pins no abucache url" >&2; exit 1; }
+requirement=$("$root/bin/abucache-requirement")  # the one resolver; unbake names abucache bare, so pyproject has no url
+url=${requirement#abucache @ git+}; url=${url%@*}
 { cat "${UNBAKE_HOST:-$HOME/.config/unbake/unbake.toml}"; printf '\n[abucache]\nurl = "%s"\nclone = "%s"\n' "$url" "$work/abucache.git"; } > "$work/host.toml"
 python3 -m venv "$work/venv"
-"$work/venv/bin/pip" install -q -e "$root"
+"$work/venv/bin/pip" install -q "$requirement" -e "$root"
 "$work/venv/bin/pip" install -q --no-deps --force-reinstall "abucache @ git+$url@$old"
 cat > "$work/proof.py" <<'PY'
 import sys

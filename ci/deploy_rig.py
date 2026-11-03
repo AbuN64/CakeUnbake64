@@ -9,9 +9,10 @@ link, the directory the rig job PATH holds; a consumer calls them by name only. 
 prints one line on stderr and exits 1; it calls no other tool of the close and none of another repository's toolkit.
 
   name       the build's NAME, the first 12 hex digits of the sha256 of the requirement `unbake[dev] @ <SHA>`
-             (every dependency is pinned in pyproject.toml, so the landed commit is the whole content);
-  build      the activation (`activate`, BUILD is <toolkit>.<SHA>): `pip install` installs unbake at the landed SHA
-             from the landed tree itself (`git+file://<tree>@<SHA>`; never the GitHub mirror, which can lack a fresh
+             (every dependency but abucache is pinned in pyproject.toml, and abucache is the commit it has landed);
+  build      the activation (`activate`, BUILD is <toolkit>.<SHA>): `pip install` installs abucache at its landed commit
+             (bin/abucache-requirement of the landed tree, as bin/dev-setup) and unbake at the landed SHA from the
+             landed tree itself (`git+file://<tree>@<SHA>`; never the GitHub mirror, which can lack a fresh
              commit) into a fresh venv created as a temporary sibling `<toolkit>.<NAME>.tmp.*`. Only after the install
              succeeded the sibling is made relocatable (its scripts name the final path) and renamed to
              `<toolkit>.<NAME>`, so a failed build leaves no `<toolkit>.<NAME>` and the next deploy of the same SHA
@@ -51,7 +52,8 @@ Bash = Callable[..., "tuple[int, str]"]
 
 # BUILD runs inside the activation job, in the landed tree, with BUILD (<toolkit>.<sha>) set by the close. It creates
 # the fresh venv as the temporary sibling `<toolkit>.<name>.tmp.*`, installs unbake at the landed commit from the tree
-# into it with its pinned dependencies, makes the sibling's scripts name the final path (a venv hard-codes its own
+# into it with its pinned dependencies and abucache at its landed commit (bin/abucache-requirement, the one resolver
+# bin/dev-setup uses too: unbake names abucache bare), makes the sibling's scripts name the final path (a venv hard-codes its own
 # path in every shebang) and renames it to `<toolkit>.<name>` only then, so no failure leaves `<toolkit>.<name>`
 # behind; the trap removes the sibling on any exit before the rename. It links BUILD to the venv: the close's switch
 # is the only way a venv goes live. Arguments: SHA TOOLKIT NAME.
@@ -62,8 +64,9 @@ built=$toolkit.$name
 [ -e "$built" ] && { echo "deploy-error: $built exists" >&2; exit 1; }
 tmp=$(mktemp -d "$built.tmp.XXXXXX") || { echo "deploy-error: mktemp exit $?" >&2; exit 1; }
 trap 'rm -rf "$tmp"' EXIT
+abucache=$(bin/abucache-requirement) || { echo "deploy-error: abucache-requirement exit $?" >&2; exit 1; }
 python3 -m venv "$tmp" || { echo "deploy-error: venv exit $?" >&2; exit 1; }
-"$tmp/bin/python" -m pip install -q "unbake[dev] @ git+file://$PWD@$sha" \
+"$tmp/bin/python" -m pip install -q "$abucache" "unbake[dev] @ git+file://$PWD@$sha" \
   || { echo "deploy-error: pip install exit $?" >&2; exit 1; }
 for file in "$tmp"/bin/*; do
   [ -f "$file" ] && [ ! -L "$file" ] && grep -qIF -- "$tmp" "$file" && sed -i "s|${tmp//./\\.}|$built|g" "$file"

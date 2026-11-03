@@ -27,7 +27,8 @@ def test_setup_installs_the_landed_abucache_commit_before_the_project(tmp_path):
     checkout, fake = tmp_path / "checkout", tmp_path / "fake"
     (checkout / "bin").mkdir(parents=True)
     fake.mkdir()
-    shutil.copy(_ROOT / "bin" / "dev-setup", checkout / "bin" / "dev-setup")
+    for script in ("dev-setup", "abucache-requirement"):
+        shutil.copy(_ROOT / "bin" / script, checkout / "bin" / script)
     shutil.copy(_ROOT / "pyproject.toml", checkout / "pyproject.toml")
     log = tmp_path / "log"
     _tool(fake / "git", f'[[ "$1" == ls-remote ]] || exit 1\nprintf "{_LANDED}\\tHEAD\\n"\n')
@@ -38,3 +39,11 @@ def test_setup_installs_the_landed_abucache_commit_before_the_project(tmp_path):
     first, second = log.read_text().splitlines()
     assert first == f"install abucache @ git+https://github.com/AbuN64/cache-64@{_LANDED}"
     assert second == "install -e .[dev]"
+
+
+def test_one_resolver_owns_the_abucache_url_and_the_landed_lookup():
+    """dev-setup, the rig deploy build and ci call bin/abucache-requirement; none keeps a second resolver."""
+    for path in ("bin/dev-setup", "ci/deploy_rig.py", ".github/workflows/ci.yml", "ci/abucache-pin-proof"):
+        text = (_ROOT / path).read_text(encoding="utf-8")
+        assert "abucache-requirement" in text, path
+        assert "ls-remote" not in text and "cache-64@" not in text, path

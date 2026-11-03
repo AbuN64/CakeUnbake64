@@ -40,7 +40,7 @@ def checkout(tmp_path: Path) -> Path:
     root = tmp_path / "checkout"
     (root / "bin").mkdir(parents=True)
     (root / ".venv/bin").mkdir(parents=True)
-    for script in ("test", "dev-setup"):
+    for script in ("test", "dev-setup", "abucache-requirement"):
         shutil.copy2(ROOT / "bin" / script, root / "bin" / script)
     (root / "pyproject.toml").write_text("[project]\ndependencies = []\n[project.optional-dependencies]\ndev = []\n")
     (root / ".venv/pyvenv.cfg").write_text(f"command = /usr/bin/python3 -m venv {root}/.venv\n")
@@ -125,6 +125,7 @@ def test_setup_clears_moved_environment_and_test_accepts_it(checkout: Path, tmp_
     toolkit_site.mkdir()
     for module in ("abucache", "unbake"):
         (toolkit_site / f"{module}.py").write_text("")
+    executable(tools / "git", '#!/bin/bash\nprintf "43bb0bee68dafc54a2ea0f1dad156806c6cf20ed\\tHEAD\\n"\n')
     wrapper = tools / "python3"
     pip_stub = '\nfrom pathlib import Path\nwith Path("calls").open("a") as log: log.write("pip\\n")\n'
     executable(

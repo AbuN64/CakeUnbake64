@@ -134,6 +134,19 @@ def bash(script, *args, env=None, cwd=None):
     )
 
 
+LANDED = "43bb0bee68dafc54a2ea0f1dad156806c6cf20ed"  # the abucache commit the consumers resolve (stages.timed)
+RESOLVER = Path(__file__).parent.parent / "bin" / "abucache-requirement"
+
+
+def landed_tree(root):
+    """The landed tree as the build sees it: the real resolver, and a git that answers the landed abucache commit.
+    Returns the PATH the build runs with."""
+    (root / "bin").mkdir(exist_ok=True)
+    shutil.copy(RESOLVER, root / "bin" / "abucache-requirement")
+    wrapper(root / "fake/git", f'[ "$1" = ls-remote ] || exit 1\nprintf "{LANDED}\\tHEAD\\n"')
+    return f"{root / 'fake'}:{root / 'bin'}:{os.environ['PATH']}"
+
+
 def test_the_build_script_installs_unbake_at_the_sha_into_a_fresh_venv_and_links_build():
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
@@ -145,18 +158,53 @@ def test_the_build_script_installs_unbake_at_the_sha_into_a_fresh_venv_and_links
         )
         toolkit, build = root / "venv-unbake", root / f"venv-unbake.{SHA}"
         done = bash(
-            deploy_rig.BUILD,
-            SHA,
-            str(toolkit),
-            NAME,
-            cwd=root,
-            env={"BUILD": str(build), "PATH": f"{root / 'bin'}:{os.environ['PATH']}"},
+            deploy_rig.BUILD, SHA, str(toolkit), NAME, cwd=root, env={"BUILD": str(build), "PATH": landed_tree(root)}
         )
         assert done.returncode == 0, done.stdout + done.stderr
         built = root / f"venv-unbake.{NAME}"
         assert build.resolve() == built.resolve() and not toolkit.exists()  # only Job Invoke's switch makes it live
         # the landed tree (the job's working directory) is the source, never a mirror
         assert f"unbake[dev] @ git+file://{root.resolve()}@{SHA}" in (built / "bin/argv").read_text()
+
+
+def test_the_build_resolves_abucache_by_its_landed_commit_through_the_one_resolver():
+    """Regression: unbake names abucache bare and no index has it, so the build's pip install failed with 'No matching
+    distribution found for abucache'. The requirement is the landed commit bin/dev-setup installs, in the same call."""
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        wrapper(
+            root / "bin/python3",
+            'if [ "$1 $2" = "-m venv" ]; then mkdir -p "$3/bin"; cp "$0" "$3/bin/python"; exit 0; fi\n'
+            'echo "$@" > "$(dirname "$0")/argv"',
+        )
+        build = root / f"venv-unbake.{SHA}"
+        env = {"BUILD": str(build), "PATH": landed_tree(root)}
+        done = bash(deploy_rig.BUILD, SHA, str(root / "venv-unbake"), NAME, cwd=root, env=env)
+        assert done.returncode == 0, done.stdout + done.stderr
+        argv = (root / f"venv-unbake.{NAME}/bin/argv").read_text().split(" ", 5)
+        assert argv[:4] == ["-m", "pip", "install", "-q"]
+        want = f"abucache @ git+https://github.com/AbuN64/cache-64@{LANDED}"
+        assert want in (root / f"venv-unbake.{NAME}/bin/argv").read_text()
+        assert deploy_rig.BUILD.count("$(bin/abucache-requirement)") == 1 and "ls-remote" not in deploy_rig.BUILD
+
+
+def test_a_tree_whose_abucache_has_no_landed_commit_fails_the_build_before_any_venv():
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        path = landed_tree(root)
+        wrapper(root / "fake/git", "exit 0")  # ls-remote answers nothing
+        wrapper(root / "bin/python3", "exit 0")
+        done = bash(
+            deploy_rig.BUILD,
+            SHA,
+            str(root / "venv-unbake"),
+            NAME,
+            cwd=root,
+            env={"BUILD": str(root / "b"), "PATH": path},
+        )
+        assert done.returncode == 1 and "no landed abucache commit" in done.stderr
+        assert "deploy-error: abucache-requirement exit 1" in done.stderr
+        assert sorted(p.name for p in root.iterdir()) == ["bin", "fake"]
 
 
 def test_a_failing_install_exits_one_and_links_nothing():
@@ -174,12 +222,12 @@ def test_a_failing_install_exits_one_and_links_nothing():
             str(root / "venv-unbake"),
             NAME,
             cwd=root,
-            env={"BUILD": str(build), "PATH": f"{root / 'bin'}:{os.environ['PATH']}"},
+            env={"BUILD": str(build), "PATH": landed_tree(root)},
         )
         assert done.returncode == 1 and "deploy-error: pip install exit 3" in done.stderr
         assert not build.is_symlink()
         assert not (root / f"venv-unbake.{NAME}").exists()  # a failed build leaves no <toolkit>.<name>
-        assert sorted(p.name for p in root.iterdir()) == ["bin"]  # nor its temporary sibling
+        assert sorted(p.name for p in root.iterdir()) == ["bin", "fake"]  # nor its temporary sibling
 
 
 def test_the_readback_script_checks_the_link_then_the_installed_commit():
@@ -270,7 +318,7 @@ def deploy_build(root):
         str(root / "venv-unbake"),
         NAME,
         cwd=root,
-        env={"BUILD": str(root / f"venv-unbake.{SHA}"), "PATH": f"{root / 'bin'}:{os.environ['PATH']}"},
+        env={"BUILD": str(root / f"venv-unbake.{SHA}"), "PATH": landed_tree(root)},
     )
 
 

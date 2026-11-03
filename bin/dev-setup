@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-# unbake names abucache bare: setup installs the commit abucache has landed (its default branch head), never a pin.
-abucache_url=https://github.com/AbuN64/cache-64
-landed=$(git ls-remote "$abucache_url" HEAD | cut -f1)
-[[ "$landed" =~ ^[0-9a-f]{40}$ ]] || { echo "no landed abucache commit at $abucache_url" >&2; exit 1; }
+# unbake names abucache bare: setup installs the commit abucache has landed (bin/abucache-requirement), never a pin.
+requirement=$(bin/abucache-requirement)
 python3 -m venv --clear .venv
-.venv/bin/pip install "abucache @ git+$abucache_url@$landed"
+.venv/bin/pip install "$requirement"
 .venv/bin/pip install -e '.[dev]'
 sha256sum pyproject.toml > .venv/.pyproject.sha256  # bin/test sets up again when pyproject changes
