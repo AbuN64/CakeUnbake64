@@ -82,7 +82,7 @@ def test_a_command_running_past_the_beat_says_its_stage_and_cpu(monkeypatch, tmp
 
 
 def test_a_beat_before_the_stage_opens_does_not_end_the_wait(monkeypatch, tmp_path):
-    """The old failure order, forced without timing: a beat said outside the stage, then the stage opens, then its beat."""
+    """The old failure order, forced without timing: a beat outside the stage, then the stage opens, then its beat."""
     import threading
 
     said = []
