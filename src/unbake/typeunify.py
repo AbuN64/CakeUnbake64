@@ -767,11 +767,13 @@ def run(
                         execute(wave, root, seams)
                         apply(wave, trials, results, suspect)
                     return
-                waves = [prepare(picks, trials, suspect) for picks in picked]
+                with stages.stage("unify.isolate.book"):  # the serial work around a round's lanes: its own stage line
+                    waves = [prepare(picks, trials, suspect) for picks in picked]
                 started = time.monotonic()
                 process.together(waves, width, lane_tree, lambda w, lane: execute(w, *lane), seams.grant)
-                for wave in waves:
-                    apply(wave, trials, results, suspect)
+                with stages.stage("unify.isolate.book"):
+                    for wave in waves:
+                        apply(wave, trials, results, suspect)
                 wall = time.monotonic() - started
                 stages.say(
                     f"unify.isolate round: {len(waves)} waves in {width} lanes, {wall:.1f}s wall for"
