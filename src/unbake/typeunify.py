@@ -27,6 +27,11 @@ _WORD = re.compile(r"[A-Za-z_]\w*")
 _POINTER = re.compile(r"\(\s*\*")
 WORK = ("batches", "rounds", "rebuilt")  # counts of the builds one run made: not part of what it decided
 ERROR_LINES = 3  # compiler error lines kept per failing object
+# An isolate trial builds its objects in chunks of FIRST_CHUNK, then GROWTH times more each make, most suspect first,
+# and is decided by the first chunk holding an object that is not the baseline's: a failing trial costs one small
+# make, a passing one still builds every object it touches (at most log(n) makes).
+FIRST_CHUNK = 16
+GROWTH = 4
 
 
 @dataclass(frozen=True)
@@ -230,6 +235,34 @@ def rebuild(
             )
         pending = absent
     return {u: None if p in named else _sha(root / p) for p, u in wanted.items()}
+
+
+def _decide(
+    root: Path,
+    seams: Seams,
+    trials: Sequence[Sequence[Unit]],
+    base: Mapping[Unit, str],
+    errors: dict[str, str] | None = None,
+) -> tuple[dict[Unit, str | None], int]:
+    """Build the objects of several trials (each in the order to try them) until each trial has met an object that is
+    not the baseline's or has built all of its own. Answers unit -> hash (None: did not build) for the objects built,
+    and the number of makes. An object a trial did not reach stays undecided; one it did not need is not built."""
+    made: dict[Unit, str | None] = {}
+    seen = [0] * len(trials)
+    live = set(range(len(trials)))
+    size, makes = FIRST_CHUNK, 0
+    while live:
+        taken = {i: trials[i][seen[i] : seen[i] + size] for i in live}
+        chunk = sorted({u for units in taken.values() for u in units if u not in made})
+        if chunk:
+            made.update(rebuild(root, seams, chunk, errors))
+            makes += 1
+        for i, units in taken.items():
+            seen[i] += len(units)
+            if seen[i] >= len(trials[i]) or any(made[u] != base[u] for u in units):
+                live.discard(i)
+        size *= GROWTH
+    return made, makes
 
 
 def differing(units: Iterable[Unit], made: Mapping[Unit, str | None], base: Mapping[Unit, str]) -> list[Unit]:
@@ -536,26 +569,30 @@ def run(
             ]
             rejected: set[str] = set()
             results: dict[int, dict[Unit, str | None]] = {}
+            suspect = Counter(bad)  # object -> how many builds of it were not the baseline's
 
             def run(
                 picks: Sequence[int],
                 trials: Sequence[tuple[frozenset[str], frozenset[Unit]]],
                 results: dict[int, dict[Unit, str | None]],
+                suspect: Counter[Unit],
             ) -> None:
                 nonlocal built, rebuilt
                 written = set().union(*(trials[i][0] for i in picks))
-                deciding = set().union(*(trials[i][1] for i in picks))
                 _write(root, files, [p for n, p in active.items() if n in written], src)
+                # the objects that failed most often in earlier trials first: a trial holding a culprit stops early
+                ordered = [sorted(trials[i][1], key=lambda u: (-suspect[u], u)) for i in picks]
                 with stages.stage("unify.isolate"):
-                    trial_made = rebuild(root, seams, deciding, errors)
-                built += 1
-                rebuilt += len(deciding)
+                    trial_made, makes = _decide(root, seams, ordered, base, errors)
+                built += makes
+                rebuilt += len(trial_made)
                 for i in picks:
                     include, objs = trials[i]
-                    results[i] = {u: trial_made[u] for u in objs}
+                    results[i] = {u: trial_made[u] for u in objs if u in trial_made}  # the others stay undecided
                     for u, object_hash in results[i].items():
                         if object_hash is None or object_hash != base[u]:
                             passed.pop(u, None)
+                            suspect[u] += 1
                         else:  # an object is fixed by the rewrites that reach it: what it was built with is its state
                             passed[u] = (frozenset(n for n in include if u in units_of[n]), object_hash)
 
@@ -598,11 +635,11 @@ def run(
                 rights = {j: i for _, (i, j), _, _ in splits if i is not None and j is not None}
                 waves, later = _waves(trials, touchers, lefts, list(rights))
                 for picks in waves:
-                    run(picks, trials, results)
+                    run(picks, trials, results, suspect)
                 # a right half whose own left half failed and which fitted no wave takes turns now
                 waves, _ = _waves(trials, touchers, [j for j in later if _broken(results, rights[j], base)])
                 for picks in waves:
-                    run(picks, trials, results)
+                    run(picks, trials, results, suspect)
                 nodes = []
                 for (left, right), (left_id, right_id), affected, out in splits:
                     broken_left = _broken(results, left_id, base)

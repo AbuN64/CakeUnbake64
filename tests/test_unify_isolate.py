@@ -98,3 +98,54 @@ def test_every_culprit_of_different_groups_is_found_in_one_search_and_one_verify
     assert result["rounds"] == len(world.calls) - 2 == ROUNDS
     assert sum(len(c) for c in world.calls) <= UNITS
     assert stages.count("unify.isolate.verify") == 1
+
+
+EXTRA = 12
+
+
+def _wide_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chunk: int) -> tuple[dict[str, Any], Culprits, int]:
+    """16 names all used by 12 extra callers (the shape of a header every unit includes), three culprits over shared
+    objects: one breaks every caller, one two of them, one a single one. `chunk` is the first isolate make's size."""
+    names = [f"Aaa{i:02d}" for i in range(INNOCENT)]
+    callers = [f"SOURCE/EXTRA/EXTRA{i:02d}.CPP" for i in range(EXTRA)]
+    culprits = {c: {"Aaa03"} for c in callers}
+    culprits[callers[5]].add("Aaa12")
+    culprits[callers[6]].add("Aaa12")
+    culprits[callers[10]].add("Aaa07")
+    world = Culprits(tmp_path, culprits)
+    definition, header = tmp_path / DEFINITION, tmp_path / FUNCTION_HEADER
+    definition.write_text(definition.read_text() + "".join(f"int {n} = 0;\n" for n in names))
+    header.write_text(header.read_text() + "".join(f"extern long {n};\n" for n in names))
+    for path in callers:
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / path).write_text(
+            '#include "ACHIEVE/MATCH_QUALIFIES/MATCH_QUALIFIES.H"\nint use_'
+            + path[-6:-4]
+            + "(void) { return "
+            + " + ".join(names)
+            + "; }\n"
+        )
+    stages: list[str] = []
+    real_stage = typeunify.stages.stage
+
+    def stage(name: str) -> Any:
+        stages.append(name)
+        return real_stage(name)
+
+    monkeypatch.setattr(typeunify.stages, "stage", stage)
+    monkeypatch.setattr(typeunify, "FIRST_CHUNK", chunk)
+    result = invoke(world, monkeypatch)
+    return result, world, stages.count("unify.isolate.verify")
+
+
+def test_a_trial_stops_at_its_first_failing_chunk_and_holds_the_same_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The search with early-stopping trials holds exactly the names of the search whose trials build every object
+    they touch, from fewer object builds, and closes with a bounded number of verifies. Counts of builds only."""
+    full, full_world, full_verifies = _wide_search(tmp_path / "full", monkeypatch, 10**9)
+    early, early_world, early_verifies = _wide_search(tmp_path / "early", monkeypatch, 2)
+    assert set(full["held"]) == {"Aaa03", "Aaa07", "Aaa12"}
+    assert set(early["held"]) == set(full["held"]) and set(early["unified"]) == set(full["unified"])
+    assert sum(map(len, early_world.calls)) < sum(map(len, full_world.calls))
+    assert early_verifies <= full_verifies + 1
