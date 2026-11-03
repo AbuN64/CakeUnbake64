@@ -219,7 +219,9 @@ def test_a_unify_cut_short_in_its_isolate_rounds_leaves_its_decisions_and_the_re
     make = cut.make
 
     def dies(targets: Sequence[str]) -> tuple[int, str]:
-        if len(cut.calls) == 3:  # baseline, wave and split built: the reduced wave is where the bound falls
+        if (
+            len(cut.calls) == 4
+        ):  # baseline, wave, the failing left half and then the right half built: the verify is cut
             raise Killed
         return make(targets)
 

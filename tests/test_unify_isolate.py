@@ -4,10 +4,12 @@ The make seam counts the sequential makes and the units they compile."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
-from test_unify_definition import CALLER, DATA, DEFINITION, FUNCTION, FUNCTION_HEADER, World, invoke
+from test_unify_definition import BARE_CALLER, CALLER, DATA, DEFINITION, FUNCTION, FUNCTION_HEADER, World, invoke
 
 from unbake import typeunify
 
@@ -15,6 +17,10 @@ INNOCENT = 16
 # What the trial-per-half bisection cost before it tested only the objects its half touches: every trial rebuilt the
 # bad objects, so each of its halvings was one make of them, and none was skipped.
 SERIAL_MAKES = 9  # 48 compiled units: makes of [16, 10, 2, 2, 2, 2, 2, 2, 10] units
+# One search over the 16-name slice below: baseline, the rewrites together (round 1), 14 isolate makes, the one
+# verify, the final drift check. The serial passes made 29 rounds and held innocent names.
+ROUNDS = 16
+UNITS = 70
 
 
 def test_isolate_skips_trials_whose_half_touches_no_bad_object(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -33,3 +39,62 @@ def test_isolate_skips_trials_whose_half_touches_no_bad_object(tmp_path: Path, m
     # (b) fewer sequential makes, and the units compiled at the seam
     assert len(world.calls) < SERIAL_MAKES
     assert sum(len(c) for c in world.calls) < 48
+
+
+class Culprits(World):
+    """A world whose object differs when the header holds the rewrite (`extern int <name>;`) of one of its culprits."""
+
+    def __init__(self, root: Path, culprits: dict[str, set[str]]) -> None:
+        super().__init__(root)
+        self.culprits = culprits  # unit -> the names whose rewrite changes its object
+
+    def make(self, targets: Sequence[str]) -> tuple[int, str]:
+        self.calls.append(list(targets))
+        header = (self.root / FUNCTION_HEADER).read_text()
+        for target in targets:
+            unit = target.split("/", 2)[2][:-2]
+            differs = any(f"extern int {n};" in header for n in self.culprits.get(unit, ()))
+            out = self.root / target
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(target + (" differs" if differs else ""))
+        return 0, ""
+
+
+def test_every_culprit_of_different_groups_is_found_in_one_search_and_one_verify(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three culprits in two bad units, each unit using half of 16 names: the serial search was one pass per culprit,
+    each with its bisection rounds and a full verify; one search finds them all, the halves of a level share a make
+    and one verify closes it. Counts of makes and units, never wall time."""
+    world = Culprits(tmp_path, {BARE_CALLER: {"Aaa03", "Aaa05"}, CALLER: {"Aaa12"}})
+    names = [f"Aaa{i:02d}" for i in range(INNOCENT)]
+    definition, header = tmp_path / DEFINITION, tmp_path / FUNCTION_HEADER
+    definition.write_text(definition.read_text() + "".join(f"int {n} = 0;\n" for n in names))
+    header.write_text(header.read_text() + "".join(f"extern long {n};\n" for n in names))
+    for path, used in ((BARE_CALLER, names[: INNOCENT // 2 + 1]), (CALLER, names[INNOCENT // 2 + 1 :])):
+        user = tmp_path / path
+        user.write_text(
+            '#include "ACHIEVE/MATCH_QUALIFIES/MATCH_QUALIFIES.H"\n'
+            + user.read_text()
+            + "int uses_"
+            + path[-8:-4]
+            + "(void) { return "
+            + " + ".join(used)
+            + "; }\n"
+        )
+    stages: list[str] = []
+    real_stage = typeunify.stages.stage
+
+    def stage(name: str) -> Any:
+        stages.append(name)
+        return real_stage(name)
+
+    monkeypatch.setattr(typeunify.stages, "stage", stage)
+    result = invoke(world, monkeypatch)
+    # (a) the result is the serial search's: every culprit held, every other name unified, each held on its objects
+    assert set(result["held"]) == {"Aaa03", "Aaa05", "Aaa12"}
+    assert set(result["unified"]) == {DATA, FUNCTION, *names} - {"Aaa03", "Aaa05", "Aaa12"}
+    # (b) one search: the passes of the serial search (three culprits, nine makes each at this size) are gone
+    assert result["rounds"] == len(world.calls) - 2 == ROUNDS
+    assert sum(len(c) for c in world.calls) <= UNITS
+    assert stages.count("unify.isolate.verify") == 1

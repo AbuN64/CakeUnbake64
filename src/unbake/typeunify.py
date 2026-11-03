@@ -256,6 +256,45 @@ def _object_groups(bad: set[Unit], units_of: Mapping[str, frozenset[Unit]]) -> l
     return [(tuple(sorted(names)), units) for names, units in groups]
 
 
+Node = tuple[tuple[str, ...], dict[Unit, str | None], frozenset[str]]  # (names, bad object -> its hash, names left out)
+
+
+def _broken(
+    results: Mapping[int, Mapping[Unit, str | None]], trial: int | None, base: Mapping[Unit, str]
+) -> dict[Unit, str | None]:
+    """The objects a trial decided that are not the baseline's, with what it built (None: it did not build)."""
+    return {} if trial is None else {u: h for u, h in results[trial].items() if h != base[u]}
+
+
+def _waves(
+    trials: Sequence[tuple[frozenset[str], frozenset[Unit]]],
+    touchers: Mapping[Unit, set[str]],
+    required: Sequence[int],
+    optional: Sequence[int] = (),
+) -> tuple[list[list[int]], list[int]]:
+    """The `required` trials grouped into waves that share one write and one make, and the `optional` ones that fit a
+    wave. A trial is (the rewrites it writes, the objects it decides); it joins a wave when no rewrite the wave writes
+    beyond its own touches an object it decides, so each object is built with exactly the rewrites that can change it.
+    Trials on separate objects run in one make; trials that meet on an object (different rewrites reaching it) take
+    turns. An optional trial that fits no wave is answered back, never given a make of its own."""
+    waves: list[tuple[set[str], list[int]]] = []
+    blocking = {i: set().union(*(touchers[u] for u in trials[i][1])) for i in (*required, *optional)}
+
+    def join(i: int) -> bool:
+        for written, picks in waves:
+            union = written | trials[i][0]
+            if all(not (union - trials[j][0]) & blocking[j] for j in (*picks, i)):
+                written |= trials[i][0]
+                picks.append(i)
+                return True
+        return False
+
+    for i in required:
+        if not join(i):
+            waves.append((set(trials[i][0]), [i]))
+    return [picks for _, picks in waves], [i for i in optional if not join(i)]
+
+
 def _write(root: Path, files: Iterable[str], held: Iterable[Plan], src: Sources) -> None:
     held = list(held)
     for path in sorted(files):
@@ -477,6 +516,10 @@ def run(
             made = rebuild(root, seams, span, errors)
         bad = set(differing(span, made, base))
         active = dict(fresh)
+        touchers: dict[Unit, set[str]] = defaultdict(set)  # object -> the rewrites that touch it
+        for n, touching in touches.items():
+            for u in touching:
+                touchers[u].add(n)
         while bad:
             for u in sorted(bad):
                 why = (
@@ -485,61 +528,90 @@ def run(
                     else "object differs"
                 )
                 objects.setdefault(target(u), {"error": why, "names": []})
-            tasks = _object_groups(bad, {n: units_of[n] for n in active})
+            # One search finds every culprit: a node is the names that may hold one, the bad objects they explain and
+            # the names left out of its trials (the suspect siblings of the branches above it).
+            nodes: list[Node] = [
+                (names, {u: made[u] for u in objs}, frozenset())
+                for names, objs in _object_groups(bad, {n: units_of[n] for n in active})
+            ]
             rejected: set[str] = set()
-            while tasks:
+            results: dict[int, dict[Unit, str | None]] = {}
+
+            def run(
+                picks: Sequence[int],
+                trials: Sequence[tuple[frozenset[str], frozenset[Unit]]],
+                results: dict[int, dict[Unit, str | None]],
+            ) -> None:
+                nonlocal built, rebuilt
+                written = set().union(*(trials[i][0] for i in picks))
+                deciding = set().union(*(trials[i][1] for i in picks))
+                _write(root, files, [p for n, p in active.items() if n in written], src)
+                with stages.stage("unify.isolate"):
+                    trial_made = rebuild(root, seams, deciding, errors)
+                built += 1
+                rebuilt += len(deciding)
+                for i in picks:
+                    include, objs = trials[i]
+                    results[i] = {u: trial_made[u] for u in objs}
+                    for u, object_hash in results[i].items():
+                        if object_hash is None or object_hash != base[u]:
+                            passed.pop(u, None)
+                        else:  # an object is fixed by the rewrites that reach it: what it was built with is its state
+                            passed[u] = (frozenset(n for n in include if u in units_of[n]), object_hash)
+
+            while nodes:
                 save()
-                split = []
-                for candidates, affected in tasks:
+                trials: list[tuple[frozenset[str], frozenset[Unit]]] = []  # (rewrites written, objects it decides)
+                splits = []
+                for candidates, affected, out in nodes:
                     if len(candidates) == 1:
                         name = candidates[0]
                         rejected.add(name)
-                        for u in sorted(affected):
+                        for u, object_hash in sorted(affected.items()):
                             path = target(u)
                             why = (
                                 "does not build: " + errors.get(path, "no compiler error in the log")
-                                if made[u] is None
+                                if object_hash is None
                                 else "object differs"
                             )
                             held_objects[name][path] = why
                             objects[path]["names"].append(name)
-                    else:
-                        mid = len(candidates) // 2
-                        split.append((candidates[:mid], candidates[mid:], affected))
-                if not split:
+                        continue
+                    mid = len(candidates) // 2
+                    halves = (candidates[:mid], candidates[mid:])
+                    ids: list[int | None] = []
+                    # Each half is tried alone, the other one out. The left half decides first; the right half is
+                    # tried as well only when the left fails, and its trial is given a make only if it fits one.
+                    for tested, other in (halves, halves[::-1]):
+                        deciding = frozenset(u for u in affected if any(u in touches[n] for n in tested))
+                        omit = out.union(other)
+                        if deciding and (not ids or ids[0] is not None):
+                            trials.append((frozenset(n for n in active if n not in omit), deciding))
+                            ids.append(len(trials) - 1)
+                        else:
+                            ids.append(None)
+                    splits.append((halves, ids, affected, out))
+                if not splits:
                     break
-                # The other half stays in the background in later trials. This also
-                # isolates interacting edits and multiple culprits in the same object.
-                omitted = {n for _, right, _ in split for n in right}
-                trial = [p for n, p in active.items() if n not in omitted]
-                in_trial = [n for n in active if n not in omitted]
-                _write(root, files, trial, src)
-                # An object the left half does not touch is built as in the last trial that passed it, so it
-                # cannot break in this one: only the objects the left half touches are rebuilt.
-                testing = set().union(
-                    *({u for u in affected if any(u in touches[n] for n in left)} for left, _, affected in split)
-                )
-                with stages.stage("unify.isolate"):
-                    trial_made = rebuild(root, seams, testing, errors)
-                if testing:
-                    built += 1
-                    rebuilt += len(testing)
-                broken_trial = set(differing(testing, trial_made, base))
-                for u in testing:
-                    object_hash = trial_made[u]
-                    if u in broken_trial or object_hash is None:
-                        passed.pop(u, None)
-                    else:  # an object is fixed by the rewrites that reach it: what it was built with is its state
-                        passed[u] = (frozenset(n for n in in_trial if u in units_of[n]), object_hash)
-                tasks = []
-                for left, right, affected in split:
-                    broken_left = affected & broken_trial
-                    if broken_left:
-                        tasks.append((left, broken_left))
-                        for u in broken_left:
-                            made[u] = trial_made[u]
-                    else:
-                        tasks.append((right, affected))
+                results.clear()
+                lefts = [i for _, (i, _), _, _ in splits if i is not None]
+                rights = {j: i for _, (i, j), _, _ in splits if i is not None and j is not None}
+                waves, later = _waves(trials, touchers, lefts, list(rights))
+                for picks in waves:
+                    run(picks, trials, results)
+                # a right half whose own left half failed and which fitted no wave takes turns now
+                waves, _ = _waves(trials, touchers, [j for j in later if _broken(results, rights[j], base)])
+                for picks in waves:
+                    run(picks, trials, results)
+                nodes = []
+                for (left, right), (left_id, right_id), affected, out in splits:
+                    broken_left = _broken(results, left_id, base)
+                    if not broken_left:
+                        nodes.append((right, affected, out))  # the left half holds none: the culprits are in the right
+                        continue
+                    nodes.append((left, broken_left, out.union(right)))
+                    if broken_right := _broken(results, right_id, base):
+                        nodes.append((right, broken_right, out.union(left)))
             save()
             for name in sorted(rejected):
                 del active[name]
@@ -564,7 +636,7 @@ def run(
             for u in sorted(bad - remaining_bad):
                 path = target(u)
                 for name in sorted(rejected):
-                    if u in units_of[name] and name not in objects[path]["names"]:
+                    if u in touches[name] and name not in objects[path]["names"]:
                         objects[path]["names"].append(name)
                         held_objects[name][path] = objects[path]["error"]
             bad = remaining_bad
