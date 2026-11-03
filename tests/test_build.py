@@ -397,7 +397,8 @@ def test_local_mk_names_pinned_tools_only_by_host_path(tmp_path, monkeypatch):
         cache_max_bytes=1,
     )
     text = build.local_mk(SimpleNamespace(host=host)).decode()
-    assert "JOBS := 4" in text
+    assert "JOBS" not in text
+    assert "-m abucache.slots --make" in text
     assert "CPP := /usr/bin/cpp" in text
     assert "ABUMAS :=" not in text  # a pinned tool is the Makefile's own fetch
 

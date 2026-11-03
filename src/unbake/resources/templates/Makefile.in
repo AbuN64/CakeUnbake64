@@ -6,7 +6,7 @@
 # make extract           splits every baserom into asm/<version>/ with splat; a data file's section is its stand-in's.
 #                        A build extracts a version that has no asm/<version>/ yet on its own.
 # make nm                (or NON_MATCHING=1) links one ROM per version with every draft compiled in (see below).
-# make V=1               echoes every command; JOBS (local.mk) sets the parallel jobs.
+# make V=1               echoes every command; abucache.slots grants the parallel width, held until make exits.
 # local.mk (machine-local, written by `unbake sync --makefile`) names the tools: compilers, CCPY, MKTOOLS (the folder
 # of the build's helper programs), SPLAT, CPP...
 SHELL := /bin/sh
@@ -17,11 +17,21 @@ SHELL := /bin/sh
 .DEFAULT_GOAL := all
 Q = $(if $(filter 1,$(V)),,@)
 CHECK ?= rom
+ADMIT_MAKE ?= python3 -m abucache.slots --make-parent
 -include local.mk
-ifneq ($(JOBS),)
-ifeq ($(filter -j% --jobserver%,$(MAKEFLAGS)),)
-MAKEFLAGS += -j$(JOBS)
-endif
+# An outer make only delegates. Capture flags before make creates its own jobserver from a raw -j.
+# A recursive invocation keeps a parent's jobserver; a standalone invocation obtains host admission.
+ifeq ($(_ABUCACHE_ADMITTED),)
+ADMISSION_FLAGS := $(MAKEFLAGS)
+shq = '$(subst ','\'',$(1))'
+.PHONY: admit $(MAKECMDGOALS)
+.DEFAULT_GOAL := admit
+admit:
+	+@MAKELEVEL=$(MAKELEVEL) MAKEFLAGS=$(call shq,$(ADMISSION_FLAGS)) $(ADMIT_MAKE) $$PPID
+$(filter-out admit,$(MAKECMDGOALS)): admit ;
+else
+ifeq ($(shell expr "$(UNBAKE_CORES)" : '[1-9][0-9]*$$'),0)
+$(error UNBAKE_CORES must be a positive admitted width)
 endif
 ifeq ($(CHECK),rom)
 MKTOOLS ?= $(error MKTOOLS is not set: run unbake sync --makefile to write local.mk)
@@ -295,3 +305,5 @@ $(VERSIONS:%=build/nm/%/$(NAME).z64): build/nm/%/$(NAME).z64: build/nm/%/$(NAME)
 	echo "NM ROM $*: $$(grep -c '^draft' build/nm/$*/report.txt) unit(s) with drafts in," \
 	"$$(grep -c '^left-out' build/nm/$*/report.txt) left out (build/nm/$*/report.txt)"
 endif
+
+endif # admitted make

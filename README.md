@@ -32,6 +32,10 @@ Older-build address tables: [docs/address-tables.md](docs/address-tables.md).
 ## Development
 
 Run `bin/dev-setup` once, then `bin/test`, `bin/lint` and `bin/hygiene`.
+During a joint repository gate, `bin/abucache-requirement` uses the dependency source supplied by ButlerMaster's
+`WORKTREE_Projects_AbuN64_AbuCache64` contract. This variable belongs to ButlerMaster's gate/job interface; it lets
+the private test environment validate the candidate dependency before either repository lands. An invalid supplied
+tree refuses setup. Outside that interface, the resolver selects AbuCache64's landed commit.
 
 ## License
 
@@ -42,3 +46,10 @@ Released under [GNU GPL version 3 or later](LICENSE).
 AbuCache64 owns every cache, content store, worker slot, pool, executor and timing path (abucache.compile, store,
 slots, pool, stages). `ci/abucache-audit`, run by the check entry point, refuses a new one here naming that owner; the
 files it still lists move to abucache and leave the list, nothing joins it.
+
+Generated make obtains a positive parallel width from `abucache.slots` and holds the grant until its make child exits.
+`unbake sync --makefile` writes the admission command into `local.mk`; `JOBS` does not grant parallel work.
+The host must provide the AbuCache64 runtime (`ABU_RUNTIME`, otherwise its standard operator file).
+`python -m unbake.hostruntime --out <runtime-file>` renders it from the unbake host configuration.
+Inherited `UNBAKE_CORES` and GNU make jobservers keep the parent's admission. Missing or invalid admission refuses
+before build recipes run; a standalone raw `-j` cannot bypass admission.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-# unbake names abucache bare: setup installs the commit abucache has landed (bin/abucache-requirement), never a pin.
+# The resolver supplies the joint gate's dependency worktree or the landed commit, never a pin.
 requirement=$(bin/abucache-requirement)
 python3 -m venv --clear .venv
 .venv/bin/pip install "$requirement"

@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
 # The one resolver of abucache for every installer of unbake (bin/dev-setup, the rig deploy build, ci): unbake names
 # abucache bare, so the requirement is the commit abucache has landed (its default branch head), never a pin, a tag
-# or an index. Prints `abucache @ git+<url>@<sha>`.
+# or an index. ButlerMaster's public WORKTREE contract supplies the dependency candidate during a joint gate.
+# Prints that local source when supplied, otherwise `abucache @ git+<url>@<sha>`.
 set -euo pipefail
+if [[ -v WORKTREE_Projects_AbuN64_AbuCache64 ]]; then
+    candidate=$WORKTREE_Projects_AbuN64_AbuCache64
+    [[ "$candidate" = /* && -f "$candidate/pyproject.toml" ]] || {
+        echo 'invalid AbuCache64 dependency worktree' >&2
+        exit 1
+    }
+    printf '%s\n' "$candidate"
+    exit 0
+fi
 abucache_url=https://github.com/AbuN64/cache-64
 landed=$(git ls-remote "$abucache_url" HEAD | cut -f1)
 [[ "$landed" =~ ^[0-9a-f]{40}$ ]] || { echo "no landed abucache commit at $abucache_url" >&2; exit 1; }

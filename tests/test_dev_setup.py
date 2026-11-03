@@ -7,6 +7,8 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[1]
 _LANDED = "43bb0bee68dafc54a2ea0f1dad156806c6cf20ed"
 
@@ -22,7 +24,8 @@ def test_pyproject_names_abucache_bare():
     assert not any(r.startswith("abucache") and r != "abucache" for r in pyproject["project"]["dependencies"])
 
 
-def test_setup_installs_the_landed_abucache_commit_before_the_project(tmp_path):
+@pytest.mark.parametrize("candidate", [False, True])
+def test_setup_installs_the_admitted_source_before_the_project(tmp_path, monkeypatch, candidate):
     """git, python3 and pip are canned: the log shows which requirement each install was given, in order."""
     checkout, fake = tmp_path / "checkout", tmp_path / "fake"
     (checkout / "bin").mkdir(parents=True)
@@ -34,11 +37,31 @@ def test_setup_installs_the_landed_abucache_commit_before_the_project(tmp_path):
     _tool(fake / "git", f'[[ "$1" == ls-remote ]] || exit 1\nprintf "{_LANDED}\\tHEAD\\n"\n')
     _tool(fake / "python3", 'mkdir -p .venv/bin\ncp "$FAKE_PIP" .venv/bin/pip\n')
     _tool(tmp_path / "pip", f'echo "$@" >> "{log}"\n')
+    source = tmp_path / "dependency candidate"
+    if candidate:
+        source.mkdir()
+        (source / "pyproject.toml").write_text('[project]\nname = "abucache"\n')
+        monkeypatch.setenv("WORKTREE_Projects_AbuN64_AbuCache64", str(source))
+        _tool(fake / "git", "exit 97\n")  # a supplied candidate must not resolve main over the network
     env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "FAKE_PIP": str(tmp_path / "pip")}
     subprocess.run([checkout / "bin" / "dev-setup"], check=True, env=env, capture_output=True)
     first, second = log.read_text().splitlines()
-    assert first == f"install abucache @ git+https://github.com/AbuN64/cache-64@{_LANDED}"
+    requirement = str(source) if candidate else f"abucache @ git+https://github.com/AbuN64/cache-64@{_LANDED}"
+    assert first == f"install {requirement}"
     assert second == "install -e .[dev]"
+
+
+@pytest.mark.parametrize("source", ["", "relative", "missing"])
+def test_an_invalid_supplied_dependency_refuses_before_lookup(tmp_path, monkeypatch, source):
+    fake = tmp_path / "fake"
+    fake.mkdir()
+    _tool(fake / "git", "exit 97\n")
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    monkeypatch.setenv("WORKTREE_Projects_AbuN64_AbuCache64", str(tmp_path / source) if source == "missing" else source)
+    done = subprocess.run([_ROOT / "bin/abucache-requirement"], capture_output=True, text=True)
+    assert done.returncode == 1
+    assert done.stdout == ""
+    assert "invalid AbuCache64 dependency worktree" in done.stderr
 
 
 def test_one_resolver_owns_the_abucache_url_and_the_landed_lookup():

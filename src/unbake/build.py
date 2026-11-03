@@ -1073,7 +1073,7 @@ def _objstore(config: Config) -> str:
 def local_mk(config: Config) -> bytes:
     with stages.stage("build.local_mk"):
         assignments = [
-            f"JOBS := {config.host.workers}",
+            f"ADMIT_MAKE := {shlex.quote(sys.executable)} -m abucache.slots --make-parent",
             f"PPUNIT := {_preprocess_unit(config)}",
             f"CCPY := {_cc_cache()}",
             f"OBJSTORE := {_objstore(config)}",

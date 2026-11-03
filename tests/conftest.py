@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import itertools
+import os
+import sys
 import time
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
@@ -106,6 +108,7 @@ def _fresh_module_state(monkeypatch, _process_state):
     worker slots of its own: tests never touch the host's real slot and command locks."""
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(_process_state / "run"))
     monkeypatch.delenv("UNBAKE_CORES", raising=False)  # a test runner's holder is not these tests' holder
+    monkeypatch.delenv("WORKTREE_Projects_AbuN64_AbuCache64", raising=False)  # fixture installers own their sources
     forget()
     memo._clear()
     stages._listeners[:] = [effort._track]  # the hold beat reads the open stage from the one tracker
@@ -119,6 +122,10 @@ def _fresh_module_state(monkeypatch, _process_state):
         cache_dir=_process_state / "cache",
         cache_max_bytes=1 << 30,
     )
+    runtime_path = _process_state / "runtime.toml"
+    runtime_path.write_text(hostruntime.runtime_toml(host))  # type: ignore[arg-type]
+    monkeypatch.setenv("ABU_RUNTIME", str(runtime_path))
+    monkeypatch.setenv("PATH", str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"])
     runtime = hostruntime.runtime(host)  # type: ignore[arg-type]
     pool.configure(runtime, spill_dir=_process_state / "spill", identity_package="unbake")
     yield
