@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import builtins
+import hashlib
 import importlib.resources
 import os
 import subprocess
@@ -18,6 +20,16 @@ from unbake import front as front_module
 from unbake.resources import cc_cache
 
 STANDALONE = "the program must start on its own from the package file: a real process is the check"
+
+
+@pytest.fixture(autouse=True)
+def fresh_process_state():
+    """Each test starts as a fresh process: no memoized identity, no cache remembered for the digests."""
+    cc_cache.IDENTITIES.clear()
+    cc_cache.IDENTITY_HOME.clear()
+    yield
+    cc_cache.IDENTITIES.clear()
+    cc_cache.IDENTITY_HOME.clear()
 
 
 def fake_cc(tmp_path: Path) -> Path:
@@ -815,3 +827,90 @@ def test_a_repeated_round_answers_a_passing_and_a_failing_unit_from_the_cache_an
     assert len([line for line in said if " miss " in line]) == 2  # only the first round's, none in the second
     assert capfd.readouterr().err.count("bad.i:1: error: broken") == 2
     assert not list(root.glob("*.cc*"))  # the answers were taken or cleared
+
+
+def folder_of(tmp_path: Path, files: int = 24, size: int = 12_276_728) -> Path:
+    """A compiler folder the size of ido-5.3 (24 files, 12,276,728 bytes); `cc` is the driver in it."""
+    folder = tmp_path / "ido"
+    folder.mkdir()
+    each = size // files
+    for number in range(files):
+        (folder / ("cc" if number == 0 else f"pass{number}")).write_bytes(bytes([number]) * each)
+    return folder / "cc"
+
+
+def test_identity_reads_compiler_folder_once(tmp_path, monkeypatch):
+    """Regression slice of wave1c: the build runs one fresh process per compile, and each read the whole compiler folder
+    (475 GB for 38,690 compiles of ido-5.3). 1000 fresh processes that each miss read the folder at most once."""
+    cc = folder_of(tmp_path)
+    folder, cache = str(cc.parent), tmp_path / "cache"
+    read_bytes = []
+    real_open = builtins.open
+
+    class Counting:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def read(self, *size):
+            data = self.handle.read(*size)
+            read_bytes.append(len(data))
+            return data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *error):
+            self.handle.close()
+
+    def counting_open(path, *args, **kwargs):
+        handle = real_open(path, *args, **kwargs)
+        return Counting(handle) if os.fspath(path).startswith(folder + os.sep) else handle
+
+    def compiled(command, **kwargs):
+        args = command[1:]
+        out = args[args.index("-o") + 1]
+        source = next(a for a in args if a.endswith(".i"))
+        Path(out).write_bytes(Path(source).read_bytes().upper())
+        return SimpleNamespace(returncode=0, stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", compiled)
+    monkeypatch.setattr(cc_cache, "maybe_prune", lambda cache: None)
+    monkeypatch.setattr(builtins, "open", counting_open)
+    monkeypatch.chdir(tmp_path)
+    for number in range(1000):
+        cc_cache.IDENTITIES.clear()  # a fresh process
+        Path("x.i").write_text(f"int a{number};")
+        assert cc_cache.run(str(cache), str(cc), ["-O2", "x.i", "-o", "x.s"]) == 0
+        assert Path("x.s").read_text() == f"INT A{number};"
+    assert sum(read_bytes) <= 12_276_728
+    assert len(list(cache.glob("??/*"))) == 1000  # every one was a miss that stored its result
+
+
+def test_the_kept_identity_gives_the_key_of_the_folder_read(tmp_path):
+    """The kept digest is the digest of the folder's bytes, so keys of entries stored before it hit still."""
+    cc = folder_of(tmp_path, files=4, size=4000)
+    expected = hashlib.sha256(b"cc")
+    for path in sorted(cc.parent.iterdir()):
+        expected.update(b"\0" + path.name.encode() + b"\0" + path.read_bytes())
+    args = ["-O2", "x.i", "-o", "x.s"]
+    plain = cc_cache.key(str(cc), args, b"int a;")
+    assert cc_cache.identity(str(cc)) == expected.digest()
+    cc_cache.remember(str(tmp_path / "cache"))
+    cc_cache.IDENTITIES.clear()
+    assert cc_cache.key(str(cc), args, b"int a;") == plain  # computed, then kept
+    cc_cache.IDENTITIES.clear()
+    assert cc_cache.key(str(cc), args, b"int a;") == plain  # taken from the kept digest
+    assert len(list((tmp_path / "cache" / "identity").iterdir())) == 1
+
+
+def test_a_changed_file_of_the_folder_is_read_again(tmp_path):
+    cc = folder_of(tmp_path, files=4, size=4000)
+    cc_cache.remember(str(tmp_path / "cache"))
+    before = cc_cache.identity(str(cc))
+    cc_cache.IDENTITIES.clear()
+    (cc.parent / "pass1").write_bytes(b"x" * 1000)  # another size
+    after = cc_cache.identity(str(cc))
+    assert after != before
+    cc_cache.IDENTITIES.clear()
+    os.utime(cc.parent / "pass1", ns=(1, 1))  # same bytes, another date: read again, same digest
+    assert cc_cache.identity(str(cc)) == after

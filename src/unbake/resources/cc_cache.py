@@ -52,21 +52,56 @@ def parse(args: list[str]) -> tuple[str, str] | None:
 
 
 IDENTITIES: dict[str, bytes] = {}
+IDENTITY_HOME: list[str] = []  # the cache folder whose `identity/` keeps the digests between processes (see remember)
+
+
+def remember(cache: str) -> None:
+    """Keep the compiler folders' digests under this cache from here on: the build starts one process per compile, and
+    each would read the whole folder again (ido-5.3: 12 MB a compile, 475 GB for one batch of the wave1c replay)."""
+    IDENTITY_HOME[:] = [os.fspath(cache)]
+
+
+def folder_files(folder: str) -> list[tuple[str, os.stat_result]]:
+    """The files of a compiler's folder that count (no dotfile, no folder), by name, with their stat."""
+    found = []
+    for name in sorted(os.listdir(folder)):
+        path = os.path.join(folder, name)
+        if not name.startswith(".") and os.path.isfile(path):
+            found.append((name, os.stat(path)))
+    return found
 
 
 def identity(compiler: str) -> bytes:
     """The compiler as its output can depend on it: the bytes of every file beside it (a driver such as IDO's cc runs
     the passes in its own folder), by name, and which of them it is. Not where the folder is, and not a dotfile: the
     installer's `.pin-manifest.json` holds the dates of the pinned files, written again whenever they move, and moved
-    every key of the toolchain on the host with it. Read once per process."""
+    every key of the toolchain on the host with it. Read once per process; and once per folder state for all processes
+    when a cache is remembered: the digest is kept under the name, size and date of each file, so a process that finds
+    them unchanged reads none of the files."""
     if compiler not in IDENTITIES:
         folder = os.path.dirname(os.path.abspath(compiler))
-        digest = sha256(os.path.basename(compiler).encode(errors="surrogateescape"))
-        for name in sorted(os.listdir(folder)):
-            path = os.path.join(folder, name)
-            if not name.startswith(".") and os.path.isfile(path):
-                digest.update(b"\0" + name.encode(errors="surrogateescape") + b"\0" + read(path))
+        base = os.path.basename(compiler).encode(errors="surrogateescape")
+        files = folder_files(folder)
+        state = "\0".join([f"{n}\0{i.st_size}\0{i.st_mtime_ns}" for n, i in files]).encode(errors="surrogateescape")
+        record = None
+        if IDENTITY_HOME:
+            where = sha1(folder.encode(errors="surrogateescape") + b"\0" + base).hexdigest()
+            record = os.path.join(IDENTITY_HOME[0], "identity", where)
+            with contextlib.suppress(OSError):
+                kept = read(record)
+                if len(kept) > 32 and kept[32:] == state:
+                    IDENTITIES[compiler] = kept[:32]
+                    return kept[:32]
+        digest = sha256(base)
+        for name, _ in files:
+            digest.update(b"\0" + name.encode(errors="surrogateescape") + b"\0" + read(os.path.join(folder, name)))
         IDENTITIES[compiler] = digest.digest()
+        if record is not None:  # a cache that cannot keep it only costs the next process the read
+            with contextlib.suppress(OSError):
+                os.makedirs(os.path.dirname(record), exist_ok=True)
+                part = f"{record}.{os.getpid()}.part"
+                write(part, IDENTITIES[compiler] + state)
+                os.replace(part, record)
     return IDENTITIES[compiler]
 
 
@@ -350,6 +385,7 @@ def compile_and_keep(cache: str, name: str, compiler: str, args: list[str], out:
 
 def run(cache: str, compiler: str, args: list[str]) -> int:
     cache = os.fspath(cache)
+    remember(cache)
     parsed = parse(args)
     if parsed is None:
         return call(compiler, args)
@@ -906,6 +942,7 @@ def batch(cache: str, root: str, manifest: str, index: int, count: int) -> int:
     see `take_answer`) and counts as resolved. A compile the cache cannot answer is left to the front, which runs the
     compiler.
     Returns how many it resolved."""
+    remember(cache)
     done = 0
     for number, (compiler, args) in enumerate(commands(manifest)):
         parsed = parse(args)
