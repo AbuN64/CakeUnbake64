@@ -61,6 +61,29 @@ def test_a_second_tree_copies_the_assembly_of_the_same_text(tmp_path):
     assert runs(cc) == 1
 
 
+@pytest.mark.parametrize("version", ["de", "eu", "eu-x"])
+def test_the_unit_of_run_13_compiled_twice_from_identical_key_parts_hits(tmp_path, version):
+    """Regression slice of the real keys (dkum run 13 miss lines): one unit per version, the output named as the miss
+    lines name it, compiled in two trees from identical flags and text. The second copies; the compiler runs once."""
+    cc, cache = fake_cc(tmp_path), tmp_path / "cc"
+    unit = f"build/{version}/SOURCE/FRONTEND/RANDOM/RANDOM_REPLACETEXTOCCURRENCES.CPP"
+    args = ["-quiet", "-O2", "-G0", f"{unit}.i", "-o", f"{unit}.s"]
+    texts = []
+    for name in ("a", "b"):
+        root = tmp_path / name
+        (root / unit).parent.mkdir(parents=True)
+        (root / f"{unit}.i").write_text("int random_replace(int a);")
+        cwd = os.getcwd()
+        os.chdir(root)
+        try:
+            assert cc_cache.run(str(cache), str(cc), args) == 0
+        finally:
+            os.chdir(cwd)
+        texts.append((root / f"{unit}.s").read_text())
+    assert texts == ["INT RANDOM_REPLACE(INT A);"] * 2
+    assert runs(cc) == 1
+
+
 def test_a_changed_text_compiles_again(tmp_path):
     cc, cache = fake_cc(tmp_path), tmp_path / "cc"
     compile_in(tree(tmp_path, "a", "int a;"), cache, cc)

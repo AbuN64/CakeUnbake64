@@ -68,3 +68,25 @@ def test_build_says_the_miss_lines_after_the_count_line_and_clears_them(tmp_path
         "make.front: miss object o.o flags=ff key=kk",
     ]
     assert not (tmp_path / "u.s.cc.miss").exists() and not (tmp_path / "o.o.oc.miss").exists()
+
+
+def test_build_counts_the_batch_answers_into_the_commands_cache_totals(tmp_path, monkeypatch):
+    """unify.json's `cache` is the command's counters: the batches are processes of their own, so the front adds what
+    it read back from them (run 13: 'make.front: 3356 of 3356 compiles from the cache' beside cache hits 0)."""
+    monkeypatch.setattr(front.stages, "say", lambda text: None)
+    monkeypatch.setattr(front.process, "scratch", lambda root: root)
+    monkeypatch.setattr(front.stages, "_counters", {})
+    cc = tmp_path / "cc1"
+
+    def start(record: str | None, preprocess: bool) -> str:
+        if record is not None:
+            Path(record).write_text("".join(f"{cc}\x1f-O2\x1fu{n}.i\x1f-o\x1fu{n}.s\n" for n in range(3)))
+        return "built"
+
+    def batch(store: Path, root: Path, manifest: Path, workers: int, mode: str = "--batch") -> None:
+        for n in range(2):  # two of the three units are answered
+            (root / f"u{n}.s.cc").write_text("asm")
+
+    monkeypatch.setattr(front.process, "batch", batch)
+    assert front.build(start, tmp_path, tmp_path / "store", 2) == "built"
+    assert front.stages.cache_total({}) == {"hits": 2, "misses": 1, "kinds": {"make.front": {"hits": 2, "misses": 1}}}

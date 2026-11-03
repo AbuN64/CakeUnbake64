@@ -53,17 +53,27 @@ def build[Result](start: Callable[[str | None, bool], Result], root: Path, store
                 process.objects(root, objects, workers)
                 found = _drop_stored(manifest, objects, root)
                 span.add(items=found)
+                _count("make.front.objects", found, len(_recorded(objects)) - found)
                 stages.say(f"make.front: {found} objects from the store")
         with stages.stage("make.front") as span:
             process.batch(store, root, manifest, workers)
             answered, total = _answered(manifest, root)
             span.add(items=total)
+            _count("make.front", answered, total - answered)
             stages.say(f"make.front: {answered} of {total} compiles from the cache, {total - answered} compile")
             for line in _misses(manifest, objects, root):
                 stages.say(line)
         return start(None, False)
     finally:
         _clear(manifest, root)
+
+
+def _count(kind: str, hits: int, misses: int) -> None:
+    """Add a batch's answers to the command's cache counters (stages.count): the batches are processes of their own, so
+    their lookups reach `unify.json`'s `cache` only through the totals the front reads back from their records."""
+    for hit, number in ((True, hits), (False, misses)):
+        for _ in range(max(0, number)):
+            stages.count(kind, hit)
 
 
 def _recorded(objects: Path) -> list[str]:

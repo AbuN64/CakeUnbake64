@@ -1041,12 +1041,13 @@ def census_command(cfg: Config, params: Json) -> Json:
 
 
 def _rows(result: Json) -> str:
-    """The --out table: a row per decided name."""
-    rows = ["name\tstatus\ttype\tseconds\tfailing per candidate type\n"]
-    for name, secs in sorted(result["seconds"].items()):
+    """The --out table: a row per decided name. What the run decided only: the seconds a name took differ per run (they
+    stay in the result file), so two runs over one tree write the same table."""
+    rows = ["name\tstatus\ttype\tfailing per candidate type\n"]
+    for name in sorted(result["seconds"]):
         got = result["unified"].get(name)
         bad = "; ".join(f"{t or 'no plan'} => {w}" for t, w in result["unresolved"].get(name, {}).items())
-        rows.append(f"{name}\t{'unified' if got else 'unresolved'}\t{got['type'] if got else ''}\t{secs}\t{bad}\n")
+        rows.append(f"{name}\t{'unified' if got else 'unresolved'}\t{got['type'] if got else ''}\t{bad}\n")
     return "".join(rows)
 
 

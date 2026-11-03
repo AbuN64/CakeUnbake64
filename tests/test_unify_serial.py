@@ -93,3 +93,22 @@ def test_verify_skips_objects_a_passing_trial_built_with_the_remaining_rewrites(
     assert [len(c) for c in world.calls][1:4] == [10, bad, bad]
     assert len(world.calls) == 5
     assert result["verified"] > bad
+
+
+def test_the_out_table_holds_only_what_was_decided_so_two_runs_write_the_same_table():
+    from unbake import typeunify
+
+    def document(secs: float) -> dict:
+        return {
+            "seconds": {"B": secs, "A": secs * 2},
+            "unified": {"A": {"type": "void(int)"}},
+            "unresolved": {"B": {"int": "x"}},
+        }
+
+    first, second = typeunify._rows(document(1.5)), typeunify._rows(document(2.5))
+    assert first == second
+    assert first.splitlines() == [
+        "name\tstatus\ttype\tfailing per candidate type",
+        "A\tunified\tvoid(int)\t",
+        "B\tunresolved\t\tint => x",
+    ]
