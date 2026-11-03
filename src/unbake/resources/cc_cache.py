@@ -378,12 +378,25 @@ def included(depfile: bytes) -> list[str]:
     return names
 
 
+FILE_DIGESTS: dict[tuple[str, int, int], str] = {}
+
+
+def file_digest(name: str) -> str:
+    """The sha256 of a file's bytes, read once per process for as long as its date and size stay (a batch worker meets
+    the same header closure in unit after unit). Raises OSError when it cannot be read."""
+    info = os.stat(name)
+    memo = (name, info.st_mtime_ns, info.st_size)
+    if memo not in FILE_DIGESTS:
+        FILE_DIGESTS[memo] = sha256(read(name)).hexdigest()
+    return FILE_DIGESTS[memo]
+
+
 def digests(names: list[str]) -> bytes | None:
     """`<sha256> <name>` per included file; None when one cannot be read (no entry can be made)."""
     lines = []
     for name in names:
         try:
-            lines.append(f"{sha256(read(name)).hexdigest()} {name}")
+            lines.append(f"{file_digest(name)} {name}")
         except OSError:
             return None
     return "\n".join(lines).encode(errors="surrogateescape")
@@ -394,7 +407,7 @@ def unchanged(recorded: bytes) -> bool:
     for line in recorded.decode(errors="surrogateescape").splitlines():
         want, _, name = line.partition(" ")
         try:
-            if sha256(read(name)).hexdigest() != want:
+            if file_digest(name) != want:
                 return False
         except OSError:
             return False

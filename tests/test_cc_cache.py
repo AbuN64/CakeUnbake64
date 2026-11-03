@@ -600,3 +600,24 @@ def test_a_real_units_stamp_command_makes_the_whole_stamp_with_one_preprocessor_
     assert (root / stamp).exists() and not text.with_suffix(".new").exists()
     assert runs(cpp) == 1
     assert (tmp_path / "stamprec.log").read_text() == f"record {stamp}\n" * 2
+
+
+def test_units_sharing_a_header_closure_read_each_header_once_per_process(tmp_path, monkeypatch):
+    headers = [tmp_path / f"h{i}.h" for i in range(5)]
+    for i, header in enumerate(headers):
+        header.write_text(f"int h{i};\n")
+    names = [str(h) for h in headers]
+    reads: list[str] = []
+    real = cc_cache.read
+    monkeypatch.setattr(cc_cache, "read", lambda path: (reads.append(path), real(path))[1])
+    monkeypatch.setattr(cc_cache, "FILE_DIGESTS", {})
+    recorded = cc_cache.digests(names)
+    for _ in range(40):  # forty units of one batch worker, one closure
+        assert cc_cache.digests(names) == recorded and cc_cache.unchanged(recorded)
+    assert sorted(reads) == sorted(names)
+    # a header written again (new size) is read again and no longer matches what was recorded
+    headers[2].write_text("int h2; int more;\n")
+    assert not cc_cache.unchanged(recorded)
+    assert reads.count(names[2]) == 2 and len(reads) == len(names) + 1
+    headers[3].unlink()
+    assert not cc_cache.unchanged(recorded) and cc_cache.digests(names) is None
