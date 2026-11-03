@@ -1,4 +1,4 @@
-"""pyproject declares abucache by name only: a commit pin strands unbake behind the abucache the timing consumers resolve."""
+"""pyproject declares abucache by name only: a commit pin strands unbake behind the abucache timing consumers use."""
 
 import re
 import tomllib
