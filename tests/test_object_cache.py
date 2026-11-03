@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from unbake import build, config, objcache
+from unbake import build, config, front, objcache
 
 
 class Store:
@@ -300,6 +300,67 @@ def test_workers_split_the_gets_by_number(tmp_path, monkeypatch):
         objcache.batch(a.store, str(manifest), index, 3)
     assert sum((tmp_path / (out + ".oc.miss")).exists() for out in SLICE) == len(SLICE)
     assert len(a.store.counts) == len(SLICE)
+
+
+def miss_fields(root: Path, out: str) -> dict[str, str]:
+    return dict(word.split("=") for word in (root / (out + ".oc.miss")).read_text().split())
+
+
+def test_a_missed_object_leaves_the_digests_of_each_entry_key_part_and_a_hit_leaves_none(tmp_path, monkeypatch):
+    a, _ = trees(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "e.s").write_text("extracted")
+    record(tmp_path, tmp_path / "store", a.compiler, ["build/a.o"])
+    words = ["get", "build/a.o", str(a.compiler), "-O2", "", "as", "e.s"]
+
+    def miss(*changes: tuple[int, str]) -> dict[str, str]:
+        row = list(words)
+        for index, value in changes:
+            row[index] = value
+        assert objcache.answer(a.store, *row[1:6], row[6:]) is False
+        return miss_fields(tmp_path, "build/a.o")
+
+    base = miss()
+    parts = {"flags", "textsize", "program", "passes", "extracted", "tools", "text", "key"}
+    assert set(base) == parts and all(len(v) == 16 for v in base.values())
+    assert {k for k, v in miss((3, "-O3")).items() if v != base[k]} == {"flags", "key"}
+    assert {k for k, v in miss((4, "0x100")).items() if v != base[k]} == {"textsize", "key"}
+    assert {k for k, v in miss((5, "as2")).items() if v != base[k]} == {"program", "key"}
+    (tmp_path / "e.s").write_text("another")
+    assert {k for k, v in miss().items() if v != base[k]} == {"extracted", "key"}
+    (tmp_path / "e.s").write_text("extracted")
+    (tmp_path / "build/a.i").write_text("int other;")
+    assert {k for k, v in miss().items() if v != base[k]} == {"text", "key"}
+    monkeypatch.setattr(objcache, "_passes", lambda: "other passes")
+    assert {k for k, v in miss().items() if v != base[k]} >= {"passes", "key"}
+    monkeypatch.undo()
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "build/a.i").write_text("int a;")
+    (a.compiler.parent / "beside").write_text("a file beside the compiler")
+    assert {k for k, v in miss().items() if v != base[k]} == {"tools", "key"}
+    # a stored object is a hit: no marker, no record
+    (a.compiler.parent / "beside").unlink()
+    a.store.put(
+        "unit", objcache.entry("build/a.o", str(a.compiler), "-O2", "", "as", ["e.s"]), objcache.frame(b"o", None)
+    )
+    assert objcache.answer(a.store, *words[1:6], words[6:]) is True
+    assert not (tmp_path / "build/a.o.oc.miss").exists()
+
+
+def test_the_front_says_one_line_per_missed_object_and_clears_the_records(tmp_path, monkeypatch):
+    a, _ = trees(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    manifest = record(tmp_path, tmp_path / "store", a.compiler, SLICE)
+    objects = manifest
+    base = tmp_path / "cc-commands.1"
+    base.write_text("")  # no compile recorded: only objects
+    assert objcache.batch(a.store, str(objects), 0, 1) == 0
+    lines = front._misses(base, objects, tmp_path)
+    assert len(lines) == len(SLICE)
+    for out, line in zip(SLICE, lines, strict=True):
+        assert line == f"make.front: miss object {out} {(tmp_path / (out + '.oc.miss')).read_text().strip()}"
+    front._clear(base, tmp_path)
+    assert not any((tmp_path / (out + ".oc.miss")).exists() for out in SLICE)
 
 
 def cc_probe():

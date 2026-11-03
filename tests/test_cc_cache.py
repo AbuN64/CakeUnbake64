@@ -14,6 +14,7 @@ import fixture
 import pytest
 
 from unbake import build
+from unbake import front as front_module
 from unbake.resources import cc_cache
 
 STANDALONE = "the program must start on its own from the package file: a real process is the check"
@@ -195,6 +196,55 @@ def test_a_batch_answers_hits_and_leaves_misses_to_the_front(tmp_path):
     assert runs(cc) == 1  # an answered unit ran no compiler
     made = subprocess.run(["sh", str(FRONT), str(cache), str(cc), *command("miss")], cwd=root, check=False)
     assert made.returncode == 0 and (root / "miss.s").read_text() == "INT C;" and runs(cc) == 2
+
+
+def miss_fields(root: Path, name: str) -> dict[str, str]:
+    return dict(word.split("=") for word in (root / name).read_text().split())
+
+
+def missed(tmp_path: Path, cc: Path, text: str, *flags: str, root_name: str = "m") -> tuple[Path, Path, Path]:
+    """A batch over one compile the cache does not hold; returns (root, cache, manifest)."""
+    cache, manifest = tmp_path / "cc", tmp_path / f"commands.{root_name}"
+    root = tree(tmp_path, root_name, text)
+    manifest.write_text(f"{cc}\x1f" + "\x1f".join(["-quiet", *flags, "x.i", "-o", "x.s"]) + "\n")
+    assert batch_of(root, cache, manifest) == 0
+    return root, cache, manifest
+
+
+def test_a_missed_compile_leaves_the_digests_of_each_key_part_and_a_hit_leaves_none(tmp_path):
+    cc = fake_cc(tmp_path)
+    root, cache, manifest = missed(tmp_path, cc, "int a;", "-O2")
+    base = miss_fields(root, "x.s.cc.miss")
+    assert set(base) == {"compiler", "head", "text", "key"} and not (root / "x.s.cc").exists()
+    assert all(len(value) == 16 for value in base.values())
+    # a changed text, flags or compiler changes its own part and the key, nothing else
+    other_text = miss_fields(*missed(tmp_path, cc, "int b;", "-O2", root_name="t")[:1], "x.s.cc.miss")
+    other_head = miss_fields(*missed(tmp_path, cc, "int a;", "-O3", root_name="h")[:1], "x.s.cc.miss")
+    assert {k for k in base if base[k] != other_text[k]} == {"text", "key"}
+    assert {k for k in base if base[k] != other_head[k]} == {"head", "key"}
+    (cc.parent / "beside").write_text("a file beside the compiler")
+    cc_cache.IDENTITIES.clear()
+    other_cc = miss_fields(*missed(tmp_path, cc, "int a;", "-O2", root_name="c")[:1], "x.s.cc.miss")
+    assert {k for k in base if base[k] != other_cc[k]} == {"compiler", "key"}
+    # the compile now stored: the batch answers it, writes no record and drops a stale one
+    cwd = os.getcwd()
+    os.chdir(root)
+    try:
+        assert cc_cache.run(str(cache), str(cc), ["-quiet", "-O2", "x.i", "-o", "x.s"]) == 0
+    finally:
+        os.chdir(cwd)
+    assert batch_of(root, cache, manifest) == 1 and not (root / "x.s.cc.miss").exists()
+
+
+def test_the_front_says_one_line_per_miss_and_clears_the_records(tmp_path):
+    cc = fake_cc(tmp_path)
+    root, _, manifest = missed(tmp_path, cc, "int a;", "-O2")
+    objects = manifest.with_name(manifest.name + ".obj")
+    lines = front_module._misses(manifest, objects, root)
+    record = (root / "x.s.cc.miss").read_text().strip()
+    assert lines == [f"make.front: miss compile x.s {record}"]
+    front_module._clear(manifest, root)
+    assert not (root / "x.s.cc.miss").exists() and not manifest.exists()
 
 
 def test_a_batch_answer_equals_the_single_front_answer(tmp_path):

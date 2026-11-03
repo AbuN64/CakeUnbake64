@@ -59,6 +59,8 @@ def build[Result](start: Callable[[str | None, bool], Result], root: Path, store
             answered, total = _answered(manifest, root)
             span.add(items=total)
             stages.say(f"make.front: {answered} of {total} compiles from the cache, {total - answered} compile")
+            for line in _misses(manifest, objects, root):
+                stages.say(line)
         return start(None, False)
     finally:
         _clear(manifest, root)
@@ -94,12 +96,33 @@ def _answered(manifest: Path, root: Path) -> tuple[int, int]:
     return sum((root / (out + ".cc")).exists() for _, out in parsed), len(parsed)
 
 
+def _misses(manifest: Path, objects: Path, root: Path) -> list[str]:
+    """One line per compile (`<out>.cc.miss`) and per object (`<out>.oc.miss`) the batches could not answer, from the
+    records they left: the output and the digests of the parts of its key, to diff two rounds by output name."""
+    lines = []
+    outs = [(f"{out}.cc.miss", "compile", out) for _, out in _parsed(manifest)]
+    if objects.exists():
+        outs += [(f"{out}.oc.miss", "object", out) for out in _recorded(objects)]
+    for name, kind, out in outs:
+        try:
+            record = (root / name).read_text(errors="surrogateescape").strip()
+        except OSError:
+            continue
+        lines.append(f"make.front: miss {kind} {out} {record}")
+    return lines
+
+
+def _parsed(manifest: Path) -> list[tuple[str, str]]:
+    return [p for _, args in cc_cache.commands(str(manifest)) if (p := cc_cache.parse(args)) is not None]
+
+
 def _clear(manifest: Path, root: Path) -> None:
     """Remove the record and any answer a unit left unclaimed, so a later build never takes one for another text."""
     if manifest.exists():
         for _, args in cc_cache.commands(str(manifest)):
             if (parsed := cc_cache.parse(args)) is not None:
-                (root / (parsed[1] + ".cc")).unlink(missing_ok=True)
+                for suffix in (".cc", ".cc.miss"):
+                    (root / (parsed[1] + suffix)).unlink(missing_ok=True)
     objects = manifest.with_name(manifest.name + ".obj")
     if objects.exists():
         for out in _recorded(objects):

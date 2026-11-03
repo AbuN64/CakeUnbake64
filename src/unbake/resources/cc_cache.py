@@ -73,6 +73,16 @@ def key(compiler: str, args: list[str], text: bytes) -> str:
     return str(sha256(identity(compiler) + b"\0" + head + b"\0" + text).hexdigest())
 
 
+def miss_record(compiler: str, args: list[str], text: bytes, name: str) -> bytes:
+    """What a compile the batch could not answer leaves in `<out>.cc.miss`: one line with the digests (first 16 hex
+    digits) of the parts of its key, so two rounds can be diffed by output: the compiler's identity, the command line
+    head and the input text, then the key itself."""
+    head = "\0".join(args).encode(errors="surrogateescape")
+    parts = {"compiler": identity(compiler), "head": head, "text": text}
+    words = [f"{part}={sha256(data).hexdigest()[:16]}" for part, data in parts.items()]
+    return (" ".join([*words, f"key={name[:16]}"]) + "\n").encode()
+
+
 def answer_key(compiler: str, args: list[str], text: bytes) -> str:
     """What a batch answer (`<out>.cc`) is for, written beside it as `<out>.cc.key`: the command line exactly as the
     front records it, then the text. The front (cc_front.sh) takes the answer only when its own command and input give
@@ -821,7 +831,9 @@ def batch(cache: str, root: str, manifest: str, index: int, count: int) -> int:
             text = read(source)
             found = lookup(cache, compiler, args, text)
             if found is None:
+                write(out + ".miss", miss_record(compiler, args, text, key(compiler, args, text)))
                 continue
+            _remove(out + ".miss")
             write(out, found)
             write(out + ".key", (answer_key(compiler, args, text) + "\n").encode())
         except OSError:

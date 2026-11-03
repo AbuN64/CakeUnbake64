@@ -113,17 +113,50 @@ def _passes() -> str:
     return sums.hexdigest()
 
 
-def entry(out: str, compiler: str, flags: str, textsize: str, program: str, extracted: Sequence[str]) -> str:
-    """The store key of the object `out` the program would make."""
+def _parts(
+    out: str, compiler: str, flags: str, textsize: str, program: str, extracted: Sequence[str]
+) -> dict[str, str]:
+    """The parts of the store key of the object `out`, each as the text that goes into the key (the extracted
+    files and the toolchain by their digests already)."""
     sums = hashlib.sha256()
     for name in extracted:
         with contextlib.suppress(OSError):
             sums.update(Path(name).read_bytes())
+    return {
+        "flags": _installed(flags),
+        "textsize": textsize,
+        "program": _installed(program),
+        "passes": _passes(),
+        "extracted": sums.hexdigest(),
+        "tools": tools(compiler),
+    }
+
+
+def entry(out: str, compiler: str, flags: str, textsize: str, program: str, extracted: Sequence[str]) -> str:
+    """The store key of the object `out` the program would make."""
+    p = _parts(out, compiler, flags, textsize, program, extracted)
     source = out.removesuffix(".o") + ".i"
     step = compile.Step(
-        "object", Path(out).name, (_installed(flags), textsize, _installed(program), _passes(), sums.hexdigest())
+        "object", Path(out).name, (p["flags"], p["textsize"], p["program"], p["passes"], p["extracted"])
     )
-    return compile.key(Path(source).read_bytes(), Path(source).name, [step], tools(compiler))
+    return compile.key(Path(source).read_bytes(), Path(source).name, [step], p["tools"])
+
+
+def _describe(out: str, compiler: str, flags: str, textsize: str, program: str, extracted: Sequence[str]) -> bytes:
+    """What an object the store cannot answer leaves in `<out>.oc.miss`: one line with the digests (first 16 hex
+    digits) of the parts of its entry key, so two rounds can be diffed by output: flags, textsize, program, passes, the
+    extracted text and the tools, then the `.i` text and the key."""
+    p = _parts(out, compiler, flags, textsize, program, extracted)
+    words = [f"{name}={_digest(value)}" for name, value in p.items()]
+    with contextlib.suppress(OSError):
+        words.append(f"text={_digest(Path(out.removesuffix('.o') + '.i').read_bytes())}")
+    with contextlib.suppress(OSError):
+        words.append(f"key={entry(out, compiler, flags, textsize, program, extracted)[:16]}")
+    return (" ".join(words) + "\n").encode()
+
+
+def _digest(value: str | bytes) -> str:
+    return hashlib.sha256(value.encode() if isinstance(value, str) else value).hexdigest()[:16]
 
 
 def frame(obj: bytes, assembly: bytes | None) -> bytes:
@@ -205,7 +238,7 @@ def answer(
     cache.count(_KIND, blob is not None)
     if blob is None:
         with contextlib.suppress(OSError):
-            Path(out + ".oc.miss").write_bytes(b"")
+            Path(out + ".oc.miss").write_bytes(_describe(out, compiler, flags, textsize, program, extracted))
     return blob is not None
 
 
