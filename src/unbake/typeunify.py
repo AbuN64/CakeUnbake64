@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import shutil
 import time
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from abucache import pool, stages
@@ -22,6 +24,8 @@ from unbake.typeplan import Plan, Sources, plan, readers, render, sites_of
 Unit = tuple[str, str]  # (version, source path)
 Facts = tuple[list[str], list[Stmt], frozenset[str], frozenset[str]]  # (typedefs, project statements, files, words)
 _FAILED = re.compile(r"\*\*\* \[(?:[^\]\s]+: )?([^\]\s]+\.o)\]")
+# a unit whose preprocess stamp failed (a header the rewrites left out) builds no object either: its stamp is the unit's
+_STAMP = re.compile(r"\*\*\* \[(?:[^\]\s]+: )?([^\]\s]+)\.i\.ok\]")
 _ERROR = re.compile(r"^(.+?)\.i:\d+:(?:\d+:)? (?!warning)(.*)$", re.M)
 _WORD = re.compile(r"[A-Za-z_]\w*")
 _POINTER = re.compile(r"\(\s*\*")
@@ -41,6 +45,12 @@ class Seams:
     units: Callable[[], Mapping[str, Sequence[str]]]  # version -> compiled source paths
     read: Callable[[Sequence[Unit]], list[Facts]]  # the facts of each unit's preprocessed text
     make: Callable[[Sequence[str]], tuple[int, str]]  # object paths -> (exit code, log)
+    # lane number, the files a trial writes -> (a root of its own holding the tree, the seams building in it): the
+    # isolate waves of one pass run each in a lane, `width` at a time. None: the waves take turns in the one tree.
+    lane: Callable[[int, Collection[str]], tuple[Path, Seams]] | None = None
+    width: int = 1
+    # the jobs the makes of the lanes of a pass share, as one jobserver (0: each make takes its own, as one at a time)
+    grant: int = 0
 
 
 @dataclass
@@ -205,6 +215,16 @@ def _first_errors(log: str, failed: Iterable[str]) -> dict[str, str]:
     return {path: " | ".join(first) if first else "no compiler error in the log" for path, first in lines.items()}
 
 
+def _stamp_errors(log: str, stamps: Iterable[str]) -> dict[str, str]:
+    """The first error line of each object whose preprocess stamp failed: it names the unit's source, not its `.i`."""
+    out: dict[str, str] = {}
+    for path in stamps:
+        source = path.split("/", 2)[2][:-2]
+        found = re.search(rf"^{re.escape(source)}:\d+:(?:\d+:)? ((?:fatal )?error.*)$", log, re.M)
+        out[path] = found[1] if found else "its preprocess failed"
+    return out
+
+
 def rebuild(
     root: Path, seams: Seams, units: Iterable[Unit], errors: dict[str, str] | None = None
 ) -> dict[Unit, str | None]:
@@ -223,11 +243,19 @@ def rebuild(
     while pending:
         code, log = seams.make(pending)
         failed = {m for m in _FAILED.findall(log) if m in pending}
-        if code != 0 and not failed:
-            raise Refusal(Finding("unify.build", f"make exited {code} and named no unit that failed: it did not build"))
-        named |= failed
+        stamps = {f"{m}.o" for m in _STAMP.findall(log) if f"{m}.o" in pending} - failed
+        if code != 0 and not failed and not stamps:
+            tail = " | ".join(line.strip() for line in log.splitlines()[-6:] if line.strip())
+            raise Refusal(
+                Finding(
+                    "unify.build",
+                    f"make exited {code} and named no unit that failed: it did not build. Its log ends: {tail}"[:900],
+                )
+            )
+        named |= failed | stamps
         if errors is not None:
             errors.update(_first_errors(log, failed))
+            errors.update(_stamp_errors(log, stamps))
         absent = [p for p in pending if p not in named and not (root / p).is_file()]
         if len(absent) == len(pending):
             raise Refusal(
@@ -301,6 +329,21 @@ def _object_groups(bad: set[Unit], units_of: Mapping[str, frozenset[Unit]]) -> l
     return [(tuple(sorted(names)), units) for names, units in groups]
 
 
+@dataclass
+class Wave:
+    """One isolate wave: the trials it decides, what it writes, and what its builds answered."""
+
+    picks: list[int]
+    held: list[Plan]  # the rewrites it writes
+    ordered: list[list[Unit]]  # the objects of each trial, in the order to try them
+    states: dict[Unit, tuple[Unit, frozenset[str]]]  # object -> the memo key of the state it is built in
+    seen: dict[Unit, str | None]  # objects already built in that state
+    made: dict[Unit, str | None] = field(default_factory=dict)
+    makes: int = 0
+    seconds: float = 0.0
+    errors: dict[str, str] = field(default_factory=dict)
+
+
 Node = tuple[tuple[str, ...], dict[Unit, str | None], frozenset[str]]  # (names, bad object -> its hash, names left out)
 
 
@@ -308,7 +351,7 @@ def _broken(
     results: Mapping[int, Mapping[Unit, str | None]], trial: int | None, base: Mapping[Unit, str]
 ) -> dict[Unit, str | None]:
     """The objects a trial decided that are not the baseline's, with what it built (None: it did not build)."""
-    return {} if trial is None else {u: h for u, h in results[trial].items() if h != base[u]}
+    return {} if trial is None or trial not in results else {u: h for u, h in results[trial].items() if h != base[u]}
 
 
 def _waves(
@@ -340,15 +383,65 @@ def _waves(
     return [picks for _, picks in waves], [i for i in optional if not join(i)]
 
 
-def _write(root: Path, files: Iterable[str], held: Iterable[Plan], src: Sources) -> None:
-    """Write the files as the held rewrites render them: its own stage line, as time between trials is not make time."""
+def _write(
+    root: Path,
+    files: Iterable[str],
+    held: Iterable[Plan],
+    src: Sources,
+    written: dict[str, frozenset[str]] | None = None,
+    rendered: dict[tuple[str, frozenset[str]], bytes] | None = None,
+) -> None:
+    """Write the files as the held rewrites render them: its own stage line, as time between trials is not make time.
+    With `written` (path -> the held rewrites its text was last rendered with, kept by the caller for a tree only it
+    writes) a file already as asked is left alone, so a wave pays for what differs from the one before it; `rendered`
+    keeps the bytes of a (path, rewrites) the trees share."""
     held = list(held)
+    by_path: dict[str, set[str]] = defaultdict(set)
+    for p in held:
+        for f in p.files:
+            by_path[f].add(p.name)
+        if p.header:
+            by_path[p.header].add(p.name)
     with stages.stage("unify.write"):
         for path in sorted(files):
+            key = frozenset(by_path.get(path, ()))
+            if written is not None and written.get(path) == key:
+                continue
             if path in src.missing and not any(p.header == path for p in held):
                 (root / path).unlink(missing_ok=True)
-                continue
-            store.write(root / path, render(path, held, src).encode("latin-1"))
+            else:
+                if rendered is None or (path, key) not in rendered:
+                    data = render(path, [p for p in held if p.name in key], src).encode("latin-1")
+                    if rendered is not None:
+                        rendered[path, key] = data
+                else:
+                    data = rendered[path, key]
+                store.write(root / path, data)
+            if written is not None:
+                written[path] = key
+
+
+def _farm(root: Path, home: Path, files: Collection[str], skip: Collection[str] = ()) -> None:
+    """Make `home` a tree that reads as `root` but takes the writes of `files`: every entry of `root` is a symlink to
+    it, except `skip` (top-level names the lane owns) and the directories on the way to `files`, which are real
+    directories mirrored the same way; a file of `files` is left absent for the writer. Rebuilt whole each time."""
+    shutil.rmtree(home, ignore_errors=True)
+    wanted = set(files)
+    dirs = {""} | {parent.as_posix() for f in wanted for parent in Path(f).parents if parent.as_posix() != "."}
+
+    def mirror(rel: str) -> None:
+        (home / rel).mkdir(parents=True, exist_ok=True)
+        with os.scandir(root / rel if rel else root) as entries:
+            for entry in entries:
+                path = f"{rel}/{entry.name}" if rel else entry.name
+                if (not rel and entry.name in skip) or path in wanted:
+                    continue
+                if path in dirs and entry.is_dir(follow_symlinks=False):
+                    mirror(path)
+                else:
+                    (home / path).symlink_to(root / path)
+
+    mirror("")
 
 
 def baseline(root: Path, seams: Seams, units: Mapping[str, Sequence[str]]) -> dict[Unit, str]:
@@ -446,6 +539,9 @@ def run(
     held_objects: dict[str, dict[str, str]] = defaultdict(dict)
     plans: dict[str, Plan] = {}
     built, rebuilt = 0, 0
+    lanes: dict[int, tuple[Path, Seams]] = {}  # the isolate lanes, made when a pass first needs them
+    lane_written: dict[Path, dict[str, frozenset[str]]] = {}
+    rendered: dict[tuple[str, frozenset[str]], bytes] = {}
     # (object, the rewrites that reach it and were written) -> what it built to: the same state is never built twice
     memo: dict[tuple[Unit, frozenset[str]], str | None] = {}
     passed: dict[
@@ -606,27 +702,48 @@ def run(
             results: dict[int, dict[Unit, str | None]] = {}
             suspect = Counter(bad)  # object -> how many builds of it were not the baseline's
 
-            def run(
-                picks: Sequence[int],
-                trials: Sequence[tuple[frozenset[str], frozenset[Unit]]],
-                results: dict[int, dict[Unit, str | None]],
-                suspect: Counter[Unit],
-            ) -> None:
-                nonlocal built, rebuilt
+            def prepare(
+                picks: Sequence[int], trials: Sequence[tuple[frozenset[str], frozenset[Unit]]], suspect: Counter[Unit]
+            ) -> Wave:
                 written = set().union(*(trials[i][0] for i in picks))
                 # the objects that failed most often in earlier trials first: a trial holding a culprit stops early
                 ordered = [sorted(trials[i][1], key=lambda u: (-suspect[u], u)) for i in picks]
                 states = {u: (u, frozenset(n for n in written if u in units_of[n])) for objs in ordered for u in objs}
                 seen = {u: memo[k] for u, k in states.items() if k in memo}
-                _write(root, files, [p for n, p in active.items() if n in written], src)
+                return Wave(list(picks), [p for n, p in active.items() if n in written], ordered, states, seen)
+
+            def lane_tree(lane_no: int) -> tuple[Path, Seams]:
+                """The tree of a lane, made once for the whole search: it keeps its build and, in `lane_written`, the
+                rewrites each of its files was last rendered with, so a wave writes only the files that differ."""
+                if lane_no not in lanes:
+                    with stages.stage("unify.lane"):
+                        assert seams.lane is not None
+                        lanes[lane_no] = seams.lane(lane_no, files)
+                    lane_written[lanes[lane_no][0]] = {}
+                return lanes[lane_no]
+
+            def execute(wave: Wave, at: Path, under: Seams) -> None:
+                """The write and the builds of one wave, in the tree `at`: touches nothing the other waves share."""
+                _write(at, files, wave.held, src, None if at == root else lane_written[at], rendered)
+                start = time.monotonic()
                 with stages.stage("unify.isolate"):
-                    trial_made, makes = _decide(root, seams, ordered, base, errors, seen)
-                memo.update({states[u]: h for u, h in trial_made.items() if u not in seen})
-                built += makes
-                rebuilt += len(trial_made) - len(seen.keys() & trial_made.keys())
-                for i in picks:
+                    wave.made, wave.makes = _decide(at, under, wave.ordered, base, wave.errors, wave.seen)
+                wave.seconds = time.monotonic() - start
+
+            def apply(
+                wave: Wave,
+                trials: Sequence[tuple[frozenset[str], frozenset[Unit]]],
+                results: dict[int, dict[Unit, str | None]],
+                suspect: Counter[Unit],
+            ) -> None:
+                nonlocal built, rebuilt
+                errors.update(wave.errors)
+                memo.update({wave.states[u]: h for u, h in wave.made.items() if u not in wave.seen})
+                built += wave.makes
+                rebuilt += len(wave.made) - len(wave.seen.keys() & wave.made.keys())
+                for i in wave.picks:
                     include, objs = trials[i]
-                    results[i] = {u: trial_made[u] for u in objs if u in trial_made}  # the others stay undecided
+                    results[i] = {u: wave.made[u] for u in objs if u in wave.made}  # the others stay undecided
                     for u, object_hash in results[i].items():
                         if object_hash is None or object_hash != base[u]:
                             passed.pop(u, None)
@@ -634,8 +751,38 @@ def run(
                         else:  # an object is fixed by the rewrites that reach it: what it was built with is its state
                             passed[u] = (frozenset(n for n in include if u in units_of[n]), object_hash)
 
+            def run(
+                picked: Sequence[Sequence[int]],
+                trials: Sequence[tuple[frozenset[str], frozenset[Unit]]],
+                results: dict[int, dict[Unit, str | None]],
+                suspect: Counter[Unit],
+            ) -> None:
+                """The waves of one pass. With lanes they run together, `seams.width` at a time, each in the tree of
+                its lane (all prepared first, so the order of a lane's objects is the pass's, not a finished wave's);
+                without, they take turns in the one tree and each sees what the one before it built."""
+                width = min(seams.width, len(picked))
+                if seams.lane is None or width < 2:
+                    for picks in picked:
+                        wave = prepare(picks, trials, suspect)
+                        execute(wave, root, seams)
+                        apply(wave, trials, results, suspect)
+                    return
+                waves = [prepare(picks, trials, suspect) for picks in picked]
+                started = time.monotonic()
+                process.together(waves, width, lane_tree, lambda w, lane: execute(w, *lane), seams.grant)
+                for wave in waves:
+                    apply(wave, trials, results, suspect)
+                wall = time.monotonic() - started
+                stages.say(
+                    f"unify.isolate round: {len(waves)} waves in {width} lanes, {wall:.1f}s wall for"
+                    f" {sum(w.seconds for w in waves):.1f}s of trials"
+                )
+
             while nodes:
                 save()
+                # idle lanes split a node further: with few nodes a pass of halves leaves most of the width unused
+                splittable = sum(len(names) > 1 for names, _, _ in nodes)
+                spread = max(2, seams.width // max(splittable, 1)) if seams.lane is not None else 2
                 trials: list[tuple[frozenset[str], frozenset[Unit]]] = []  # (rewrites written, objects it decides)
                 splits = []
                 for candidates, affected, out in nodes:
@@ -653,41 +800,47 @@ def run(
                             held_objects[name][path] = why
                             objects[path]["names"].append(name)
                         continue
-                    mid = len(candidates) // 2
-                    halves = (candidates[:mid], candidates[mid:])
+                    fan = min(spread, len(candidates))
+                    cuts = [len(candidates) * k // fan for k in range(fan + 1)]
+                    parts = [candidates[cuts[k] : cuts[k + 1]] for k in range(fan)]
                     ids: list[int | None] = []
-                    # Each half is tried alone, the other one out. The left half decides first; the right half is
-                    # tried as well only when the left fails, and its trial is given a make only if it fits one.
-                    for tested, other in (halves, halves[::-1]):
+                    # Each part is tried alone, the rest of the node out. Two parts: the left decides first and the
+                    # right is tried as well only when the left fails, its trial given a make only if it fits one.
+                    # More parts (idle lanes): all are tried in the same pass.
+                    for tested in parts:
                         deciding = frozenset(u for u in affected if any(u in touches[n] for n in tested))
-                        omit = out.union(other)
-                        if deciding and (not ids or ids[0] is not None):
+                        omit = out.union(n for n in candidates if n not in tested)
+                        if deciding and (fan > 2 or not ids or ids[0] is not None):
                             trials.append((frozenset(n for n in active if n not in omit), deciding))
                             ids.append(len(trials) - 1)
                         else:
                             ids.append(None)
-                    splits.append((halves, ids, affected, out))
+                    splits.append((candidates, parts, ids, affected, out))
                 if not splits:
                     break
                 results.clear()
-                lefts = [i for _, (i, _), _, _ in splits if i is not None]
-                rights = {j: i for _, (i, j), _, _ in splits if i is not None and j is not None}
+                lefts, rights = [], {}
+                for _, parts, ids, _, _ in splits:
+                    if len(parts) > 2:
+                        lefts += [i for i in ids if i is not None]
+                    elif ids[0] is not None:
+                        lefts.append(ids[0])
+                        if ids[1] is not None:
+                            rights[ids[1]] = ids[0]
                 waves, later = _waves(trials, touchers, lefts, list(rights))
-                for picks in waves:
-                    run(picks, trials, results, suspect)
+                run(waves, trials, results, suspect)
                 # a right half whose own left half failed and which fitted no wave takes turns now
                 waves, _ = _waves(trials, touchers, [j for j in later if _broken(results, rights[j], base)])
-                for picks in waves:
-                    run(picks, trials, results, suspect)
+                run(waves, trials, results, suspect)
                 nodes = []
-                for (left, right), (left_id, right_id), affected, out in splits:
-                    broken_left = _broken(results, left_id, base)
-                    if not broken_left:
-                        nodes.append((right, affected, out))  # the left half holds none: the culprits are in the right
+                for candidates, parts, ids, affected, out in splits:
+                    differ = [(part, _broken(results, i, base)) for part, i in zip(parts, ids, strict=True)]
+                    if not any(objs for _, objs in differ):
+                        nodes.append((parts[-1], affected, out))  # the others hold none: the culprits are in the last
                         continue
-                    nodes.append((left, broken_left, out.union(right)))
-                    if broken_right := _broken(results, right_id, base):
-                        nodes.append((right, broken_right, out.union(left)))
+                    for part, objs in differ:
+                        if objs:
+                            nodes.append((part, objs, out.union(n for n in candidates if n not in part)))
             save()
             for name in sorted(rejected):
                 del active[name]
@@ -787,7 +940,8 @@ def jobs(host: Host) -> int:
 
 
 def seams(cfg: Config) -> Seams:
-    """The real build: the project's own units, preprocessor and make."""
+    """The real build: the project's own units, preprocessor and make. Its lanes are trees of symlinks to the project's
+    with a build directory of their own, so waves building in different rewrite states never meet on a file."""
     root = cfg.project.root
 
     def units() -> dict[str, list[str]]:
@@ -816,7 +970,20 @@ def seams(cfg: Config) -> Seams:
         ran = process.make(cfg, list(targets), jobs(cfg.host))
         return (-1 if ran.exit is None else ran.exit), (ran.stdout + ran.stderr).decode(errors="replace")
 
-    return Seams(units, read, make)
+    def lane(index: int, files: Collection[str]) -> tuple[Path, Seams]:
+        home = process.state(root) / "lanes" / str(index)
+        _farm(root, home, files, skip=(process.state(root).name, "build", "local.mk"))
+        (home / "build").mkdir()
+        own = replace(cfg, project=replace(cfg.project, root=home))
+
+        def make_in(targets: Sequence[str]) -> tuple[int, str]:
+            store.write(home / "local.mk", build.local_mk(own))
+            ran = process.make(own, list(targets), jobs(own.host))
+            return (-1 if ran.exit is None else ran.exit), (ran.stdout + ran.stderr).decode(errors="replace")
+
+        return home, Seams(units, read, make_in)
+
+    return Seams(units, read, make, lane, jobs(cfg.host), jobs(cfg.host))
 
 
 def _names(path: Path | None) -> list[str] | None:

@@ -945,3 +945,28 @@ def test_the_header_is_included_before_the_first_declaration_not_after_the_files
     assert got.includes == (("src/c.CPP", "include/body.H"),), (got.canon, got.includes, got.edits)
     out = typeplan.render("src/c.CPP", [got], src)
     assert out.startswith('#include "body.H"\nextern struct PakPreview *g_p;') and out.endswith('#include "h.H"\n'), out
+
+
+def test_a_unit_whose_preprocess_stamp_failed_is_a_unit_that_does_not_build(tmp_path: Path) -> None:
+    """The log tail of unify run a (rig-20261103T120211Z): a trial whose rewrites include a header they do not write
+    fails the unit's `.i.ok` stamp, never its `.o`; that is the unit not building, not a build that did not run."""
+    source = "SOURCE/ENGINE/AUDIO/AUDIOMGR/AUDIOMGR_WORKER_DMA_AND_FRAME.CPP"
+    header = "../../../../sdk/include/SCHED/SCHED_SENDSCHEDULERTASK.H"
+    log = (
+        f'{source}:22:10: fatal error: {header}: No such file or directory | 22 | #include "{header}" | compilation '
+        f"terminated.\nmake: *** [Makefile:518: build/de/{source}.i.ok] Error 1\n"
+        f"make: Target 'build/de/{source}.o' not remade because of errors.\n"
+    )
+    other = "SOURCE/ENGINE/AUDIO/AUDIOMGR/OTHER.CPP"
+
+    def make(targets: Sequence[str]) -> tuple[int, str]:
+        (tmp_path / f"build/de/{other}.o").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / f"build/de/{other}.o").write_bytes(b"o")
+        return 2, log
+
+    errors: dict[str, str] = {}
+    made = typeunify.rebuild(
+        tmp_path, Seams(lambda: {}, lambda items: [], make), [("de", source), ("de", other)], errors
+    )
+    assert made[("de", source)] is None and made[("de", other)] is not None
+    assert errors[f"build/de/{source}.o"].startswith("fatal error: ")

@@ -1,13 +1,16 @@
 """Native execution with per-child accounting and process-group timeouts."""
 
+import contextvars
 import ctypes
 import hashlib
 import os
+import queue
 import selectors
 import signal
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, suppress
 from functools import cache
 from pathlib import Path
@@ -303,6 +306,51 @@ def git(config: Config, *args: str) -> NativeResult:
         return result
 
 
+_shared_jobserver: contextvars.ContextVar[tuple[int, dict[str, str], tuple[int, ...]] | None] = contextvars.ContextVar(
+    "shared_jobserver", default=None
+)
+
+
+def together[Item, Lane](
+    items: Sequence[Item], width: int, lane: Callable[[int], Lane], work: Callable[[Item, Lane], None], jobs: int = 0
+) -> None:
+    """`work` of every item, `width` at a time, each in a lane of its own that no other item holds meanwhile (`lane(n)`
+    makes the n-th once). Each item runs in a copy of the caller's context, so its stages are recorded under the
+    caller's. The first failure is raised after the rest finished.
+
+    With `jobs` the makes of the items share one jobserver of that many jobs, taken once around the whole call: the
+    host slots of a process are one holding with one feeder per jobserver, so concurrent makes each taking their own
+    raced on it (`list.remove(x): x not in list`). One make using another's jobserver is what a recursive make does."""
+    if not jobs:
+        _together(items, width, lane, work)
+        return
+    with slots.jobserver(jobs) as granted:
+        token = _shared_jobserver.set(granted)
+        try:
+            _together(items, width, lane, work)
+        finally:
+            _shared_jobserver.reset(token)
+
+
+def _together[Item, Lane](
+    items: Sequence[Item], width: int, lane: Callable[[int], Lane], work: Callable[[Item, Lane], None]
+) -> None:
+    free: queue.Queue[Lane] = queue.Queue()
+    for n in range(width):
+        free.put(lane(n))
+
+    def one(item: Item) -> None:
+        held = free.get()
+        try:
+            work(item, held)
+        finally:
+            free.put(held)
+
+    with ThreadPoolExecutor(width) as workers:
+        for done in [workers.submit(contextvars.copy_context().run, one, item) for item in items]:
+            done.result()
+
+
 def make(config: Config, targets: Sequence[str], jobs: int = 0) -> NativeResult:
     """One `make -j<jobs> <targets>` under the slots jobserver: the only process a build spawns, whatever its steps.
     `jobs` is the work the build expects (0: unknown); the jobserver grants the slots and grows into freed ones. The
@@ -310,7 +358,9 @@ def make(config: Config, targets: Sequence[str], jobs: int = 0) -> NativeResult:
     from unbake import front
 
     root = config.project.root
-    with stages.stage("make"), slots.jobserver(jobs) as (granted, env, fds):
+    with ExitStack() as held:
+        held.enter_context(stages.stage("make"))
+        granted, env, fds = _shared_jobserver.get() or held.enter_context(slots.jobserver(jobs))
         argv: list[str | Path] = [tool(config, "make"), "-k", *targets]
 
         def start(record: str | None, preprocess: bool) -> NativeResult:
