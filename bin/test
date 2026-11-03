@@ -17,8 +17,11 @@ if [[ "$venv_command" != *" -m venv "* || "$venv_command" != *" $(pwd -P)/.venv"
     exit 1
 fi
 export PYTHONPATH=src
-lock="${XDG_RUNTIME_DIR:-${TMPDIR:?TMPDIR or XDG_RUNTIME_DIR names the test lock directory}}/abu-tests.lock"
-if [[ -z "${ABU_TESTS_LOCKED:-}" ]]; then mkdir -p "$(dirname "$lock")"; ABU_TESTS_LOCKED=1 exec flock "$lock" "$PWD/bin/$(basename "$0")" "$@"; fi
+# Fixture trees belong on disk, separately for each run; the job's TMPDIR stays short for sockets.
+mkdir -p .tmp
+test_root=$(mktemp -d "$PWD/.tmp/tests.XXXXXX")
+trap 'rm -rf -- "$test_root"' EXIT
+set -- --basetemp "$test_root" "$@"
 # a venv installed from another pyproject (a dependency pin bumped since) is installed again before tests run
 if [[ "$(sha256sum pyproject.toml)" != "$(cat .venv/.pyproject.sha256 2>/dev/null)" ]]; then
     .venv/bin/pip install -q -e '.[dev]' && sha256sum pyproject.toml > .venv/.pyproject.sha256
@@ -48,7 +51,7 @@ fi
 # so the workers start from the bytecode cache instead of each compiling the whole suite again. One core runs in this
 # process, without workers to start.
 # shellcheck disable=SC2016
-exec "${slots[@]}" bash -c '
+"${slots[@]}" bash -c '
     width=$0
     if (( width > 1 )); then
         find tests -name "test_*.py" | sort | xargs -P "$width" -n 8 .venv/bin/python -m pytest -q \

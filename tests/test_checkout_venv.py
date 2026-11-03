@@ -51,7 +51,7 @@ def checkout(tmp_path: Path) -> Path:
 
 
 def invoke(root: Path, *args: str, script: str = "test", path: Path | None = None) -> subprocess.CompletedProcess:
-    env = {**os.environ, "ABU_TESTS_LOCKED": "1", "JOBS": "1", "UNBAKE_CORES": "1"}
+    env = {**os.environ, "JOBS": "1", "UNBAKE_CORES": "1"}
     if path is not None:
         env["PATH"] = f"{path}:{env['PATH']}"
     return subprocess.run([str(root / "bin" / script), *args], cwd=root, env=env, capture_output=True, text=True)
