@@ -17,7 +17,7 @@ import click
 from abucache import pool, stages
 from click.core import ParameterSource
 
-from unbake import __version__, config, effort, human, store, treelock
+from unbake import __version__, config, effort, front, human, store, treelock
 from unbake.contracts import Finding, Json, Refusal
 
 
@@ -88,7 +88,8 @@ def _emit(name: str, code: int, result: Json | None, findings: Sequence[Finding]
         "findings": [human.standard(f) for f in ordered],
         "summary": human.tally(ordered),
         "stages": timing,
-        "cache": stages.cache_total(timing),  # kept by --short too: the stage tree it drops is not where it is read
+        # kept by --short too: the stage tree it drops is not where it is read
+        "cache": {**stages.cache_total(timing), "replayed": front.replayed()},
     }
     if short and result is not None:  # the verdict and the diff only: no stage tree or proofs
         missing = sorted({m for p in result.get("proofs", ()) for m in p["missing"]} | {*result.get("missing", ())})[:8]

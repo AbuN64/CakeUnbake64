@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import shutil
 import threading
+import time
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -46,6 +47,20 @@ def test_a_round_of_the_real_size_runs_width_trials_at_once_each_in_its_own_lane
 
     process.together(list(range(size)), width, lambda n: n, work)
     assert sorted(done) == list(range(size)) and peak[0] == width
+
+
+@pytest.mark.parametrize("delays", [(0.0, 0.05, 0.0, 0.0, 0.0, 0.0), (0.05, 0.0, 0.0, 0.0, 0.0, 0.0)])
+def test_each_wave_meets_the_same_lane_whichever_lane_finishes_first(delays: tuple[float, ...]) -> None:
+    """Wave i runs in lane i % width, in order: a lane keeps its build between waves, so the lane a wave meets decides
+    which cache keys it asks (a lane freed first took the next wave: two unifies of one tree asked different keys)."""
+    met: dict[int, int] = {}
+
+    def work(wave: int, lane: int) -> None:
+        time.sleep(delays[wave])
+        met[wave] = lane
+
+    process.together(list(range(6)), 3, lambda n: n, work)
+    assert met == {0: 0, 1: 1, 2: 2, 3: 0, 4: 1, 5: 2}
 
 
 def test_a_failing_wave_is_raised_after_the_others_finished() -> None:

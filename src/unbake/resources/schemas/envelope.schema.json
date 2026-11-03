@@ -134,6 +134,9 @@
     "misses": {
      "type": "integer"
     },
+    "replayed": {
+     "type": "integer"
+    },
     "kinds": {
      "type": "object",
      "additionalProperties": {

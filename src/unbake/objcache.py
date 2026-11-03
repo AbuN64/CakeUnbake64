@@ -125,8 +125,7 @@ def _parts(
     files and the toolchain by their digests already)."""
     sums = hashlib.sha256()
     for name in extracted:
-        with contextlib.suppress(OSError):
-            sums.update(Path(name).read_bytes())
+        sums.update(Path(name).read_bytes())  # an extracted file the rule lists is there; its absence is loud
     return {
         "flags": _installed(flags),
         "textsize": textsize,
@@ -208,18 +207,19 @@ def _replace(path: str, data: bytes) -> None:
 def get(
     cache: ContentCache, out: str, compiler: str, flags: str, textsize: str, program: str, extracted: Sequence[str]
 ) -> int:
-    """A hit puts the stored object (and the assembly it was made from) in place (0); else MISS."""
-    try:
-        blob = cache.get(_KIND, entry(out, compiler, flags, textsize, program, extracted))
-        if blob is None:
-            cache.count(_KIND, False)
-            return MISS
-        obj, assembly = unframe(blob)
-        if assembly is not None:
-            _replace(out.removesuffix(".o") + ".s", assembly)
-        _replace(out, obj)
-    except (OSError, ValueError):
+    """A hit puts the stored object (and the assembly it was made from) in place (0); else MISS. Only a torn entry is
+    a miss: a key that cannot be computed or an object that cannot be put in place raises."""
+    blob = cache.get(_KIND, entry(out, compiler, flags, textsize, program, extracted))
+    if blob is None:
+        cache.count(_KIND, False)
         return MISS
+    try:
+        obj, assembly = unframe(blob)
+    except ValueError:
+        return MISS
+    if assembly is not None:
+        _replace(out.removesuffix(".o") + ".s", assembly)
+    _replace(out, obj)
     cache.count(_KIND, True)
     return 0
 
@@ -227,12 +227,12 @@ def get(
 def put(
     cache: ContentCache, out: str, compiler: str, flags: str, textsize: str, program: str, extracted: Sequence[str]
 ) -> int:
-    """Store the object the program made; a full or unreadable store costs only the saving."""
-    with contextlib.suppress(OSError):
-        assembly = Path(out.removesuffix(".o") + ".s")
-        blob = frame(Path(out).read_bytes(), assembly.read_bytes() if assembly.is_file() else None)
-        cache.put(_KIND, entry(out, compiler, flags, textsize, program, extracted), blob)
-        cache.count(_STORED, True)
+    """Store the object the program made. An object that is not there, a unit that has no key or a store that refuses
+    raises: the program made the object, so every miss ends in a stored entry or in this error."""
+    assembly = Path(out.removesuffix(".o") + ".s")
+    blob = frame(Path(out).read_bytes(), assembly.read_bytes() if assembly.is_file() else None)
+    cache.put(_KIND, entry(out, compiler, flags, textsize, program, extracted), blob)
+    cache.count(_STORED, True)
     return 0
 
 
@@ -252,15 +252,15 @@ def answer(
     for name in (".oc", ".oc.s", ".oc.miss"):
         with contextlib.suppress(FileNotFoundError):
             os.unlink(out + name)
+    blob = cache.get(_KIND, entry(out, compiler, flags, textsize, program, extracted))  # a key that fails raises
     try:
-        blob = cache.get(_KIND, entry(out, compiler, flags, textsize, program, extracted))
         obj, assembly = unframe(blob) if blob is not None else (b"", None)
-        if blob is not None:
-            if assembly is not None:
-                _replace(out + ".oc.s", assembly)
-            _replace(out + ".oc", obj)
-    except (OSError, ValueError):
+    except ValueError:  # a torn entry is a miss
         blob = None
+    if blob is not None:
+        if assembly is not None:
+            _replace(out + ".oc.s", assembly)
+        _replace(out + ".oc", obj)
     cache.count(_KIND, blob is not None)
     if blob is None:
         with contextlib.suppress(OSError):

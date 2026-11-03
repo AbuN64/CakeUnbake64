@@ -20,6 +20,9 @@ def cache(host: Host) -> Path | None:
     return None if content is None else content.with_name(f"{content.name}.cc")
 
 
+_REPLAYED = [0]  # stored failures the batches of this process replayed
+
+
 def build[Result](start: Callable[[str | None, bool], Result], root: Path, store: Path | None, workers: int) -> Result:
     """Run the make that `start(record, preprocess)` starts, in `root`, with the compile commands answered first.
     `start` runs it once; with a `record` file name it sets ABU_CC_COLLECT to it and keeps going past failed units
@@ -48,16 +51,20 @@ def build[Result](start: Callable[[str | None, bool], Result], root: Path, store
             first = start(str(manifest), False)
         if not manifest.exists():
             return first
+        found = 0
         if objects.exists():
             with stages.stage("make.front.objects") as span:
                 process.objects(root, objects, workers)
                 found = _drop_stored(manifest, objects, root)
                 span.add(items=found)
-                _count("make.front.objects", found, len(_recorded(objects)) - found)
                 stages.say(f"make.front: {found} objects from the store")
         with stages.stage("make.front") as span:
             process.batch(store, root, manifest, workers)
-            answered, total = _answered(manifest, root)
+            answered, total, failed = _answered(manifest, root)
+            _REPLAYED[0] += failed
+            if objects.exists():
+                failing = _failing(objects, root)
+                _count("make.front.objects", found + failing, len(_recorded(objects)) - found - failing)
             span.add(items=total)
             _count("make.front", answered, total - answered)
             stages.say(f"make.front: {answered} of {total} compiles from the cache, {total - answered} compile")
@@ -100,12 +107,29 @@ def _drop_stored(manifest: Path, objects: Path, root: Path) -> int:
     return len(stored)
 
 
-def _answered(manifest: Path, root: Path) -> tuple[int, int]:
-    """(compiles the batch answered, compiles the build recorded): an answer is an assembly or a replayed failure
-    (`<out>.cc`, `<out>.cc.fail`); the rest run the compiler in the second make."""
+def _failing(objects: Path, root: Path) -> int:
+    """How many of the objects the store could not answer are answered by the compile batch with a replayed failure
+    (`<stem>.s.cc.fail`): such an object never exists, so no entry can be stored for it, and the cache has already
+    said all there is to say (the failure, with its diagnostics). It is an answer, not a lookup that missed."""
+    return sum(
+        (root / (out.removesuffix(".o") + ".s.cc.fail")).exists()
+        for out in _recorded(objects)
+        if not (root / (out + ".oc")).exists()
+    )
+
+
+def replayed() -> int:
+    """The compiles the command's batches answered with a stored failure: reported beside hits and misses (`cache`)."""
+    return _REPLAYED[0]
+
+
+def _answered(manifest: Path, root: Path) -> tuple[int, int, int]:
+    """(compiles the batch answered, compiles the build recorded, answers that were a replayed failure): an answer is
+    an assembly or a replayed failure (`<out>.cc`, `<out>.cc.fail`); the rest run the compiler in the second make."""
     parsed = [p for _, args in cc_cache.commands(str(manifest)) if (p := cc_cache.parse(args)) is not None]
-    answers = sum((root / (out + ".cc")).exists() or (root / (out + ".cc.fail")).exists() for _, out in parsed)
-    return answers, len(parsed)
+    failed = sum((root / (out + ".cc.fail")).exists() for _, out in parsed)
+    answers = sum((root / (out + ".cc")).exists() for _, out in parsed) + failed
+    return answers, len(parsed), failed
 
 
 def _misses(manifest: Path, objects: Path, root: Path) -> list[str]:

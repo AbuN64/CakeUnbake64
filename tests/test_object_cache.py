@@ -257,6 +257,7 @@ def record(root: Path, store: Path, compiler: Path, objects: list[str]) -> Path:
     """The manifest the object rules write while the build collects: one line per object, its OBJSTORE words first."""
     words = [sys.executable, "-m", "unbake.objcache", str(store), "1000000"]
     manifest = root / "cc-commands.1.obj"
+    (root / "d.s").write_text("extracted")  # a file the rules list is there before the object is recorded
     lines = []
     for out in objects:
         (root / out).parent.mkdir(parents=True, exist_ok=True)
@@ -468,3 +469,65 @@ def test_objcache_put_is_kept_from_a_collect_so_the_next_get_hits(tmp_path, monk
     (tree / ACHIEVE).unlink()
     assert run("get") == 0
     assert (tree / ACHIEVE).read_bytes() == b"object"
+
+
+def test_a_put_of_an_object_the_program_did_not_leave_raises_and_stores_nothing(tmp_path, monkeypatch):
+    a, _ = trees(tmp_path)
+    monkeypatch.chdir(a.root)
+    (a.root / "x.i").write_text("int a;")
+    with pytest.raises(FileNotFoundError):
+        objcache.put(a.store, "x.o", str(a.compiler), "-O2", "", "cc x.i", [])
+    assert not a.store.entries
+    assert not a.store.counts
+
+
+def test_a_miss_whose_unit_is_gone_before_its_put_raises(tmp_path, monkeypatch):
+    a, _ = trees(tmp_path)
+    monkeypatch.chdir(a.root)
+    (a.root / "x.o").write_text("OBJ")  # the program made the object, the unit it was keyed by is gone
+    with pytest.raises(FileNotFoundError):
+        objcache.put(a.store, "x.o", str(a.compiler), "-O2", "", "cc x.i", [])
+    assert not a.store.entries
+
+
+def test_a_get_or_a_batch_answer_that_cannot_key_its_unit_raises_instead_of_missing(tmp_path, monkeypatch):
+    a, _ = trees(tmp_path)
+    monkeypatch.chdir(a.root)
+    args = ("x.o", str(a.compiler), "-O2", "", "cc x.i", [])
+    with pytest.raises(FileNotFoundError):
+        objcache.get(a.store, *args)
+    with pytest.raises(FileNotFoundError):
+        objcache.answer(a.store, *args)
+    assert not a.store.counts
+
+
+def test_every_miss_ends_in_one_stored_entry(tmp_path):
+    a, b = trees(tmp_path)
+    a.build()
+    a.build(flags="-O1")
+    assert len(a.store.entries) == 2
+    assert [hit for _, hit in a.store.counts].count(False) == 2
+    b.build(flags="-O1")
+    assert len(b.store.entries) == 2 and b.runs == 0
+
+
+def test_an_object_whose_compile_the_cache_answers_with_a_failure_is_an_answer_not_a_miss(tmp_path, monkeypatch):
+    """A candidate that does not compile never has an object, so nothing can be stored for it; its replayed failure
+    (`.s.cc.fail`) is the cache's answer and the object counts as answered, not as a miss on every later unify."""
+    monkeypatch.chdir(tmp_path)
+    outs = ["a.o", "b.o", "c.o"]
+    objects = tmp_path / "cc-commands.1.obj"
+    objects.write_text(
+        "".join("\x1f".join(["py", "-m", "unbake.objcache", "s", "9", "get", o, "cc"]) + "\n" for o in outs)
+    )
+    (tmp_path / "a.o.oc").write_text("stored")  # answered by the store
+    (tmp_path / "b.s.cc.fail").write_text("failure")  # answered by the compile batch as a replayed failure
+    assert front._failing(objects, tmp_path) == 1  # c.o alone is a real miss
+
+
+def test_a_replayed_failure_is_an_answer_and_is_counted_apart(tmp_path, monkeypatch):
+    for name in ("a.s.cc", "b.s.cc.fail"):
+        (tmp_path / name).write_text("x")
+    monkeypatch.setattr(front.cc_cache, "commands", lambda _: [("", "a"), ("", "b"), ("", "c")])
+    monkeypatch.setattr(front.cc_cache, "parse", lambda out: (None, out + ".s"))
+    assert front._answered(tmp_path / "m", tmp_path) == (2, 3, 1)

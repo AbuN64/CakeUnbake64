@@ -4,7 +4,6 @@ import contextvars
 import ctypes
 import hashlib
 import os
-import queue
 import selectors
 import signal
 import subprocess
@@ -335,20 +334,24 @@ def together[Item, Lane](
 def _together[Item, Lane](
     items: Sequence[Item], width: int, lane: Callable[[int], Lane], work: Callable[[Item, Lane], None]
 ) -> None:
-    free: queue.Queue[Lane] = queue.Queue()
-    for n in range(width):
-        free.put(lane(n))
+    """Item i runs in lane i % width, after the items before it in that lane: which lane (with the build it keeps)
+    an item meets is a function of the item list, never of which lane finished first, so two runs on one input make
+    the same builds and ask the same cache keys. A failed item does not stop the rest of its lane."""
+    lanes = [lane(n) for n in range(width)]
+    failed: dict[int, BaseException] = {}
 
-    def one(item: Item) -> None:
-        held = free.get()
-        try:
-            work(item, held)
-        finally:
-            free.put(held)
+    def run(n: int) -> None:
+        for at in range(n, len(items), width):
+            try:
+                work(items[at], lanes[n])
+            except BaseException as error:  # raised below, in item order, after the rest finished
+                failed[at] = error
 
     with ThreadPoolExecutor(width) as workers:
-        for done in [workers.submit(contextvars.copy_context().run, one, item) for item in items]:
+        for done in [workers.submit(contextvars.copy_context().run, run, n) for n in range(width)]:
             done.result()
+    if failed:
+        raise failed[min(failed)]
 
 
 def make(config: Config, targets: Sequence[str], jobs: int = 0) -> NativeResult:
