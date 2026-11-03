@@ -478,16 +478,18 @@ def test_a_unit_leaves_the_text_the_flags_a_dated_stamp_and_a_record(tmp_path):
     assert (tmp_path / "stamprec.log").read_text() == "record build/x.i.ok\n"
 
 
-def test_a_text_with_the_same_compile_key_keeps_the_old_text_and_its_date(tmp_path):
+def test_a_text_with_the_same_compile_key_takes_the_new_text_under_the_old_date(tmp_path):
     cpp, cache = fake_cpp(tmp_path), tmp_path / "cache"
     root = source_tree(tmp_path, "a", "#define A 1\n")
     pp(cache, cpp, root)
     old = (root / "build/x.i").stat().st_mtime_ns
     (root / "h.h").write_text("#define A 1\nCOMMENT\n")  # another text, the same key
     assert pp(cache, cpp, root).returncode == 0
-    assert (root / "build/x.i").read_bytes() == b"int x;\n#define A 1\n" and (
+    # the bytes a fresh tree of these sources holds, under the date the object was made after
+    assert (root / "build/x.i").read_bytes() == b"int x;\n#define A 1\nCOMMENT\n" and (
         root / "build/x.i"
     ).stat().st_mtime_ns == old
+    assert (root / "build/x.i.key").read_text() == "int x;\n#define A 1\n"
     assert not (root / "build/x.i.new").exists()
     (root / "x.c").write_text("int y;\n")  # another key: the new text goes in
     assert pp(cache, cpp, root).stdout == b"int y;\n#define A 1\nCOMMENT\n"

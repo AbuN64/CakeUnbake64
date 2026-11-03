@@ -355,3 +355,40 @@ def test_the_probe_step_of_a_collecting_build_records_the_get_and_goes_on(tmp_pa
     done, files = both(tmp_path, stamprec, "stale", "", "0x8", PROBED, env={"ABU_CC_COLLECT": "collect"})
     assert done.returncode == 0, done.stderr
     assert files["collect.obj"] == f"false\x1fget\x1f{OUT}\n".encode()
+
+
+@pytest.mark.parametrize("how", ["c", "py"])
+def test_a_held_object_is_still_stored_and_a_tree_elsewhere_with_its_text_finds_it(tmp_path, stamprec, how):
+    """`@settle` holds the object (its .i moved, its assembly did not) and skips the assembler, but not the store's put:
+    the object of the new text is stored, so a tree at another path holding that text copies it instead of compiling.
+    Before, the hold stopped the chain before the put and the next tree of that text compiled it again."""
+    from abucache.store import open_cache
+
+    from unbake import objcache
+
+    store = tmp_path / "store"
+    compiler = tmp_path / "tc" / "cc1"
+    compiler.parent.mkdir()
+    compiler.write_text("cc1")
+    put = [sys.executable, "-m", "unbake.objcache", str(store), "100000000", "put", OUT, str(compiler), FLAGS]
+    put += ["0x638", "prog", "asm/us/a.s", "asm/us/b.s"]
+    program = [*write_asm("same\n"), "&&", "@settle", S, S + ".prev", "&&", "sh", "-c", "echo >> assembled"]
+    held = tmp_path / "runs" / "one" / "RageWarsDecomp@1"
+    tree(held, state="stands")
+    (held / (S + ".prev")).write_text("same\n")
+    os.utime(held / (OUT[:-1] + "i"), ns=(3 * 10**9, 3 * 10**9))
+    env = {"PYTHONPATH": os.pathsep.join([str(Path(objcache.__file__).parents[1]), os.environ.get("PYTHONPATH", "")])}
+    done = run_object(held, how, stamprec, "", "0x638", [*program, "&&", *put], env)
+    assert done.returncode == 0, done.stderr
+    assert not (held / "assembled").exists()  # held: the assembler did not run
+    elsewhere = tmp_path / "other" / "place" / "RageWarsDecomp@2"
+    tree(elsewhere, state="stale")
+    (elsewhere / OUT).unlink()
+    cwd = os.getcwd()
+    os.chdir(elsewhere)
+    try:
+        cache = open_cache(store, 100000000)
+        assert objcache.get(cache, OUT, str(compiler), FLAGS, "0x638", "prog", ["asm/us/a.s", "asm/us/b.s"]) == 0
+    finally:
+        os.chdir(cwd)
+    assert (elsewhere / OUT).read_bytes() == (held / OUT).read_bytes()

@@ -84,11 +84,12 @@ _read: dict[str, str] | None = None  # the toolchain and the passes as read once
 
 def tools(compiler: str) -> str:
     """The identity of the toolchain: every file beside the compiler (a driver such as IDO's cc runs its passes in its
-    own folder)."""
+    own folder), by content. Not a dotfile: the installer's `.pin-manifest.json` holds the dates of the pinned files and
+    is written again whenever they move, which no compile reads."""
     if _read is not None and compiler in _read:
         return _read[compiler]
     folder = Path(compiler).resolve().parent
-    found = compile.identity(sorted(p for p in folder.iterdir() if p.is_file()))
+    found = compile.identity(sorted(p for p in folder.iterdir() if p.is_file() and not p.name.startswith(".")))
     if _read is not None:
         _read[compiler] = found
     return found
@@ -136,20 +137,21 @@ def entry(out: str, compiler: str, flags: str, textsize: str, program: str, extr
     """The store key of the object `out` the program would make."""
     p = _parts(out, compiler, flags, textsize, program, extracted)
     source = out.removesuffix(".o") + ".i"
+    text, unit = _unit(source)
     step = compile.Step(
-        "object", Path(out).name, (p["flags"], p["textsize"], p["program"], p["passes"], p["extracted"])
+        "object", Path(out).name, (p["flags"], p["textsize"], p["program"], p["passes"], p["extracted"], unit)
     )
-    return compile.key(Path(source).read_bytes(), Path(source).name, [step], p["tools"])
+    return compile.key(text, Path(source).name, [step], p["tools"])
 
 
 def _describe(out: str, compiler: str, flags: str, textsize: str, program: str, extracted: Sequence[str]) -> bytes:
     """What an object the store cannot answer leaves in `<out>.oc.miss`: one line with the digests (first 16 hex
     digits) of the parts of its entry key, so two rounds can be diffed by output: flags, textsize, program, passes, the
-    extracted text and the tools, then the `.i` text and the key."""
+    extracted text and the tools, then the unit text (`.i.key`, else the `.i`) and the key."""
     p = _parts(out, compiler, flags, textsize, program, extracted)
     words = [f"{name}={_digest(value)}" for name, value in p.items()]
     with contextlib.suppress(OSError):
-        words.append(f"text={_digest(Path(out.removesuffix('.o') + '.i').read_bytes())}")
+        words.append(f"text={_digest(_unit(out.removesuffix('.o') + '.i')[0])}")
     with contextlib.suppress(OSError):
         words.append(f"key={entry(out, compiler, flags, textsize, program, extracted)[:16]}")
     return (" ".join(words) + "\n").encode()
@@ -157,6 +159,26 @@ def _describe(out: str, compiler: str, flags: str, textsize: str, program: str, 
 
 def _digest(value: str | bytes) -> str:
     return hashlib.sha256(value.encode() if isinstance(value, str) else value).hexdigest()[:16]
+
+
+def _unit(source: str) -> tuple[bytes, str]:
+    """What the object is made from: the unit's compile key (`X.i.key`, hdrkey's text, which cc_cache.settle keeps
+    beside the .i it was made from) and the digest of hdrkey that made it, else the bytes of the .i itself. A tree
+    that took a header edit which moved no code made the object from the text before the edit and a fresh tree of
+    the same sources from the text after it: the two texts differ, their compile key does not."""
+    with contextlib.suppress(OSError):
+        return Path(source + ".key").read_bytes(), "hdrkey " + _hdrkey()
+    return Path(source).read_bytes(), "text"
+
+
+def _hdrkey() -> str:
+    """The digest of hdrkey's source: another hdrkey may reduce a text to another key."""
+    if _read is not None and "\0hdrkey" in _read:
+        return _read["\0hdrkey"]
+    found = hashlib.sha256((_PASSES / "hdrkey.c").read_bytes()).hexdigest()
+    if _read is not None:
+        _read["\0hdrkey"] = found
+    return found
 
 
 def frame(obj: bytes, assembly: bytes | None) -> bytes:

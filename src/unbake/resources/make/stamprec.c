@@ -453,8 +453,20 @@ static int jump_table(const char *path, const char *base) {
     return bad;
 }
 
+enum { HELD = 2 };  /* x->stop after `@settle` held the object: the rest is skipped but for the store's put */
+
+/* the object store's put, `PYTHON -m unbake.objcache STORE LIMIT put OUT ...` (cc_cache.store_put) */
+static int store_put(char **w) {
+    int n = 0, at;
+    while (w[n]) n++;
+    for (at = 1; at < n; at++)
+        if (!strcmp(w[at], "unbake.objcache")) return !strcmp(w[at - 1], "-m") && n > at + 4 && !strcmp(w[at + 3], "put");
+    return 0;
+}
+
 /* settle ASSEMBLY KEPT: the object stands as it was when only its .i moved, its size is the wanted one and the compiler's
-   assembly is the kept one's, byte for byte (the rest of the chain is skipped and `.same` tells the rule its trim is held) */
+   assembly is the kept one's, byte for byte (the rest of the chain is skipped but for the store's put, so the held
+   object is stored under its new text's key, and `.same` tells the rule its trim is held) */
 static int settle(Object *x, const char *assembly, const char *kept) {
     char *a = 0, *b = 0, flag[4200];
     long na = 0, nb = 0;
@@ -469,7 +481,7 @@ static int settle(Object *x, const char *assembly, const char *kept) {
     unlink(kept);
     if (!same) return 0;
     snprintf(flag, sizeof flag, "%s.same", x->out);
-    x->stop = 1;
+    x->stop = HELD;
     return utimensat(AT_FDCWD, x->out, 0, 0) || put(flag, "", 0);
 }
 
@@ -612,11 +624,11 @@ static int object(int argc, char **argv) {
     } else {
         int code = 0;
         x.out = out; x.changed = changed; x.textsize = textsize; x.recorded = recorded ? recorded : ""; x.stop = 0;
-        for (i = program + 1; i < argc && !code && !x.stop;) {  /* the steps, split at `&&` */
+        for (i = program + 1; i < argc && !code && x.stop != 1;) {  /* the steps, split at `&&` */
             int j = i;
             while (j < argc && strcmp(argv[j], "&&")) j++;
             argv[j] = 0;
-            code = step(&x, argv + i);
+            if (x.stop != HELD || store_put(argv + i)) code = step(&x, argv + i);
             i = j + 1;
         }
         free(recorded);

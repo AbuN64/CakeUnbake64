@@ -54,13 +54,15 @@ IDENTITIES: dict[str, bytes] = {}
 
 def identity(compiler: str) -> bytes:
     """The compiler as its output can depend on it: the bytes of every file beside it (a driver such as IDO's cc runs
-    the passes in its own folder), by name. Read once per process."""
+    the passes in its own folder), by name, and which of them it is. Not where the folder is, and not a dotfile: the
+    installer's `.pin-manifest.json` holds the dates of the pinned files, written again whenever they move, and moved
+    every key of the toolchain on the host with it. Read once per process."""
     if compiler not in IDENTITIES:
         folder = os.path.dirname(os.path.abspath(compiler))
-        digest = sha256(os.path.abspath(compiler).encode())
+        digest = sha256(os.path.basename(compiler).encode(errors="surrogateescape"))
         for name in sorted(os.listdir(folder)):
             path = os.path.join(folder, name)
-            if os.path.isfile(path):
+            if not name.startswith(".") and os.path.isfile(path):
                 digest.update(b"\0" + name.encode(errors="surrogateescape") + b"\0" + read(path))
         IDENTITIES[compiler] = digest.digest()
     return IDENTITIES[compiler]
@@ -465,8 +467,10 @@ def compile_key(hdrkey: str, text: str, out: str) -> bool:
 
 
 def settle(i: str, hdrkey: str) -> None:
-    """Put the text `i.new` where `i` is: the old `i` stays, with its date, when it has the same compile key (a header
-    edit that moves no code changes nothing the compiler sees); the key goes beside it (`i.key`)."""
+    """Put the text `i.new` where `i` is, the key beside it (`i.key`); when it has the compile key the old text had (a
+    header edit that moves no code changes nothing the compiler sees), `i` keeps the old date, so its object stands.
+    The bytes are always the new text: a fresh tree of the same sources holds that text, and what reads a tree's
+    texts (the object store's key without a compile key, unify's facts) reads the same in both."""
     new, key_file = i + ".new", i + ".key"
     if same(new, i):
         os.unlink(new)
@@ -481,7 +485,9 @@ def settle(i: str, hdrkey: str) -> None:
     else:
         _remove(key_file + ".new")
     if kept:
-        os.unlink(new)
+        dated = os.stat(i)
+        os.replace(new, i)
+        os.utime(i, ns=(dated.st_atime_ns, dated.st_mtime_ns))
         _remove(key_file + ".new")
         return
     os.replace(new, i)
@@ -618,6 +624,15 @@ def compile_step(words: list[str]) -> int:
     return subprocess.call(words)
 
 
+HELD = "held"  # `@settle` held the object: the rest of the program is skipped but for the store's put (store_put)
+
+
+def store_put(words: list[str]) -> bool:
+    """Whether `words` are the object store's put, `PYTHON -m unbake.objcache STORE LIMIT put OUT ...`."""
+    at = words.index("unbake.objcache") if "unbake.objcache" in words else -1
+    return at > 0 and words[at - 1] == "-m" and len(words) > at + 4 and words[at + 3] == "put"
+
+
 OBJECT_MISS = 3  # `@probe` exit code: nothing is stored for the object, the program runs (0 is a hit)
 
 
@@ -658,7 +673,7 @@ def object_step(words: list[str], state: dict[str, object]) -> int:
     has not compiled.  `@jumptable S HEX`: jump_table.
     `@out FILE COMMAND...`: the command's output goes to FILE.  `@settle S KEPT`: the object stands
     as it was when only its .i moved, its size is the wanted one and S is KEPT byte for byte (the rest of the program
-    is skipped, `.same` tells the rule its trim is held); KEPT goes either way.
+    is skipped but for the store's put, `.same` tells the rule its trim is held); KEPT goes either way.
     `@probe COMMAND...`: the object store's `get` (probe): exit 0 says the object is in place (the rest of the program
     is skipped, the trim follows), OBJECT_MISS that the program runs."""
     import subprocess
@@ -693,7 +708,7 @@ def object_step(words: list[str], state: dict[str, object]) -> int:
         if same:
             os.utime(out)
             write(out + ".same", b"")
-            state["stop"] = True
+            state["stop"] = HELD
         return 0
     if head.startswith("@"):
         sys.stderr.write(f"cc_cache: no step {head}\n")
@@ -766,10 +781,12 @@ def object_file(
             else:
                 steps[-1].append(word)
         for words in steps:
+            if state["stop"] == HELD and not store_put(words):
+                continue  # the held object is still stored under its text's key: a later tree of that text finds it
             code = object_step(words, state) if words else 0
             if code:
                 return code
-            if state["stop"]:
+            if state["stop"] is True:
                 break
         if os.path.exists(out + ".same"):  # the object stands as it was (the compile's own check): its trim is held
             _remove(out + ".same")
