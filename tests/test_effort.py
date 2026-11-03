@@ -71,14 +71,40 @@ def test_a_command_running_past_the_beat_says_its_stage_and_cpu(monkeypatch, tmp
     def listen(event, body):
         if event == "say":
             said.append(body["text"])
-            if body["text"].startswith("hold:"):
-                beat.set()
+            if body["text"].startswith("hold:") and "now in submit > publish.build" in body["text"]:
+                beat.set()  # a beat said before the stage opened (only "now in submit") is not the signal
 
     monkeypatch.setattr(effort, "HOLD_BEAT", 0.05)
     stages.listen(listen)
     with effort.command("submit", ["submit"], tmp_path), stages.stage("publish.build"):
-        assert beat.wait(60)  # the first beat's say is the signal; 60 s only bounds a beat that never comes
+        assert beat.wait(60)  # the beat naming the stage is the signal; 60 s only bounds a beat that never comes
     assert any("hold: submit runs" in line and "CPU-s, now in submit > publish.build" in line for line in said)
+
+
+def test_a_beat_before_the_stage_opens_does_not_end_the_wait(monkeypatch, tmp_path):
+    """The old failure order, forced without timing: a beat said outside the stage, then the stage opens, then its beat."""
+    import threading
+
+    said = []
+    outside, inside = threading.Event(), threading.Event()
+
+    def listen(event, body):
+        if event == "say" and body["text"].startswith("hold:"):
+            said.append(body["text"])
+            if body["text"].endswith("now in submit"):
+                outside.set()
+            elif "now in submit > publish.build" in body["text"]:
+                inside.set()
+
+    monkeypatch.setattr(effort, "HOLD_BEAT", 0.05)
+    stages.listen(listen)
+    with effort.command("submit", ["submit"], tmp_path):
+        assert outside.wait(60)  # a hold line said while only the command span is open
+        assert not inside.is_set()
+        with stages.stage("publish.build"):
+            assert inside.wait(60)  # every later beat repeats the line, now naming the stage
+    assert any(line.endswith("now in submit") for line in said)
+    assert any("CPU-s, now in submit > publish.build" in line for line in said)
 
 
 def test_only_the_ship_lock_holder_keeps_normal_priority(monkeypatch):
