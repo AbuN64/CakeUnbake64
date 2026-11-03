@@ -22,6 +22,7 @@ from unbake.typeplan import Plan, Sources, plan, readers, render, sites_of
 Unit = tuple[str, str]  # (version, source path)
 Facts = tuple[list[str], list[Stmt], frozenset[str], frozenset[str]]  # (typedefs, project statements, files, words)
 _FAILED = re.compile(r"\*\*\* \[(?:[^\]\s]+: )?([^\]\s]+\.o)\]")
+_ERROR = re.compile(r"^(.+?)\.i:\d+:(?:\d+:)? (?!warning)(.*)$", re.M)
 _WORD = re.compile(r"[A-Za-z_]\w*")
 _POINTER = re.compile(r"\(\s*\*")
 WORK = ("batches", "rounds", "rebuilt")  # counts of the builds one run made: not part of what it decided
@@ -187,6 +188,18 @@ def _sha(path: Path) -> str | None:
     return hashlib.sha1(path.read_bytes()).hexdigest() if path.is_file() else None
 
 
+def _first_errors(log: str, failed: Iterable[str]) -> dict[str, str]:
+    """The first compiler error lines of each failed object, from one pass over the log (a scan of the log per failed
+    object is failed x log size of serial work after make returned)."""
+    wanted = {path[:-2]: path for path in failed}
+    lines: dict[str, list[str]] = {path: [] for path in wanted.values()}
+    for match in _ERROR.finditer(log):
+        path = wanted.get(match[1])
+        if path is not None and len(lines[path]) < ERROR_LINES:
+            lines[path].append(match[2])
+    return {path: " | ".join(first) if first else "no compiler error in the log" for path, first in lines.items()}
+
+
 def rebuild(
     root: Path, seams: Seams, units: Iterable[Unit], errors: dict[str, str] | None = None
 ) -> dict[Unit, str | None]:
@@ -209,11 +222,7 @@ def rebuild(
             raise Refusal(Finding("unify.build", f"make exited {code} and named no unit that failed: it did not build"))
         named |= failed
         if errors is not None:
-            for path in failed:
-                first = re.findall(rf"^{re.escape(path[:-2])}\.i:\d+:(?:\d+:)? (?!warning)(.*)$", log, re.M)[
-                    :ERROR_LINES
-                ]
-                errors[path] = " | ".join(first) if first else "no compiler error in the log"
+            errors.update(_first_errors(log, failed))
         absent = [p for p in pending if p not in named and not (root / p).is_file()]
         if len(absent) == len(pending):
             raise Refusal(
@@ -351,6 +360,9 @@ def run(
     held_objects: dict[str, dict[str, str]] = defaultdict(dict)
     plans: dict[str, Plan] = {}
     built, rebuilt = 0, 0
+    passed: dict[
+        Unit, tuple[frozenset[str], str]
+    ] = {}  # unit -> (rewrites reaching it, object) of its last passing trial
     # Read project texts once: users without a local declaration still need the owning header.
     paths = sorted(
         {f for files in census.closure.values() for f in files}
@@ -500,6 +512,7 @@ def run(
                 # isolates interacting edits and multiple culprits in the same object.
                 omitted = {n for _, right, _ in split for n in right}
                 trial = [p for n, p in active.items() if n not in omitted]
+                in_trial = [n for n in active if n not in omitted]
                 _write(root, files, trial, src)
                 # An object the left half does not touch is built as in the last trial that passed it, so it
                 # cannot break in this one: only the objects the left half touches are rebuilt.
@@ -512,6 +525,12 @@ def run(
                     built += 1
                     rebuilt += len(testing)
                 broken_trial = set(differing(testing, trial_made, base))
+                for u in testing:
+                    object_hash = trial_made[u]
+                    if u in broken_trial or object_hash is None:
+                        passed.pop(u, None)
+                    else:  # an object is fixed by the rewrites that reach it: what it was built with is its state
+                        passed[u] = (frozenset(n for n in in_trial if u in units_of[n]), object_hash)
                 tasks = []
                 for left, right, affected in split:
                     broken_left = affected & broken_trial
@@ -527,11 +546,18 @@ def run(
             _write(root, files, active.values(), src)
             # A second independent culprit may have been masked by the first error.
             testing = {u for u in bad if any(u in units_of[n] for n in active)}
+            # An object a passing trial built with exactly the rewrites that remain is already verified.
+            known = {
+                u: passed[u][1]
+                for u in testing
+                if u in passed and passed[u][0] == frozenset(n for n in active if u in units_of[n])
+            }
+            fresh_units = testing - known.keys()
             with stages.stage("unify.isolate.verify"):
-                made = rebuild(root, seams, testing, errors)
-            if testing:
+                made = {**known, **rebuild(root, seams, fresh_units, errors)}
+            if fresh_units:
                 built += 1
-                rebuilt += len(testing)
+                rebuilt += len(fresh_units)
             remaining_bad = set(differing(testing, made, base))
             # Removing one culprit can also clear another object's interacting
             # failure, even when that object passed an earlier half-trial.
