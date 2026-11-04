@@ -169,7 +169,9 @@ def search(snapshot: Snapshot, version: str) -> list[str]:
 def _search(snapshot: Snapshot, version: str) -> list[str]:
     cfg = snapshot.config
     macros = configuration.load_resource("repo.toml")["splat"]["options"]["generated_asm_macros_directory"]
-    return ["-Iinclude", "-Isrc", "-I" + macros.format(version=version, name=cfg.project.name)]
+    layout = configuration.layout(cfg.project)
+    roots = [*layout["header_roots"], *layout["source_roots"]]
+    return [*(f"-I{r}" for r in roots), "-I" + macros.format(version=version, name=cfg.project.name)]
 
 
 def _closure(snapshot: Snapshot, unit: UnitSpec, version: str) -> tuple[tuple[str, str], ...]:

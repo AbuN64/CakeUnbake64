@@ -197,18 +197,20 @@ def _argv(
     config: Config, path: str, version: str, source: str, extra: Sequence[str] = (), markers: bool = False
 ) -> list[str]:
     """The build's preprocess command of `path` for `version`, as the Makefile spells it: the toolchain row's template
-    with the row's, the project's and the [file] row's preprocessor flags, the version macro, `include` and the file's
-    folder; `extra` flags follow the flags. With `markers`, a row's -P is dropped so line markers stay."""
+    with the row's, the project's and the [file] row's preprocessor flags, the version macro, the layout's header roots
+    and the file's folder; `extra` flags follow the flags. With `markers`, a row's -P is dropped so line markers
+    stay."""
     project = _project(config).digest
     recipe = memo.memo(("tree.recipe", project, path), lambda: recipes.of(config, path))
     directory = path.rpartition("/")[0] or "."
+    headers = configuration.layout(_project(config))["header_roots"]
     id = recipe.toolchain
     tool = memo.memo(("tree.toolchain", project, id), lambda: adapters.toolchain(config, id))
     return tool.argv(
         "preprocess",
         cppflags=[*(f for f in recipe.cppflags if not (markers and f == "-P")), *extra],
         defines=[f"-D{macro(version)}"],
-        includes=["-Iinclude", f"-I{directory}/"],
+        includes=[*(f"-I{h}" for h in headers), f"-I{directory}/"],
         source=[source],
     )
 
