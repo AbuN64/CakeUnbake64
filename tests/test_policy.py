@@ -740,6 +740,8 @@ def test_the_unclean_key_moves_with_the_job_that_shapes_its_value(monkeypatch):
 
 
 def test_a_header_edit_moves_the_unclean_verdict_key(monkeypatch):
+    monkeypatch.setattr(policy, "code_identity", lambda *functions: "code")  # the real walk is test_identity's
+
     def key(reach):
         return policy._unclean_key((_keyed(monkeypatch, reach), "src/a.c", ("r",), ()))
 

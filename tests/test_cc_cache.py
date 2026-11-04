@@ -841,8 +841,9 @@ def folder_of(tmp_path: Path, files: int = 24, size: int = 12_276_728) -> Path:
 
 def test_identity_reads_compiler_folder_once(tmp_path, monkeypatch):
     """Regression slice of wave1c: the build runs one fresh process per compile, and each read the whole compiler folder
-    (475 GB for 38,690 compiles of ido-5.3). 1000 fresh processes that each miss read the folder at most once."""
-    cc = folder_of(tmp_path)
+    (475 GB for 38,690 compiles of ido-5.3). 100 fresh processes that each miss read the folder at most once."""
+    size = 1_227_672  # a tenth of ido-5.3: the bound is on re-reads, which scale with the folder, not on its size
+    cc = folder_of(tmp_path, size=size)
     folder, cache = str(cc.parent), tmp_path / "cache"
     read_bytes = []
     real_open = builtins.open
@@ -877,13 +878,13 @@ def test_identity_reads_compiler_folder_once(tmp_path, monkeypatch):
     monkeypatch.setattr(cc_cache, "maybe_prune", lambda cache: None)
     monkeypatch.setattr(builtins, "open", counting_open)
     monkeypatch.chdir(tmp_path)
-    for number in range(1000):
+    for number in range(100):
         cc_cache.IDENTITIES.clear()  # a fresh process
         Path("x.i").write_text(f"int a{number};")
         assert cc_cache.run(str(cache), str(cc), ["-O2", "x.i", "-o", "x.s"]) == 0
         assert Path("x.s").read_text() == f"INT A{number};"
-    assert sum(read_bytes) <= 12_276_728
-    assert len(list(cache.glob("??/*"))) == 1000  # every one was a miss that stored its result
+    assert sum(read_bytes) <= size
+    assert len(list(cache.glob("??/*"))) == 100  # every one was a miss that stored its result
 
 
 def test_the_kept_identity_gives_the_key_of_the_folder_read(tmp_path):

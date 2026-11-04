@@ -20,7 +20,7 @@ from abucache.proc import Completed
 from abucache.store import forget
 
 from unbake import config as configuration
-from unbake import effort, hostruntime, process
+from unbake import effort, front, hostruntime, process
 from unbake.contracts import Config, NativeResult
 
 pytest_plugins = ["hygiene", "pytester"]  # unit tests mock their seams and keep their seconds bound
@@ -111,6 +111,7 @@ def _fresh_module_state(monkeypatch, _process_state):
     monkeypatch.delenv("WORKTREE_Projects_AbuN64_AbuCache64", raising=False)  # fixture installers own their sources
     forget()
     memo._clear()
+    front._REPLAYED[0] = 0  # the count of replayed failures is the process's: each test starts at none
     stages._listeners[:] = [effort._track]  # the hold beat reads the open stage from the one tracker
     monkeypatch.chdir(_process_state / "cwd")  # a command's stage log goes under its working directory
     pool._drop_executor()

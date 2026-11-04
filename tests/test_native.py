@@ -43,6 +43,7 @@ def case(tmp_path, monkeypatch, toolchains):
     obj.write_bytes(b"object")
     linker = Mock()
     monkeypatch.setattr(native.adapters, "linker", Mock(return_value=linker))
+    monkeypatch.setattr(native, "code_identity", lambda *functions: "code")  # the real walk is test_identity's
     return snapshot, unit, recipe, obj, tmp_path / "work", linker
 
 
@@ -247,6 +248,7 @@ def test_allocation_dumps_name_a_compile_error_as_one_and_a_dumpless_toolchain_a
 def world(cfg, monkeypatch, tmp_path):
     """The fixture project (c_func at rom 0x1000, stand_in at 0x1010, ROM all zero) with the compile and the object
     reader replaced: the object holds c_func and stand_in in 32 bytes of .text."""
+    monkeypatch.setattr(native, "code_identity", lambda *functions: "code")  # the real walk is test_identity's
     obj = tmp_path / "unit.o"
     obj.write_bytes(b"object")
     state = SimpleNamespace(

@@ -2,7 +2,9 @@
 
 A unit test mocks its seams: it never spawns a real build tool (make, a compiler, an assembler, a linker, binutils, a
 build helper program) and it stays inside its declared seconds bound (`@pytest.mark.seconds(n)`, default
-DEFAULT_SECONDS of CPU, this process and its children). A test that needs the real tool is marked
+DEFAULT_SECONDS of CPU, this process and its children). The bound measures the test's own work: CPU seconds are divided
+by how much slower the host runs a fixed spin than it did at its fastest this session (contention inflates CPU time
+under load; sleeps are exact and are never scaled). A test that needs the real tool is marked
 `@pytest.mark.integration("why")`: the integration set runs apart (`bin/test --integration`, part of ci/check) and is
 exempt from both rules. A program a test wrote itself under its tmp directory (a stub) is not a real tool.
 """
@@ -22,6 +24,7 @@ from pathlib import Path
 import pytest
 
 DEFAULT_SECONDS = 1.0  # CPU seconds a unit test may use, setup and call; a test declares more with mark.seconds
+MAX_CONTENTION = 4.0  # the most the bound forgives: a test 4x over its bound under any load is genuinely slow
 WALL_FLOOR = 10.0  # a unit test blocked on something real (a lock, a child): wall seconds beyond this fail it too
 
 # Real build tools by program name; a cross prefix (mips-linux-gnu-) is dropped first.
@@ -146,6 +149,34 @@ def _sleep(seconds: float) -> None:
 time.sleep = _sleep
 
 
+_fastest = [float("inf")]  # the least CPU seconds the calibration spin took in this process
+_contention_at = [float("-inf"), 1.0]  # when the factor was last measured (monotonic), and the factor
+
+
+def _spin() -> float:
+    """CPU seconds a fixed bit of pure work takes now, the best of three so a descheduling blip does not count."""
+    best = float("inf")
+    for _ in range(3):
+        start = time.process_time()
+        sum(range(60_000))
+        best = min(best, time.process_time() - start)
+    return best
+
+
+def contention() -> float:
+    """How many times slower than its fastest this host runs CPU work now: 1.0 idle, up to MAX_CONTENTION loaded."""
+    now = time.monotonic()
+    if now - _contention_at[0] >= 1.0:  # the load drifts slowly: a spin per second, not one per test
+        spent = _spin()
+        _fastest[0] = min(_fastest[0], spent)
+        _contention_at[:] = [now, min(MAX_CONTENTION, max(1.0, spent / _fastest[0]))]
+    return _contention_at[1]
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    _fastest[0] = min(_spin() for _ in range(5))  # a reference taken before the first test
+
+
 def _cpu() -> float:
     t = os.times()
     return t.user + t.system + t.children_user + t.children_system + _slept[0]
@@ -159,6 +190,7 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> 
         item._hygiene_tmp = (base.parent if os.environ.get("PYTEST_XDIST_WORKER") else base).resolve()  # type: ignore[attr-defined]
     _active.append(item)
     item._hygiene_start = (_cpu(), time.monotonic())  # type: ignore[attr-defined]
+    item._hygiene_slept = _slept[0]  # type: ignore[attr-defined]
     try:
         yield
     finally:
@@ -180,11 +212,17 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Itera
     spawned = _spawned.get(item.nodeid)
     cpu0, wall0 = item._hygiene_start  # type: ignore[attr-defined]
     cpu, wall, limit = _cpu() - cpu0, time.monotonic() - wall0, bound(item)
+    slept = _slept[0] - item._hygiene_slept  # type: ignore[attr-defined]
+    slow = contention()
+    cpu = (cpu - slept) / slow + slept  # the test's own work: contention inflates CPU time, never a sleep
     why = ""
     if spawned:
         why = f"unit hygiene: the test spawned {spawned[0]} (caught by the code under test)"
     elif cpu > limit:
-        why = f"unit hygiene: {cpu:.2f} s (CPU and sleeps) over the test's bound of {limit:g} s: mock the slow seam"
+        why = (
+            f"unit hygiene: {cpu:.2f} s (CPU and sleeps, host slowdown {slow:.1f}x taken out) "
+            f"over the test's bound of {limit:g} s: mock the slow seam"
+        )
     elif wall > max(WALL_FLOOR, 4 * limit):
         why = (
             f"unit hygiene: {wall:.2f} s wall for a test bound to {limit:g} s CPU: it sleeps or waits on something real"
