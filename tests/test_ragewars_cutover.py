@@ -278,7 +278,7 @@ def test_every_build_root_comes_from_the_layout(layout, roots):
     roots({})
     assert (config.root("asm"), config.source_roots()[0], repo.header()) == ("asm", "SOURCE", "include/include_asm.h")
     roots(UPPER)
-    assert [config.root(k) for k in config.BUILD_ROOTS] == ["ASM", "BUILD", "ROMS"]
+    assert [config.root(k) for k in ("asm", "build", "roms")] == ["ASM", "BUILD", "ROMS"]
     assert repo.header() == "INCLUDE/include_asm.h"
     assert {
         "SOURCE",

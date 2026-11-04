@@ -463,7 +463,13 @@ def _draft_census(
     chain = adapters.toolchain(config, own.toolchain)
     flagged = replace(own, cppflags=(*own.cppflags, "-DNON_MATCHING"))
     try:
-        chain.preprocess(root / unit, flagged, version, [root / "include", (root / unit).parent], out)
+        chain.preprocess(
+            root / unit,
+            flagged,
+            version,
+            [*(root / h for h in configuration.header_roots()), (root / unit).parent],
+            out,
+        )
     except Refusal as refusal:
         return {"err": refusal.findings[0].reason[:160]}
     text = _without_stand_ins(out.read_text(errors="replace"))

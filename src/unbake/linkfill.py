@@ -53,7 +53,7 @@ class Fill:
 
 
 def path(version: str) -> str:
-    return f"versions/{version}/linker_fill.toml"
+    return f"{configuration.root('versions')}/{version}/linker_fill.toml"
 
 
 def _refuse(version: str, reason: str, **more: object) -> Refusal:

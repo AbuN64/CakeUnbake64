@@ -138,7 +138,7 @@ def build_context(config: Config, name: str, version: str, text: bytes | None = 
             "asflags": recipe.asflags,
             "includes": [
                 f"-I{root / _config.root('asm') / version}",
-                f"-I{root / _config.root('asm') / version / 'include'}",
+                f"-I{root / _config.root('asm') / version / _config.root('asm_include')}",
                 f"-I{root / _config.header_roots()[0]}",
             ],
             "source": [str(root / target)],

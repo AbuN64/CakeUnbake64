@@ -348,6 +348,7 @@ def makefile(config: Config) -> bytes:
             f"ASM := {configuration.root('asm')}",
             f"BUILD := {configuration.root('build')}",
             f"ROMS := {configuration.root('roms')}",
+            f"FACTS := {configuration.root('versions')}",
             f"HEADER_ROOT := {configuration.header_roots()[0]}",
             f"SOURCE_LIST := {','.join(configuration.source_roots())}",
             f"TOOLCHAIN := {_key(project.toolchain)}",
@@ -857,7 +858,9 @@ def linker(config: Config, held: Tree) -> bytes:
             binary = all(s.kind == "bin" for s in by.values())
             orders = {v: [] if binary else _items(config, held, v, name, per_object, facts[v]) for v in names}
             blocks = (
-                [(tuple(names), [f"assets/{name}.bin.o(.data)"])] if binary else _blocks({v: orders[v] for v in names})
+                [(tuple(names), [f"{configuration.root('assets')}/{name}.bin.o(.data)"])]
+                if binary
+                else _blocks({v: orders[v] for v in names})
             )
             out += [f"#if {whole}"] if whole else []
             out += _header(name, by, names)

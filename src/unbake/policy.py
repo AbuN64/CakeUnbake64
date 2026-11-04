@@ -469,8 +469,15 @@ def _header_externs(snapshot: Snapshot, text: str) -> dict[str, tuple[str, ...]]
 
 def _include_headers(snapshot: Snapshot) -> list[str]:
     root = snapshot.config.project.root
-    found = {p.relative_to(root).as_posix() for p in (root / "include").rglob("*") if p.is_file()}
-    found |= {p for p, data in snapshot.overlays.items() if data is not None and p.startswith("include/")}
+    found = {
+        p.relative_to(root).as_posix()
+        for h in configuration.header_roots()
+        for p in (root / h).rglob("*")
+        if p.is_file()
+    }
+    found |= {
+        p for p, data in snapshot.overlays.items() if data is not None and p.startswith(configuration.header_prefixes())
+    }
     found -= {p for p, data in snapshot.overlays.items() if data is None}
     return sorted(p for p in found if config.is_header(p))
 

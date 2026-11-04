@@ -64,7 +64,7 @@ ASINC = -Iasm/$(call ver,$*)
 ASDEFS = $(foreach w,$(VERSIONS),--defsym $(VMACRO_$(w))=$(if $(filter $(w),$(call ver,$*)),1,0))
 # Each version's facts (VMACRO_, SHA1_, ROM0_, ROM_SECTIONS_) and the size each object's .text has in the ROM: a
 # compiler may pad the section past its last function, and a zero tail past that size is cut before the object links.
--include $(VERSIONS:%=versions/%/text_sizes.mk)
+-include $(VERSIONS:%=$(FACTS)/%/text_sizes.mk)
 # Compare each object's last successful size with its own target-specific value during second expansion.
 # A shared text_sizes.mk timestamp would rebuild every object; removed sizes must also invalidate the old trim.
 text_size_changed = $(if $(filter x$(TEXTSIZE),x$(file <$@.textsize)),,text-size-changed)
@@ -76,7 +76,7 @@ TRIM_TEXT = $(CCPY) --trim
 all: check
 ifeq ($(CHECK),tree)
 check:
-	$(Q)for f in Makefile $(NAME).ld $(HEADER_ROOT)/include_asm.h $(VERSIONS:%=versions/%/splat.yaml); do test -s $$f || { echo "$$f is missing" >&2; exit 1; }; done
+	$(Q)for f in Makefile $(NAME).ld $(HEADER_ROOT)/include_asm.h $(VERSIONS:%=$(FACTS)/%/splat.yaml); do test -s $$f || { echo "$$f is missing" >&2; exit 1; }; done
 else ifeq ($(CHECK),rom)
 check: $(VERSIONS:%=$(BUILD)/%/$(NAME).z64)
 else
@@ -104,14 +104,14 @@ CODE_SED := -e 's@^(\s*/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/\s*)[^%]*/\* h
 # `make extract-force-<v>` (or removing asm/<v>/.extracted) splits regardless. One recipe, no sub-make (parallel sub-makes raced
 # on remaking the included files). Bump rev1 when the recipe changes.
 export EXTRACT_RECIPE := rev1 $(DATA_SED) $(CODE_SED)
-EXTRACT_KEY = { cat $(ROMS)/baserom.$*.z64 versions/$*/splat.yaml versions/$*/symbol_addrs.txt $(wildcard versions/$*/earlier_build_symbols.txt); $(SPLAT) --version 2>&1; printf %s "$$EXTRACT_RECIPE"; } | sha1sum | cut -d" " -f1
+EXTRACT_KEY = { cat $(ROMS)/baserom.$*.z64 $(FACTS)/$*/splat.yaml $(FACTS)/$*/symbol_addrs.txt $(wildcard $(FACTS)/$*/earlier_build_symbols.txt); $(SPLAT) --version 2>&1; printf %s "$$EXTRACT_RECIPE"; } | sha1sum | cut -d" " -f1
 # asm/<v>/.extracted has only the ROM as prerequisite: a rebase that changed symbol_addrs.txt or splat.yaml left stale asm. A version whose
 # two files differ from build/.extract-src-<v> (or have no record) gets the phony extract-stale: the full key is checked once, then recorded.
-SRC_KEY = cat versions/$*/splat.yaml versions/$*/symbol_addrs.txt $(wildcard versions/$*/earlier_build_symbols.txt) 2>/dev/null | sha1sum | cut -d" " -f1
+SRC_KEY = cat $(FACTS)/$*/splat.yaml $(FACTS)/$*/symbol_addrs.txt $(wildcard $(FACTS)/$*/earlier_build_symbols.txt) 2>/dev/null | sha1sum | cut -d" " -f1
 .PHONY: extract-stale
-$(foreach v,$(VERSIONS),$(if $(wildcard $(BUILD)/.extract-key-$(v)),$(if $(filter $(shell cat versions/$(v)/splat.yaml versions/$(v)/symbol_addrs.txt $(wildcard versions/$(v)/earlier_build_symbols.txt) 2>/dev/null | sha1sum | cut -d" " -f1),$(shell cat $(BUILD)/.extract-src-$(v) 2>/dev/null)),,$(eval $(ASM)/$(v)/.extracted: extract-stale))))
+$(foreach v,$(VERSIONS),$(if $(wildcard $(BUILD)/.extract-key-$(v)),$(if $(filter $(shell cat $(FACTS)/$(v)/splat.yaml $(FACTS)/$(v)/symbol_addrs.txt $(wildcard $(FACTS)/$(v)/earlier_build_symbols.txt) 2>/dev/null | sha1sum | cut -d" " -f1),$(shell cat $(BUILD)/.extract-src-$(v) 2>/dev/null)),,$(eval $(ASM)/$(v)/.extracted: extract-stale))))
 # asm/<v>/.extracted holds the hash of the facts it was made from; an object of other facts is refused (an empty mark is not checked).
-$(foreach v,$(VERSIONS),$(eval FACTS_NOW_$(v) := $(shell cat versions/$(v)/symbol_addrs.txt versions/$(v)/splat.yaml 2>/dev/null | sha1sum | cut -d' ' -f1)))
+$(foreach v,$(VERSIONS),$(eval FACTS_NOW_$(v) := $(shell cat $(FACTS)/$(v)/symbol_addrs.txt $(FACTS)/$(v)/splat.yaml 2>/dev/null | sha1sum | cut -d' ' -f1)))
 extract: $(VERSIONS:%=extract-%)
 extract-force-%:
 	$(Q)rm -f $(BUILD)/.extract-key-$* && $(MAKE) --no-print-directory extract-$*
@@ -125,13 +125,13 @@ extract-%:
 extract-do-%:
 	$(Q)mkdir -p $(BUILD); if test -f $(ASM)/$*/.extracted && test "$$($(EXTRACT_KEY))" = "$$(cat $(BUILD)/.extract-key-$* 2>/dev/null)"; then rm -f $(BUILD)/.extract-run-$*; echo "extract-$*: inputs unchanged, not split again (make extract-force-$* splits)"; { $(SRC_KEY); } > $(BUILD)/.extract-src-$*; else touch $(BUILD)/.extract-run-$*; fi
 	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; python3 -I $(MKTOOLS)/keep_dates.py $(ASM) $(BUILD) save $*
-	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; $(SPLAT) split versions/$*/splat.yaml
+	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; $(SPLAT) split $(FACTS)/$*/splat.yaml
 	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; find $(ASM)/$* \( -name '*.data.s' -o -name '*.rodata.s' \) | while read f; do \
 		case $$(grep -m1 -oE '^ */\* [0-9A-F]+ [0-9A-F]{8}' "$$f" | tail -c 2) in \
 		0*) c='';; 8*) c='s/^\.align [4-9]/.align 3/';; [4C]*) c='s/^\.align [3-9]/.align 2/';; \
 		[26AE]*) c='s/^\.align [2-9]/.align 1/';; *) c='s/^\.align [1-9]/.align 0/';; esac; \
 		sed -E $(DATA_SED) -e "$$c" "$$f" > "$${f%.*.s}.s" && rm "$$f"; done
-	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; python3 -I $(MKTOOLS)/fill_data.py $(ASM) $(ROMS) $*
+	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; python3 -I $(MKTOOLS)/fill_data.py $(ASM) $(ROMS) $(FACTS) $*
 	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; find $(ASM)/$*/nonmatchings -name '*.s' -exec sed -i -E $(CODE_SED) {} +
 	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; printf '%s\n' $(FACTS_NOW_$*) > $(ASM)/$*/.extracted
 	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; python3 -I $(MKTOOLS)/keep_dates.py $(ASM) $(BUILD) restore $*
@@ -232,7 +232,7 @@ $(BUILD)/%/link.ld: $(NAME).ld
 # spells, at the address the name carries: a .L label the assembler keeps out of the object, or a label inside bytes
 # a C file compiles. Every object of the version is a prerequisite (the .i/.s the grep reads are complete once it is
 # built) but never an input of the sed.
-$(BUILD)/%/undefined_syms.ld: versions/%/symbol_addrs.txt $(BUILD)/%/undefined_syms_auto.txt $(BUILD)/%/undefined_funcs_auto.txt $(ASM)/%/.extracted $$(wildcard versions/$$*/aliases.txt versions/$$*/earlier_build_symbols.txt)
+$(BUILD)/%/undefined_syms.ld: $(FACTS)/%/symbol_addrs.txt $(BUILD)/%/undefined_syms_auto.txt $(BUILD)/%/undefined_funcs_auto.txt $(ASM)/%/.extracted $$(wildcard $(FACTS)/$$*/aliases.txt $(FACTS)/$$*/earlier_build_symbols.txt)
 	$(Q)sed -nE 's/^([A-Za-z_.][A-Za-z0-9_.$$]*)[[:space:]]*=[[:space:]]*(0x[0-9A-Fa-f]+);.*/PROVIDE(\1 = \2);/p' $(filter-out %.o,$^) > $@
 	$(Q)grep -rhoE --include='*.s' --include='*.i' '$(LABEL)[0-9A-F]{8}\b' $(ASM)/$* $(BUILD)/$* | sort -u | sed -E 's/^($(LABEL)(.*))$$/PROVIDE(\1 = 0x\2);/' >> $@
 # The objects are prerequisites of each version's list by a plain rule, not by the pattern rule's second expansion:
@@ -270,7 +270,7 @@ $(foreach v,$(VERSIONS),$(eval OBJS_nm_$(v) := $(patsubst $(BUILD)/$(v)/%,$(BUIL
 ifeq ($(CHECK),rom)
 $(shell sed -E 's@^$(BUILD)/@$(BUILD)/nmraw/@' $(BUILD)/asm.deps > $(BUILD)/asm-nmraw.deps.$$$$ && mv $(BUILD)/asm-nmraw.deps.$$$$ $(BUILD)/asm-nmraw.deps)
 -include $(BUILD)/asm-nmraw.deps
-$(shell cat $(VERSIONS:%=versions/%/text_sizes.mk) | sed -nE 's@^$(BUILD)/@$(BUILD)/nmraw/@p' > $(BUILD)/text_sizes_nmraw.mk.$$$$ && mv $(BUILD)/text_sizes_nmraw.mk.$$$$ $(BUILD)/text_sizes_nmraw.mk)
+$(shell cat $(VERSIONS:%=$(FACTS)/%/text_sizes.mk) | sed -nE 's@^$(BUILD)/@$(BUILD)/nmraw/@p' > $(BUILD)/text_sizes_nmraw.mk.$$$$ && mv $(BUILD)/text_sizes_nmraw.mk.$$$$ $(BUILD)/text_sizes_nmraw.mk)
 -include $(BUILD)/text_sizes_nmraw.mk
 endif
 $(BUILD)/nm/%.o: $(BUILD)/nmraw/%.o $(BUILD)/%.o

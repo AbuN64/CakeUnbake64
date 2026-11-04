@@ -233,6 +233,18 @@
       "minLength": 1,
       "pattern": "^[^/.][^/]*(/[^/.][^/]*)*$"
      }
+    },
+    "versions_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
+    },
+    "assets_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
+    },
+    "asm_include_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
     }
    },
    "required": [
@@ -248,7 +260,10 @@
     "roms_root",
     "region_gap",
     "source_roots",
-    "header_roots"
+    "header_roots",
+    "versions_root",
+    "assets_root",
+    "asm_include_root"
    ],
    "additionalProperties": false
   },

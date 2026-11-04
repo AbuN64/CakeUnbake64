@@ -855,7 +855,7 @@ def _pools(
             continue
         text = text[: found.start()] + text[found.end() :]
         for v, (vram, rom) in placed.items():
-            path = f"versions/{v}/symbol_addrs.txt"
+            path = f"{configuration.root('versions')}/{v}/symbol_addrs.txt"
             if path not in old:
                 old[path] = read_file(reads, path)
             current = rows.get(path) or old[path] or b""
@@ -864,7 +864,7 @@ def _pools(
         r"\bswitch\b", text
     ):  # the table's stand-in is the data row itself: the row becomes the compiled table's place
         for v, (vram, rom) in _table_rows(config, name, owner.versions).items():
-            path = f"versions/{v}/symbol_addrs.txt"
+            path = f"{configuration.root('versions')}/{v}/symbol_addrs.txt"
             old[path] = read_file(reads, path)
             rows[path] = _placed_rows((old[path] or b"").decode(), name, vram, rom).encode()
     return text, rows
@@ -949,7 +949,7 @@ def _literal_pools(
         staged: dict[str, bytes | None] = {}
         for v, stand_in in by_version.items():
             fact = held.symbols.get(v, {}).get(stand_in)
-            splat = config.project.root / f"versions/{v}/splat.yaml"
+            splat = config.project.root / f"{configuration.root('versions')}/{v}/splat.yaml"
             pieces = (
                 sorted((int(m[1], 16), m[2]) for m in _PIECE.finditer(splat.read_text())) if splat.is_file() else []
             )
@@ -969,7 +969,10 @@ def _literal_pools(
                 break
             row = next((n for n in rows if n == f"{tree.LITERALS}{name}"), rows[0])
             before = row == beside[0]
-            symbols, aliases = f"versions/{v}/symbol_addrs.txt", f"versions/{v}/aliases.txt"
+            symbols, aliases = (
+                f"{configuration.root('versions')}/{v}/symbol_addrs.txt",
+                f"{configuration.root('versions')}/{v}/aliases.txt",
+            )
             new_symbols, inside = _retire(current(symbols), stand_in, row, vram, rom, size, before)
             new_aliases, _ = _retire(current(aliases), stand_in, row, vram, rom, size, before)
             staged[symbols] = new_symbols.encode()

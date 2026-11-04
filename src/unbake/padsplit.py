@@ -16,6 +16,7 @@ from typing import Any
 from abucache import stages
 
 from unbake import batch_data, journal, publish, repo, tree, treelock
+from unbake import config as configuration
 from unbake.contracts import Config, Finding, Json, Refusal
 
 _OPEN = re.compile(r"#\s*(?:if|ifdef|ifndef)\b")
@@ -277,7 +278,7 @@ def run(config: Config, params: Json) -> Json:
         old: dict[str, bytes | None] = {}
         writes: dict[str, bytes | None] = {}
         for row in rows:
-            path = f"versions/{row['version']}/symbol_addrs.txt"
+            path = f"{configuration.root('versions')}/{row['version']}/symbol_addrs.txt"
             if path not in old:
                 old[path] = publish.read_file(reads, path)
             text = (writes.get(path) or old[path] or b"").decode()

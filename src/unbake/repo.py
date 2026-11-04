@@ -207,7 +207,7 @@ def init(params: Json) -> Json:
             detected = made.pop()
             rows = _segment_rows(yaml.safe_load(detected.read_bytes()))
             detected.unlink()  # splat's scratch output: the generated versions/<v>/splat.yaml replaces it
-            write(f"versions/{v}/symbol_addrs.txt", b"")
+            write(f"{configuration.root('versions')}/{v}/symbol_addrs.txt", b"")
             blocks.append(
                 f'\n[version.{v}]\nsha1 = "{versions[v]["sha1"]}"\nsize = {versions[v]["size"]}\n{_toml_rows(rows)}'
             )
@@ -681,8 +681,14 @@ def _generated(config: Config, current: Any) -> dict[str, bytes]:
     wanted = {
         "Makefile": build.makefile(config),
         f"{project.name}.ld": build.linker(config, current),
-        **{f"versions/{v}/splat.yaml": build.splat_yaml(config, v, current) for v in project.versions},
-        **{f"versions/{v}/text_sizes.mk": build.text_sizes(config, current, v) for v in project.versions},
+        **{
+            f"{configuration.root('versions')}/{v}/splat.yaml": build.splat_yaml(config, v, current)
+            for v in project.versions
+        },
+        **{
+            f"{configuration.root('versions')}/{v}/text_sizes.mk": build.text_sizes(config, current, v)
+            for v in project.versions
+        },
         **ci.files(),
         **scaffold(configuration.repo(project)),
     }
@@ -909,11 +915,11 @@ def _unplaced_tables(config: Config, current: Any) -> list[Finding]:
                     "sync.literals",
                     f"{v}: {n} at 0x{fact[0]:08X} is the jump table of {function}, which {path} defines in C, but "
                     f"{path} owns no read-only data: the link would leave its compiled .rodata out of the ROM",
-                    path=f"versions/{v}/aliases.txt",
+                    path=f"{configuration.root('versions')}/{v}/aliases.txt",
                     unit=function,
                     versions=(v,),
                     action=f"add `{tree.LITERALS}{function} = 0x{fact[0]:08X}; // rom:0x{rom:X}` to "
-                    f"versions/{v}/aliases.txt",
+                    f"{configuration.root('versions')}/{v}/aliases.txt",
                 )
             )
     return findings
@@ -981,7 +987,7 @@ def _swallowed_tables(config: Config, current: Any) -> list[Finding]:
                         f"0x{vram:08X} on it holds the {count}-entry jump table of {function}, which "
                         f"{files.get(function, 'no file')} holds: the piece would end before it and leave the "
                         f"ROM short by 0x{ends[rom] - at:X} bytes",
-                        path=f"versions/{v}/symbol_addrs.txt",
+                        path=f"{configuration.root('versions')}/{v}/symbol_addrs.txt",
                         unit=name,
                         versions=(v,),
                         action=f"add `jtbl_{vram:08X} = 0x{vram:08X}; // rom:0x{at:X}` to versions/{v}/symbol_addrs.txt"
@@ -1076,9 +1082,9 @@ def _facts_hash(root: Path, v: str) -> str:
     """The hash of what an extraction reads (symbol_addrs.txt then splat.yaml, missing ones skipped): the same bytes the
     Makefile hashes with `cat | sha1sum`, so the mark and the build agree on which facts made asm/<v>/."""
     data = b"".join(
-        (root / f"versions/{v}/{name}").read_bytes()
+        (root / f"{configuration.root('versions')}/{v}/{name}").read_bytes()
         for name in ("symbol_addrs.txt", "splat.yaml")
-        if (root / f"versions/{v}/{name}").is_file()
+        if (root / f"{configuration.root('versions')}/{v}/{name}").is_file()
     )
     return sha1(data)
 
@@ -1166,7 +1172,7 @@ def _snapshot_inputs(config: Config, v: str) -> None:
     root = config.project.root
     for snap, source in ((_facts_snapshot(config, v), "symbol_addrs.txt"), (_yaml_snapshot(config, v), "splat.yaml")):
         try:
-            store.write(snap, (root / f"versions/{v}/{source}").read_bytes())
+            store.write(snap, (root / f"{configuration.root('versions')}/{v}/{source}").read_bytes())
         except OSError:
             snap.unlink(missing_ok=True)
 
@@ -1268,9 +1274,13 @@ def _renames(config: Config, v: str) -> tuple[dict[str, str], set[str]] | None:
         stamp = _extracted_key(config, v)
         if stamp is None or _extract_key(config, v, snapshot, was_yaml) != stamp:
             return None
-        delta = _fact_delta(snapshot.decode(), (root / f"versions/{v}/symbol_addrs.txt").read_text())
+        delta = _fact_delta(
+            snapshot.decode(), (root / f"{configuration.root('versions')}/{v}/symbol_addrs.txt").read_text()
+        )
         names = (
-            {} if was_yaml is None else _yaml_delta(was_yaml.decode(), (root / f"versions/{v}/splat.yaml").read_text())
+            {}
+            if was_yaml is None
+            else _yaml_delta(was_yaml.decode(), (root / f"{configuration.root('versions')}/{v}/splat.yaml").read_text())
         )
         if delta is None or names is None:
             return None
@@ -1348,11 +1358,15 @@ def _extract_why(config: Config, v: str) -> str:
             "full: an input other than the facts and piece names moved (splat, extract recipe, ROM) "
             "or the snapshots disagree with the stamp"
         )
-    now = (root / f"versions/{v}/symbol_addrs.txt").read_text()
+    now = (root / f"{configuration.root('versions')}/{v}/symbol_addrs.txt").read_text()
     delta = _fact_delta(snapshot.decode(), now)
     if delta is None:
         return "full: " + _fact_why(snapshot.decode(), now)
-    if was_yaml is not None and _yaml_delta(was_yaml.decode(), (root / f"versions/{v}/splat.yaml").read_text()) is None:
+    if (
+        was_yaml is not None
+        and _yaml_delta(was_yaml.decode(), (root / f"{configuration.root('versions')}/{v}/splat.yaml").read_text())
+        is None
+    ):
         return "full: splat.yaml changed beyond piece names"
     return f"rename: {len(delta[0])} renames {len(delta[1])} drops"
 
@@ -1438,7 +1452,7 @@ def _prune_superseded(config: Config, v: str) -> bool:
     function reading the same tables. True when a file went."""
     root = config.project.root
     if (
-        not (root / f"versions/{v}/symbol_addrs.txt").is_file()
+        not (root / f"{configuration.root('versions')}/{v}/symbol_addrs.txt").is_file()
         or not (root / configuration.root("asm") / v / "nonmatchings").is_dir()
     ):
         return False
@@ -1673,8 +1687,12 @@ def _extract_key(config: Config, v: str, facts: bytes | None = None, yaml: bytes
         (
             _splat_version(config.host.tools["splat"], root),
             (sha1(recipe.encode()) if recipe is not None else sha1(text)) if text is not None else None,
-            sha1((root / f"versions/{v}/splat.yaml").read_bytes() if yaml is None else yaml),
-            sha1((root / f"versions/{v}/symbol_addrs.txt").read_bytes() if facts is None else facts),
+            sha1((root / f"{configuration.root('versions')}/{v}/splat.yaml").read_bytes() if yaml is None else yaml),
+            sha1(
+                (root / f"{configuration.root('versions')}/{v}/symbol_addrs.txt").read_bytes()
+                if facts is None
+                else facts
+            ),
             sha1(configuration.rom(config.project, v).read_bytes()),
         )
     )
@@ -1682,7 +1700,7 @@ def _extract_key(config: Config, v: str, facts: bytes | None = None, yaml: bytes
 
 def _extractable(config: Config) -> list[str]:
     root = config.project.root
-    return [v for v in config.project.versions if (root / f"versions/{v}/splat.yaml").is_file()]
+    return [v for v in config.project.versions if (root / f"{configuration.root('versions')}/{v}/splat.yaml").is_file()]
 
 
 def _state(config: Config) -> str:
@@ -1694,7 +1712,10 @@ def _state(config: Config) -> str:
     tool = digest(
         [p.read_bytes() for p in sorted(Path(__file__).parent.rglob("*")) if p.is_file() and p.suffix != ".pyc"]
     )  # the tool's content, not when it was touched
-    facts = [sha1((root / f"versions/{v}/symbol_addrs.txt").read_bytes()) for v in config.project.versions]
+    facts = [
+        sha1((root / f"{configuration.root('versions')}/{v}/symbol_addrs.txt").read_bytes())
+        for v in config.project.versions
+    ]
     stamps = [(_extract_key(config, v), _extracted_key(config, v)) for v in _extractable(config)]
     return digest((head, dirty, config.digest, tool, facts, stamps))
 

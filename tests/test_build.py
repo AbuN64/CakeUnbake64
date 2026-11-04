@@ -627,7 +627,7 @@ def test_text_sizes_give_each_object_its_code_up_to_the_next_owned_bytes(tmp_pat
 
 def test_the_makefile_cuts_a_zero_tail_of_text_and_spells_what_the_assembler_would_change(tmp_path):
     text = build.makefile(make_config(tmp_path)).decode()
-    assert "-include $(VERSIONS:%=versions/%/text_sizes.mk)" in text
+    assert "-include $(VERSIONS:%=$(FACTS)/%/text_sizes.mk)" in text
     assert text.count("$(Q)$(if $(TEXTSIZE),$(TRIM_TEXT) $@ $(TEXTSIZE))") == 1  # assembled objects
     assert "$(call shq,$(TEXTSIZE))" in text  # compiled ones: the object helper trims them when they compile
     assert "(ld|sd|ldl|ldr|sdl|sdr|lld|scd|ddiv|ddivu)" in text and "1000[0-9A-F]{4}" in text
@@ -1069,7 +1069,7 @@ def test_extract_rewrites_each_data_piece_as_its_rom_slice_keeping_labels(tmp_pa
         '.include "macro.inc"\n\ndlabel d_1\n/* 1010 80200410 10111213 */ .word 0x10111213\ndlabel d_2\n'
         "/* 1014 80200414 1415 */ .short 0x1415\n"
     )
-    assert fixture.program([adapters.make_tool("fill_data.py"), "asm", "roms", "us"], work).returncode == 0
+    assert fixture.program([adapters.make_tool("fill_data.py"), "asm", "roms", "versions", "us"], work).returncode == 0
     assert (work / "asm/us/data/main/d_1.s").read_text().splitlines() == [
         '.include "macro.inc"',
         "dlabel d_1",

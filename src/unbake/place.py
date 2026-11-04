@@ -83,11 +83,11 @@ class Placement:
 
     @property
     def file(self) -> str:
-        return f"versions/{self.version}/aliases.txt"
+        return f"{configuration.root('versions')}/{self.version}/aliases.txt"
 
     @property
     def junk_files(self) -> tuple[str, str]:
-        return f"versions/{self.version}/symbol_addrs.txt", self.file
+        return f"{configuration.root('versions')}/{self.version}/symbol_addrs.txt", self.file
 
 
 def jump_target(words: Sequence[int], code: Sequence[tuple[int, int, str]]) -> str | None:
@@ -136,7 +136,7 @@ def _elf(path: Path) -> tuple[bytes, int, set[int]] | None:
 
 def _pieces(root: Path, v: str) -> list[tuple[int, str, str]]:
     """(rom, splat type, name) of every piece of the generated versions/<v>/splat.yaml, sorted."""
-    path = root / f"versions/{v}/splat.yaml"
+    path = root / f"{configuration.root('versions')}/{v}/splat.yaml"
     if not path.is_file():
         return []
     return sorted((int(m[1], 16), m[2], m[3]) for m in _PIECE.finditer(path.read_text()))

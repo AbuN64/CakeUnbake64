@@ -30,6 +30,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from itertools import pairwise
 
+from unbake import config as configuration
 from unbake.cheaders import Field, Headers, Struct
 from unbake.typecensus import Norm, decimal_bounds, split_top, tkey, ws
 
@@ -344,7 +345,8 @@ def _definitions(
         return out
     tag = None if _ANON.match(base) else re.match(r"^(?:struct|union)\s+(\w+)$", base)
     for file in sorted(
-        {loc.rsplit(":", 1)[0] for loc in sites} | set(scope), key=lambda f: (not f.startswith("include/"), f)
+        {loc.rsplit(":", 1)[0] for loc in sites} | set(scope),
+        key=lambda f: (not f.startswith(configuration.header_prefixes()), f),
     ):
         b = _blanked(src, file)
         m = re.search(rf"\b(?:struct|union)\s+{tag[1]}\s*\{{", b) if tag else None
@@ -473,14 +475,16 @@ def _includes(
     record = _RECORD.match(canon)
     if not record or _ANON.match(record[1]):
         return ()
-    held = [f for f, _, _ in _definitions(canon, sites, name, src, scope) if f.startswith("include/")]
+    held = [
+        f for f, _, _ in _definitions(canon, sites, name, src, scope) if f.startswith(configuration.header_prefixes())
+    ]
     if not held:
         return ()
     units = list(closures)
     return tuple(
         (f, held[0])
         for f in sorted(set(edited))
-        if not f.startswith("include/") and any(f in c and held[0] not in c for c in units)
+        if not f.startswith(configuration.header_prefixes()) and any(f in c and held[0] not in c for c in units)
     )
 
 
@@ -504,7 +508,8 @@ def plan(
     canon = order[rank]
     why = "definition" if defkeys else f"candidate {rank + 1} of {len(order)}, most declared first"
     ranked = sorted(
-        sites.items(), key=lambda kv: (kv[1][0] not in ("fdef", "vdef"), not kv[0].startswith("include/"), kv[0])
+        sites.items(),
+        key=lambda kv: (kv[1][0] not in ("fdef", "vdef"), not kv[0].startswith(configuration.header_prefixes()), kv[0]),
     )
     ctext, cloc = "", ""
     for loc, (_, key, _) in ranked:
@@ -724,8 +729,8 @@ def render(path: str, plans: Iterable[Plan], src: Sources) -> str:
             f'\n#include "{spelled}"'
             for h in wanted
             for spelled in [
-                h.removeprefix("include/")
-                if h.startswith("include/")
+                configuration.strip_header_root(h)
+                if h.startswith(configuration.header_prefixes())
                 else posixpath.relpath(h, posixpath.dirname(path))
             ]
             if spelled not in have

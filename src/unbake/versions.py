@@ -75,7 +75,7 @@ def parse_symbol_addrs(data: bytes, file: str = "symbol_addrs.txt") -> tuple[Row
 
 
 def symbol_file(version: str) -> str:
-    return f"versions/{version}/symbol_addrs.txt"
+    return f"{configuration.root('versions')}/{version}/symbol_addrs.txt"
 
 
 def symbol_addrs(config: Config, version: str, reader: Callable[[str], bytes] | None = None) -> tuple[Row, ...]:
@@ -247,7 +247,7 @@ def read(
                 vid,
                 rom,
                 _rom_sha(rom),
-                f"versions/{vid}/splat.yaml",
+                f"{configuration.root('versions')}/{vid}/splat.yaml",
                 symbol_file(vid),
                 table,
                 segments(config, vid),

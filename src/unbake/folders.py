@@ -1118,7 +1118,12 @@ def _arranged(
         return any(s is not None for s in seen) and all(s is not False for s in seen)
 
     def header(
-        name: str, bases: tuple[Path, ...] = (root / "include", (root / merged_path).parent, (root / module).parent)
+        name: str,
+        bases: tuple[Path, ...] = (
+            *(root / h for h in configuration.header_roots()),
+            (root / merged_path).parent,
+            (root / module).parent,
+        ),
     ) -> str | None:
         for base in bases:
             if (base / name).is_file():

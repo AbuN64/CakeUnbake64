@@ -60,13 +60,13 @@ def inside_data(kind: str, vram: int) -> bool:
 
 # ---------------------------------------------------------------- the facts
 def path(version: str) -> str:
-    return f"versions/{version}/symbol_addrs.txt"
+    return f"{configuration.root('versions')}/{version}/symbol_addrs.txt"
 
 
 def aliases_path(version: str) -> str:
     """The facts splat never reads: a second name at an address symbol_addrs.txt already names, or a name a C file
     defines inside bytes splat sees as one piece. The tree, the report and the link read them like symbol_addrs."""
-    return f"versions/{version}/aliases.txt"
+    return f"{configuration.root('versions')}/{version}/aliases.txt"
 
 
 def earlier_path(version: str) -> str:
@@ -586,7 +586,7 @@ def names_command(params: Json) -> Json:
         # Reuse the symbol codec; Recipe's symbol move currently covers symbol_addrs only.
         renames.update({LITERALS + old: LITERALS + new for old, new in list(renames.items())})
         changed = {}
-        for alias_file in sorted((root / "versions").glob("*/aliases.txt")):
+        for alias_file in sorted((root / configuration.root("versions")).glob("*/aliases.txt")):
             before = alias_file.read_text()
             after = rename_lines(before, renames)
             if after != before:

@@ -226,7 +226,17 @@ def header_roots() -> tuple[str, ...]:
     return _ROOTS.get("header_roots") or tuple(load_resource("repo.toml")["layout"]["header_roots"])
 
 
-BUILD_ROOTS = ("asm", "build", "roms")  # the layout's `<kind>_root` keys of the build trees
+def header_prefixes() -> tuple[str, ...]:
+    """Each header root with its trailing slash, as `str.startswith` takes them: a repo path under one is a header."""
+    return tuple(f"{folder}/" for folder in header_roots())
+
+
+def strip_header_root(path: str) -> str:
+    """PATH as an include line spells it: relative to the header root that holds it (PATH under none is unchanged)."""
+    return next((path.removeprefix(prefix) for prefix in header_prefixes() if path.startswith(prefix)), path)
+
+
+BUILD_ROOTS = ("asm", "asm_include", "build", "roms", "versions", "assets")  # the layout's `<kind>_root` keys
 
 
 def root(kind: str) -> str:

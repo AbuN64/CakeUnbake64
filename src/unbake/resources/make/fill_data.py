@@ -1,12 +1,17 @@
 # A data piece is the ROM bytes from its address to the next row of splat.yaml: splat drops string padding, a partial
 # last word and whole tiny pieces, so each extracted data file is rewritten as its ROM slice, every label kept at its
 # offset (from the ROM column of the line after it).
-import os, re, sys
-asm, roms, v = sys.argv[1:4]  # the layout's asm and roms roots (Makefile ASM, ROMS)
+import os
+import re
+import sys
+
+asm, roms, facts, v = sys.argv[1:5]  # the layout's asm, roms and versions roots (Makefile ASM, ROMS, FACTS)
 rom = open("%s/baserom.%s.z64" % (roms, v), "rb").read()
 rows = []
-for line in open("versions/%s/splat.yaml" % v):
-    m = re.match(r"\s+- \[0x([0-9A-Fa-f]+)(?:, (\w+), (\S+))?\]", line) or re.match(r"\s+start: 0x([0-9A-Fa-f]+)()()", line)
+for line in open("%s/%s/splat.yaml" % (facts, v)):
+    m = re.match(r"\s+- \[0x([0-9A-Fa-f]+)(?:, (\w+), (\S+))?\]", line) or re.match(
+        r"\s+start: 0x([0-9A-Fa-f]+)()()", line
+    )
     if m:
         rows.append((int(m.group(1), 16), m.group(2), m.group(3)))
 for (start, kind, name), (end, _, _) in zip(rows, rows[1:]):
@@ -29,7 +34,10 @@ for (start, kind, name), (end, _, _) in zip(rows, rows[1:]):
     out, here = head, start
     for offset, label in sorted(labels, key=lambda row: row[0]) + [(end, None)]:
         offset = min(max(offset, start), end)
-        out += ["    .byte " + ", ".join("0x%02X" % b for b in rom[k : min(k + 16, offset)]) for k in range(here, offset, 16)]
+        out += [
+            "    .byte " + ", ".join("0x%02X" % b for b in rom[k : min(k + 16, offset)])
+            for k in range(here, offset, 16)
+        ]
         out += ["dlabel " + label] if label else []
         here = offset
     open(path, "w").write("\n".join(out) + "\n")

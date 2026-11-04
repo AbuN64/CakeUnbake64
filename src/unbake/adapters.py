@@ -393,7 +393,7 @@ def _asm_includes(config: Config, version: str) -> list[str]:
     version's extraction, its include folder and the project's, absolute because a script runs from any directory."""
     root = config.project.root
     asm, header = root / configuration.root("asm") / version, root / configuration.header_roots()[0]
-    return [f"-I{asm}", f"-I{asm / 'include'}", f"-I{header}"]
+    return [f"-I{asm}", f"-I{asm / configuration.root('asm_include')}", f"-I{header}"]
 
 
 def script(config: Config, recipe: Recipe, version: str) -> str:

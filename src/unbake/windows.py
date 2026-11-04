@@ -24,7 +24,9 @@ def is_window(name: str) -> bool:
 
 
 def symbols_path(version: str) -> str:
-    return f"versions/{version}/earlier_build_symbols.txt"
+    from unbake import config  # config imports this module
+
+    return f"{config.root('versions')}/{version}/earlier_build_symbols.txt"
 
 
 def vram_of(window: Mapping[str, Any]) -> int:

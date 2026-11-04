@@ -134,7 +134,10 @@ def _compile_inputs(
 def _include(snapshot: Snapshot, version: str) -> tuple[Path, ...]:
     project = snapshot.config.project
     macros = config.load_resource("repo.toml")["splat"]["options"]["generated_asm_macros_directory"]
-    return (project.root / "include", project.root / macros.format(version=version, name=project.name))
+    return (
+        *(project.root / h for h in config.header_roots()),
+        project.root / macros.format(version=version, name=project.name),
+    )
 
 
 def objects(

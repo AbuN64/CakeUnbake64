@@ -702,7 +702,7 @@ class _Proof:
                 elif sources.setdefault(y, x) != x:
                     shared.setdefault(y, {sources[y]}).add(x)
                 self.places.setdefault(x, set()).add(path)
-                if path.startswith("versions/"):
+                if path.startswith(f"{configuration.root('versions')}/"):
                     seen.setdefault(x, set()).add(path.split("/")[1])
                 else:
                     files.setdefault(x, set()).add(path)
@@ -755,7 +755,7 @@ class _Proof:
             present = [name for name, seen in zip(olds, versions, strict=True) if v in seen]
             bound: dict[str, set[int]] = {name: set() for name in present}
             for path, (before, _after) in self.texts.items():
-                if not path.startswith(f"versions/{v}/"):
+                if not path.startswith(f"{configuration.root('versions')}/{v}/"):
                     continue
                 for name, address in _BINDING.findall(before):
                     if name in bound:
@@ -898,10 +898,12 @@ class _Proof:
         a C file is read once per version and per NON_MATCHING side with the conditions each can settle (what it
         cannot settle stays in). None when there is no evidence: another kind of file, no versions/ directory, or a
         name no version reads."""
-        if path.startswith("versions/"):
+        if path.startswith(f"{configuration.root('versions')}/"):
             return {path.split("/")[1]}
         if self.universe is None:
-            tree = self.repo.run("ls-tree", "-d", "--name-only", self.base, "versions/", own=False)
+            tree = self.repo.run(
+                "ls-tree", "-d", "--name-only", self.base, f"{configuration.root('versions')}/", own=False
+            )
             self.universe = [PurePosixPath(line).name for line in tree.decode().splitlines()]
         if not _is_c(path) or not self.universe:
             return None

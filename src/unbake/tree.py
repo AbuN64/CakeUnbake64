@@ -540,9 +540,9 @@ class _Headers:
                     for p in (
                         f"{here}/{name}",
                         *(f"{d}/{name}" for d in extra),
-                        f"include/{name}",
+                        *(f"{h}/{name}" for h in configuration.header_roots()),
                         f"{directory}/{name}",
-                        f"{configuration.root('asm')}/{version}/include/{name}",
+                        f"{configuration.root('asm')}/{version}/{configuration.root('asm_include')}/{name}",
                     )
                     if self.read(p) is not None
                 ),

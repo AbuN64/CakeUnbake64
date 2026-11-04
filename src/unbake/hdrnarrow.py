@@ -275,7 +275,7 @@ def _inlined(
     nothing). Any other include stays an `__INC__` item, which `changed_defs` refuses."""
     if text is None:
         return None
-    dirs = [d[2:] for d in flags if d.startswith("-I") and len(d) > 2] or ["include"]
+    dirs = [d[2:] for d in flags if d.startswith("-I") and len(d) > 2] or list(configuration.header_roots())
 
     def locate(name: str) -> tuple[str, str] | None:
         for d in dirs:
@@ -605,7 +605,7 @@ def narrow_command(params: dict[str, Any]) -> dict[str, Any]:
     versions = list(params.get("version") or ()) or sorted(
         p.name
         for p in (root / configuration.root("build")).iterdir()
-        if p.is_dir() and (root / "versions" / p.name).is_dir()
+        if p.is_dir() and (root / configuration.root("versions") / p.name).is_dir()
     )
     out: dict[str, Any] = {"against": against, "headers": headers, "versions": {}, "skip_headers": [], "applied": False}
     if not headers:
@@ -675,7 +675,7 @@ def resign(root: Path, headers: Sequence[str], before: dict[str, list[Any]]) -> 
     versions = sorted(
         p.name
         for p in (root / configuration.root("build")).iterdir()
-        if p.is_dir() and (root / "versions" / p.name).is_dir()
+        if p.is_dir() and (root / configuration.root("versions") / p.name).is_dir()
     )
     digest = _digester(root)
 

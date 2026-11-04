@@ -351,6 +351,18 @@
       "minLength": 1,
       "pattern": "^[^/.][^/]*(/[^/.][^/]*)*$"
      }
+    },
+    "versions_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
+    },
+    "assets_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
+    },
+    "asm_include_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
     }
    },
    "additionalProperties": false,
