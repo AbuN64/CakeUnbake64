@@ -1,0 +1,11 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "unbake:result.region-census",
+ "type": "object",
+ "properties": {
+  "versions": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "object"}}},
+  "interleaved": {"type": "integer"}
+ },
+ "required": ["versions", "interleaved"],
+ "additionalProperties": false
+}

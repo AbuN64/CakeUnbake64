@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from unbake import config as configuration
 from unbake.contracts import Config, sha256
 
 ADDRESS = range(0x8000, 0x8080)  # the high half of an address in N64 RAM
@@ -308,7 +309,7 @@ def corpus(config: Config, versions: Sequence[str] | None = None, roms: Mapping[
         if roms is not None:
             rom = roms.get(v)
         else:
-            path = Path(config.project.root) / "roms" / f"baserom.{v}.z64"
+            path = Path(config.project.root) / configuration.root("roms") / f"baserom.{v}.z64"
             rom = path.read_bytes() if path.is_file() else None
         if rom is None:
             continue

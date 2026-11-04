@@ -308,11 +308,11 @@ def get(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, *, lin
             )
         root = config.project.root.resolve()
         key, reads, overlaid = _key(snapshot, unit, version, recipe)
-        overlay = root / "build" / "views" / key[:16] if overlaid else None
+        overlay = root / configuration.root("build") / "views" / key[:16] if overlaid else None
 
         def produce() -> tuple[str, list[tuple[str, str]]]:
             """Made in a directory of its own, removed after preprocessing: the content cache keeps text and deps."""
-            home = root / "build" / "views" / uuid.uuid4().hex[:16]
+            home = root / configuration.root("build") / "views" / uuid.uuid4().hex[:16]
             try:
                 return made(home)
             finally:
@@ -339,11 +339,12 @@ def get(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe, *, lin
                     for path, _ in reads:
                         if path not in selected and (root / path).is_file():
                             _link(home / path, root / path)
-            include = [root / "include", root / "src"]
+            tops = (configuration.header_roots()[0], configuration.source_roots()[0])
+            include = [root / top for top in tops]
             if overlay is not None:
-                include = [home / "include", include[0], home / "src", include[1]]
+                include = [p for top, at in zip(tops, include, strict=True) for p in (home / top, at)]
             if snapshot.tree:
-                include = [home / "include", home / "src"]
+                include = [home / top for top in tops]
             source = (home if overlay is not None else root) / unit.path
             work = home / ".work"
             work.mkdir(parents=True, exist_ok=True)

@@ -26,6 +26,7 @@ from unbake import (
     snpage,
     snsym,
 )
+from unbake import config as configuration
 from unbake.contracts import Config, Json, sha256
 
 READERS = frozenset(
@@ -91,7 +92,7 @@ def _current(config: Config, version: str) -> list[tuple[int, int]]:
 
 def _baserom(config: Config, version: str) -> bytes:
     """One version's ROM bytes."""
-    path = Path(config.project.root) / "roms" / f"baserom.{version}.z64"
+    path = Path(config.project.root) / configuration.root("roms") / f"baserom.{version}.z64"
     rom: bytes = _shared(("rom", version), path.read_bytes)
     return rom
 

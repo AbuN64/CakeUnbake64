@@ -57,7 +57,7 @@ CFLAGS = $(strip $(filter-out $(OMIT.$(ROW)),$(CFLAGS_$(TC))) $(CFLAGS.$(ROW)))
 HILO = $(HILO.$(ROW))
 UNRELOC = $(UNRELOC.$(ROW))
 DEFINES = -D$(VMACRO_$(call ver,$*)) $(if $(filter nmraw/%,$*),-D$(NM_DEFINE))
-INCLUDES = -Iinclude -I$(dir $<)
+INCLUDES = -I$(HEADER_ROOT) -I$(dir $<)
 ASINC = -Iasm/$(call ver,$*)
 # Every version macro for the assembler, 1 for the version built and 0 for the others: library assembly keeps the
 # lines its versions disagree on in `.if VERSION_A || VERSION_B` blocks
@@ -76,9 +76,9 @@ TRIM_TEXT = $(CCPY) --trim
 all: check
 ifeq ($(CHECK),tree)
 check:
-	$(Q)for f in Makefile $(NAME).ld include/include_asm.h $(VERSIONS:%=versions/%/splat.yaml); do test -s $$f || { echo "$$f is missing" >&2; exit 1; }; done
+	$(Q)for f in Makefile $(NAME).ld $(HEADER_ROOT)/include_asm.h $(VERSIONS:%=versions/%/splat.yaml); do test -s $$f || { echo "$$f is missing" >&2; exit 1; }; done
 else ifeq ($(CHECK),rom)
-check: $(VERSIONS:%=build/%/$(NAME).z64)
+check: $(VERSIONS:%=$(BUILD)/%/$(NAME).z64)
 else
 $(error CHECK must be rom or tree)
 endif
@@ -104,40 +104,40 @@ CODE_SED := -e 's@^(\s*/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/\s*)[^%]*/\* h
 # `make extract-force-<v>` (or removing asm/<v>/.extracted) splits regardless. One recipe, no sub-make (parallel sub-makes raced
 # on remaking the included files). Bump rev1 when the recipe changes.
 export EXTRACT_RECIPE := rev1 $(DATA_SED) $(CODE_SED)
-EXTRACT_KEY = { cat roms/baserom.$*.z64 versions/$*/splat.yaml versions/$*/symbol_addrs.txt $(wildcard versions/$*/earlier_build_symbols.txt); $(SPLAT) --version 2>&1; printf %s "$$EXTRACT_RECIPE"; } | sha1sum | cut -d" " -f1
+EXTRACT_KEY = { cat $(ROMS)/baserom.$*.z64 versions/$*/splat.yaml versions/$*/symbol_addrs.txt $(wildcard versions/$*/earlier_build_symbols.txt); $(SPLAT) --version 2>&1; printf %s "$$EXTRACT_RECIPE"; } | sha1sum | cut -d" " -f1
 # asm/<v>/.extracted has only the ROM as prerequisite: a rebase that changed symbol_addrs.txt or splat.yaml left stale asm. A version whose
 # two files differ from build/.extract-src-<v> (or have no record) gets the phony extract-stale: the full key is checked once, then recorded.
 SRC_KEY = cat versions/$*/splat.yaml versions/$*/symbol_addrs.txt $(wildcard versions/$*/earlier_build_symbols.txt) 2>/dev/null | sha1sum | cut -d" " -f1
 .PHONY: extract-stale
-$(foreach v,$(VERSIONS),$(if $(wildcard build/.extract-key-$(v)),$(if $(filter $(shell cat versions/$(v)/splat.yaml versions/$(v)/symbol_addrs.txt $(wildcard versions/$(v)/earlier_build_symbols.txt) 2>/dev/null | sha1sum | cut -d" " -f1),$(shell cat build/.extract-src-$(v) 2>/dev/null)),,$(eval asm/$(v)/.extracted: extract-stale))))
+$(foreach v,$(VERSIONS),$(if $(wildcard $(BUILD)/.extract-key-$(v)),$(if $(filter $(shell cat versions/$(v)/splat.yaml versions/$(v)/symbol_addrs.txt $(wildcard versions/$(v)/earlier_build_symbols.txt) 2>/dev/null | sha1sum | cut -d" " -f1),$(shell cat $(BUILD)/.extract-src-$(v) 2>/dev/null)),,$(eval $(ASM)/$(v)/.extracted: extract-stale))))
 # asm/<v>/.extracted holds the hash of the facts it was made from; an object of other facts is refused (an empty mark is not checked).
 $(foreach v,$(VERSIONS),$(eval FACTS_NOW_$(v) := $(shell cat versions/$(v)/symbol_addrs.txt versions/$(v)/splat.yaml 2>/dev/null | sha1sum | cut -d' ' -f1)))
 extract: $(VERSIONS:%=extract-%)
 extract-force-%:
-	$(Q)rm -f build/.extract-key-$* && $(MAKE) --no-print-directory extract-$*
+	$(Q)rm -f $(BUILD)/.extract-key-$* && $(MAKE) --no-print-directory extract-$*
 # Records the inputs asm/<v>/ holds the extraction of (the tool that extracts runs it too).
 extract-stamp-%:
-	$(Q)mkdir -p build && { $(EXTRACT_KEY); } > build/.extract-key-$* && { $(SRC_KEY); } > build/.extract-src-$*
+	$(Q)mkdir -p $(BUILD) && { $(EXTRACT_KEY); } > $(BUILD)/.extract-key-$* && { $(SRC_KEY); } > $(BUILD)/.extract-src-$*
 extract-%:
-	$(Q)mkdir -p build; flock build/.extract-lock-$* $(MAKE) --no-print-directory extract-do-$*
+	$(Q)mkdir -p $(BUILD); flock $(BUILD)/.extract-lock-$* $(MAKE) --no-print-directory extract-do-$*
 # keep_dates.py gives a file splat wrote again with the same bytes its old date back; fill_data.py rewrites each data
 # file as its ROM slice (splat drops string padding, a partial last word and whole tiny pieces).
 extract-do-%:
-	$(Q)mkdir -p build; if test -f asm/$*/.extracted && test "$$($(EXTRACT_KEY))" = "$$(cat build/.extract-key-$* 2>/dev/null)"; then rm -f build/.extract-run-$*; echo "extract-$*: inputs unchanged, not split again (make extract-force-$* splits)"; { $(SRC_KEY); } > build/.extract-src-$*; else touch build/.extract-run-$*; fi
-	$(Q)test -e build/.extract-run-$* || exit 0; python3 -I $(MKTOOLS)/keep_dates.py save $*
-	$(Q)test -e build/.extract-run-$* || exit 0; $(SPLAT) split versions/$*/splat.yaml
-	$(Q)test -e build/.extract-run-$* || exit 0; find asm/$* \( -name '*.data.s' -o -name '*.rodata.s' \) | while read f; do \
+	$(Q)mkdir -p $(BUILD); if test -f $(ASM)/$*/.extracted && test "$$($(EXTRACT_KEY))" = "$$(cat $(BUILD)/.extract-key-$* 2>/dev/null)"; then rm -f $(BUILD)/.extract-run-$*; echo "extract-$*: inputs unchanged, not split again (make extract-force-$* splits)"; { $(SRC_KEY); } > $(BUILD)/.extract-src-$*; else touch $(BUILD)/.extract-run-$*; fi
+	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; python3 -I $(MKTOOLS)/keep_dates.py $(ASM) $(BUILD) save $*
+	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; $(SPLAT) split versions/$*/splat.yaml
+	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; find $(ASM)/$* \( -name '*.data.s' -o -name '*.rodata.s' \) | while read f; do \
 		case $$(grep -m1 -oE '^ */\* [0-9A-F]+ [0-9A-F]{8}' "$$f" | tail -c 2) in \
 		0*) c='';; 8*) c='s/^\.align [4-9]/.align 3/';; [4C]*) c='s/^\.align [3-9]/.align 2/';; \
 		[26AE]*) c='s/^\.align [2-9]/.align 1/';; *) c='s/^\.align [1-9]/.align 0/';; esac; \
 		sed -E $(DATA_SED) -e "$$c" "$$f" > "$${f%.*.s}.s" && rm "$$f"; done
-	$(Q)test -e build/.extract-run-$* || exit 0; python3 -I $(MKTOOLS)/fill_data.py $*
-	$(Q)test -e build/.extract-run-$* || exit 0; find asm/$*/nonmatchings -name '*.s' -exec sed -i -E $(CODE_SED) {} +
-	$(Q)test -e build/.extract-run-$* || exit 0; printf '%s\n' $(FACTS_NOW_$*) > asm/$*/.extracted
-	$(Q)test -e build/.extract-run-$* || exit 0; python3 -I $(MKTOOLS)/keep_dates.py restore $*
-	$(Q)test -e build/.extract-run-$* || exit 0; { $(EXTRACT_KEY); } > build/.extract-key-$* && { $(SRC_KEY); } > build/.extract-src-$* && rm -f build/.extract-run-$*
+	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; python3 -I $(MKTOOLS)/fill_data.py $(ASM) $(ROMS) $*
+	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; find $(ASM)/$*/nonmatchings -name '*.s' -exec sed -i -E $(CODE_SED) {} +
+	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; printf '%s\n' $(FACTS_NOW_$*) > $(ASM)/$*/.extracted
+	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; python3 -I $(MKTOOLS)/keep_dates.py $(ASM) $(BUILD) restore $*
+	$(Q)test -e $(BUILD)/.extract-run-$* || exit 0; { $(EXTRACT_KEY); } > $(BUILD)/.extract-key-$* && { $(SRC_KEY); } > $(BUILD)/.extract-src-$* && rm -f $(BUILD)/.extract-run-$*
 # An object assembles extracted files its source only names through a macro: every object follows the extraction.
-asm/%/.extracted: | roms/baserom.%.z64
+$(ASM)/%/.extracted: | $(ROMS)/baserom.%.z64
 	+$(Q)$(MAKE) --no-print-directory extract-$*
 
 # ---------------------------------------------------------------- what make reads before any date
@@ -147,22 +147,22 @@ asm/%/.extracted: | roms/baserom.%.z64
 # changed while its date did not (a tree copied, rebased or fast-forwarded) is dated long ago or removed. Only the
 # top-level make sweeps: a recursive one (extract-<v> from a recipe) would drop an object its parent is about to link.
 ifeq ($(CHECK),rom)
-$(shell mkdir -p build)
-$(shell python3 -I $(MKTOOLS)/asm_deps.py build/asm.deps $(VERSIONS))
--include build/asm.deps
-$(if $(filter 0,$(MAKELEVEL)),$(shell python3 -I $(MKTOOLS)/stamp_sweep.py sweep $(VERSIONS) >&2))
+$(shell mkdir -p $(BUILD))
+$(shell python3 -I $(MKTOOLS)/asm_deps.py $(ASM) $(BUILD) $(SOURCE_LIST) $(BUILD)/asm.deps $(VERSIONS))
+-include $(BUILD)/asm.deps
+$(if $(filter 0,$(MAKELEVEL)),$(shell python3 -I $(MKTOOLS)/stamp_sweep.py $(BUILD) sweep $(VERSIONS) >&2))
 endif
 # The link script names every object, so no rule here lists a file: build/<version>/objs.mk is its list, made again
 # (and make restarted) only when the script changes.
-build/%/objs.mk: $(NAME).ld
+$(BUILD)/%/objs.mk: $(NAME).ld
 	$(Q)mkdir -p $(@D)
-	$(Q){ printf 'OBJS_$* :='; $(CPP) -P -undef -D$(VMACRO_$*) $< | grep -oE '[[:alnum:]_./+-]+[.]o' | sort -u | sed 's@^@ build/$*/@' | tr -d '\n'; echo; } > $@.$$$$ && mv -f $@.$$$$ $@
+	$(Q){ printf 'OBJS_$* :='; $(CPP) -P -undef -D$(VMACRO_$*) $< | grep -oE '[[:alnum:]_./+-]+[.]o' | sort -u | sed 's@^@ $(BUILD)/$*/@' | tr -d '\n'; echo; } > $@.$$$$ && mv -f $@.$$$$ $@
 ifeq ($(CHECK),rom)
--include $(VERSIONS:%=build/%/objs.mk)
+-include $(VERSIONS:%=$(BUILD)/%/objs.mk)
 endif
 # Reading the header list of every object costs seconds of one core in each make; a make that names objects needs only
 # their own lists, whatever else the tree holds.
-GOAL_OBJS := $(filter build/%.o,$(MAKECMDGOALS))
+GOAL_OBJS := $(filter $(BUILD)/%.o,$(MAKECMDGOALS))
 -include $(if $(GOAL_OBJS),$(GOAL_OBJS:.o=.d),$(foreach v,$(VERSIONS),$(OBJS_$(v):.o=.d)))
 
 # ---------------------------------------------------------------- objects
@@ -174,10 +174,10 @@ GOAL_OBJS := $(filter build/%.o,$(MAKECMDGOALS))
 # differ, make sees one more prerequisite that is out of date. hdrkey (the compile key of a unit: the .i without the
 # declarations it never names) and stamprec (the input record each made output appends to build/.inputs.log) are
 # small C tools; without a C compiler the .i is compared byte for byte and the python record runs instead.
-HDRKEY := build/hdrkey
-STAMPREC := build/stamprec
-build/hdrkey build/stamprec: build/%: $(MKTOOLS)/%.c
-	$(Q)mkdir -p build
+HDRKEY := $(BUILD)/hdrkey
+STAMPREC := $(BUILD)/stamprec
+$(BUILD)/hdrkey $(BUILD)/stamprec: $(BUILD)/%: $(MKTOOLS)/%.c
+	$(Q)mkdir -p $(BUILD)
 	$(Q)$(HOSTCC) -O2 -DTOOLS_RELEASE='"$(TOOLS_RELEASE)"' -o $@ $< 2>/dev/null || rm -f $@
 # A stamprec built by another unbake than the one that wrote this Makefile (a lane's older copy left it in build/) can
 # lack a step the recipes spell (`no step @probe`): it is refused here, before any recipe runs it, naming both versions.
@@ -185,10 +185,10 @@ build/hdrkey build/stamprec: build/%: $(MKTOOLS)/%.c
 STAMPREC_BUILT := $(shell [ -x $(STAMPREC) ] && { $(STAMPREC) version 2>/dev/null || echo 'older than version reporting'; })
 ifneq ($(STAMPREC_BUILT),)
 ifneq ($(STAMPREC_BUILT),$(TOOLS_RELEASE))
-$(error $(STAMPREC) was built by unbake $(STAMPREC_BUILT), but this tree's Makefile is unbake $(TOOLS_RELEASE): run the published unbake (`unbake sync --makefile`), then remove $(STAMPREC) and build/hdrkey so they are built again)
+$(error $(STAMPREC) was built by unbake $(STAMPREC_BUILT), but this tree's Makefile is unbake $(TOOLS_RELEASE): run the published unbake (`unbake sync --makefile`), then remove $(STAMPREC) and $(BUILD)/hdrkey so they are built again)
 endif
 endif
-RECORD = { [ -x $(STAMPREC) ] && $(STAMPREC) record $(1); } || python3 -I $(MKTOOLS)/stamp_sweep.py record $(1)
+RECORD = { [ -x $(STAMPREC) ] && $(STAMPREC) record $(1); } || python3 -I $(MKTOOLS)/stamp_sweep.py $(BUILD) record $(1)
 shq = '$(subst ','\'',$(1))'
 CC_FLAGS = $(TC) $(CC_$(TC)) $(CFLAGS) $(ASFLAGS) $(DEFINES) $(FSPLIT)
 PP_FLAGS = $(TC) $(CPPFLAGS) $(DEFINES)
@@ -197,34 +197,34 @@ flags_changed = $(if $(wildcard $@.flags),$(if $(call same_flags,$(CC_FLAGS),$(f
 pp_flags_changed = $(if $(wildcard $@.flags),$(if $(call same_flags,$(PP_FLAGS),$(file <$@.flags)),,flags-changed))
 .PHONY: flags-changed
 flags-changed:
-build/%.i.ok: $$(call src,$$*) $$(pp_flags_changed) | $(STAMPS) $(HDRKEY) $(STAMPREC)
+$(BUILD)/%.i.ok: $$(call src,$$*) $$(pp_flags_changed) | $(STAMPS) $(HDRKEY) $(STAMPREC)
 	$(PREPROCESS_$(TC))
 # The extracted files an object assembles are an input by their bytes (`.asm`, their sum before the object is made; a
 # make that extracts as it builds reads dates it cached): a different sum removes the object. The object rule's one
 # command (stamprec `object`, else cc_cache.py's): the extracted facts it was made from, whether it stands, the compile
 # (COMPILE_<toolchain>) when it does not, the flags/size/sum files and the input record.
-OBJECT_ARGS = $@ $(call ver,$*) $(FACTS_NOW_$(call ver,$*)) $(call shq,$(filter-out %.i.ok,$?)$(flags_changed)) $(call shq,$(TEXTSIZE)) \
-	$(call shq,$(CC_FLAGS)) $(STAMPREC) $(filter-out %/.extracted,$(filter asm/%,$^)) -- $(COMPILE_$(TC))
-build/%.o: build/%.i.ok asm/$$(call ver,$$*)/.extracted $$(text_size_changed) $$(flags_changed) | $(STAMPS) $(STAMPREC)
+OBJECT_ARGS = $@ $(ASM)/$(call ver,$*) $(FACTS_NOW_$(call ver,$*)) $(call shq,$(filter-out %.i.ok,$?)$(flags_changed)) $(call shq,$(TEXTSIZE)) \
+	$(call shq,$(CC_FLAGS)) $(STAMPREC) $(filter-out %/.extracted,$(filter $(ASM)/%,$^)) -- $(COMPILE_$(TC))
+$(BUILD)/%.o: $(BUILD)/%.i.ok $(ASM)/$$(call ver,$$*)/.extracted $$(text_size_changed) $$(flags_changed) | $(STAMPS) $(STAMPREC)
 	$(Q)if [ -x $(STAMPREC) ]; then exec $(STAMPREC) object $(OBJECT_ARGS); fi; exec $(CCPY) --object $(OBJECT_ARGS)
 # A hand-written .s source is preprocessed first (its #include and #if VERSION_ lines); its .d names the headers.
-build/%.s.o: $$(call src,$$*).s $$(text_size_changed) | $(STAMPS)
+$(BUILD)/%.s.o: $$(call src,$$*).s $$(text_size_changed) | $(STAMPS)
 	$(Q)mkdir -p $(@D)
-	$(Q)$(CPP) -P -undef -x assembler-with-cpp $(AS_CPPFLAGS) -D$(VMACRO_$(call ver,$*)) -Iinclude -I$(dir $<) \
+	$(Q)$(CPP) -P -undef -x assembler-with-cpp $(AS_CPPFLAGS) -D$(VMACRO_$(call ver,$*)) -I$(HEADER_ROOT) -I$(dir $<) \
 	-MMD -MP -MT $@ -MF $(@:.o=.d) $< -o $(@:.o=.pp.s)
-	$(Q)$(AS) $(ASFLAGS) $(ASDEFS) $(ASINC) -Iinclude $(@:.o=.pp.s) -o $@
+	$(Q)$(AS) $(ASFLAGS) $(ASDEFS) $(ASINC) -I$(HEADER_ROOT) $(@:.o=.pp.s) -o $@
 	$(Q)$(if $(TEXTSIZE),$(TRIM_TEXT) $@ $(TEXTSIZE))
 	$(Q)printf '%s\n' '$(TEXTSIZE)' > $@.textsize
-build/%.bin.o: asm/%.bin
+$(BUILD)/%.bin.o: $(ASM)/%.bin
 	$(Q)mkdir -p $(@D)
 	$(Q)$(OBJCOPY) -I binary -O elf32-tradbigmips -B mips $< $@
 # splat writes a binary piece while it extracts the version.
-asm/%.bin: | asm/$$(call ver,$$*)/.extracted
+$(ASM)/%.bin: | $(ASM)/$$(call ver,$$*)/.extracted
 	$(Q)test -f $@ || { echo "$@ is missing: run make extract-$(call ver,$*)" >&2; exit 1; }
 
 # ---------------------------------------------------------------- the ROM
 # The whole ROM links once per version, from build/<version>/, so object paths in the script stay short.
-build/%/link.ld: $(NAME).ld
+$(BUILD)/%/link.ld: $(NAME).ld
 	$(Q)mkdir -p $(@D)
 	$(Q)$(CPP) -P -undef -D$(VMACRO_$*) $< > $@
 # Every fact of symbol_addrs.txt and aliases.txt and every name splat left undefined, PROVIDEd: what no object defines
@@ -232,22 +232,22 @@ build/%/link.ld: $(NAME).ld
 # spells, at the address the name carries: a .L label the assembler keeps out of the object, or a label inside bytes
 # a C file compiles. Every object of the version is a prerequisite (the .i/.s the grep reads are complete once it is
 # built) but never an input of the sed.
-build/%/undefined_syms.ld: versions/%/symbol_addrs.txt build/%/undefined_syms_auto.txt build/%/undefined_funcs_auto.txt asm/%/.extracted $$(wildcard versions/$$*/aliases.txt versions/$$*/earlier_build_symbols.txt)
+$(BUILD)/%/undefined_syms.ld: versions/%/symbol_addrs.txt $(BUILD)/%/undefined_syms_auto.txt $(BUILD)/%/undefined_funcs_auto.txt $(ASM)/%/.extracted $$(wildcard versions/$$*/aliases.txt versions/$$*/earlier_build_symbols.txt)
 	$(Q)sed -nE 's/^([A-Za-z_.][A-Za-z0-9_.$$]*)[[:space:]]*=[[:space:]]*(0x[0-9A-Fa-f]+);.*/PROVIDE(\1 = \2);/p' $(filter-out %.o,$^) > $@
-	$(Q)grep -rhoE --include='*.s' --include='*.i' '$(LABEL)[0-9A-F]{8}\b' asm/$* build/$* | sort -u | sed -E 's/^($(LABEL)(.*))$$/PROVIDE(\1 = 0x\2);/' >> $@
+	$(Q)grep -rhoE --include='*.s' --include='*.i' '$(LABEL)[0-9A-F]{8}\b' $(ASM)/$* $(BUILD)/$* | sort -u | sed -E 's/^($(LABEL)(.*))$$/PROVIDE(\1 = 0x\2);/' >> $@
 # The objects are prerequisites of each version's list by a plain rule, not by the pattern rule's second expansion:
 # GNU make 4.4.1 segfaults expanding $(OBJS_$*) there once build/<v>/undefined_syms_auto.txt exists.
-$(foreach v,$(VERSIONS),$(eval build/$(v)/undefined_syms.ld: $(OBJS_$(v))))
+$(foreach v,$(VERSIONS),$(eval $(BUILD)/$(v)/undefined_syms.ld: $(OBJS_$(v))))
 # splat writes these while it extracts the version.
-build/%/undefined_syms_auto.txt build/%/undefined_funcs_auto.txt: | asm/%/.extracted
+$(BUILD)/%/undefined_syms_auto.txt $(BUILD)/%/undefined_funcs_auto.txt: | $(ASM)/%/.extracted
 	$(Q)test -f $@ || { echo "$@ is missing: run make extract-$*" >&2; exit 1; }
-build/%/$(NAME).elf: $$(OBJS_$$*) build/%/link.ld build/%/undefined_syms.ld
-	$(Q)cd build/$* && $(LD) -T link.ld -o $(NAME).elf
-build/%/$(NAME).bin: build/%/$(NAME).elf
+$(BUILD)/%/$(NAME).elf: $$(OBJS_$$*) $(BUILD)/%/link.ld $(BUILD)/%/undefined_syms.ld
+	$(Q)cd $(BUILD)/$* && $(LD) -T link.ld -o $(NAME).elf
+$(BUILD)/%/$(NAME).bin: $(BUILD)/%/$(NAME).elf
 	$(Q)$(OBJCOPY) $(ROM_SECTIONS_$*) -O binary --gap-fill 0 $< $@
-build/%/$(NAME).z64: build/%/$(NAME).bin roms/baserom.%.z64
-	$(Q){ head -c $(ROM0_$*) roms/baserom.$*.z64; cat $<; } > $@
-	$(Q)truncate -s $$(wc -c < roms/baserom.$*.z64) $@
+$(BUILD)/%/$(NAME).z64: $(BUILD)/%/$(NAME).bin $(ROMS)/baserom.%.z64
+	$(Q){ head -c $(ROM0_$*) $(ROMS)/baserom.$*.z64; cat $<; } > $@
+	$(Q)truncate -s $$(wc -c < $(ROMS)/baserom.$*.z64) $@
 	$(Q)test "$$(sha1sum < $@ | cut -d' ' -f1)" = $(SHA1_$*) || { echo "$@: SHA-1 is not $(SHA1_$*)" >&2; exit 1; }
 
 # ---------------------------------------------------------------- NON_MATCHING
@@ -263,47 +263,47 @@ ifeq ($(NON_MATCHING),1)
 .DEFAULT_GOAL := nm
 endif
 .PHONY: nm
-nm: $(VERSIONS:%=build/nm/%/$(NAME).z64)
-$(foreach v,$(VERSIONS),$(eval OBJS_nm_$(v) := $(patsubst build/$(v)/%,build/nm/$(v)/%,$(OBJS_$(v)))))
--include $(foreach v,$(VERSIONS),$(patsubst build/$(v)/%,build/nmraw/$(v)/%,$(if $(GOAL_OBJS),$(filter build/$(v)/%,$(GOAL_OBJS:.o=.d)),$(OBJS_$(v):.o=.d))))
+nm: $(VERSIONS:%=$(BUILD)/nm/%/$(NAME).z64)
+$(foreach v,$(VERSIONS),$(eval OBJS_nm_$(v) := $(patsubst $(BUILD)/$(v)/%,$(BUILD)/nm/$(v)/%,$(OBJS_$(v)))))
+-include $(foreach v,$(VERSIONS),$(patsubst $(BUILD)/$(v)/%,$(BUILD)/nmraw/$(v)/%,$(if $(GOAL_OBJS),$(filter $(BUILD)/$(v)/%,$(GOAL_OBJS:.o=.d)),$(OBJS_$(v):.o=.d))))
 # A raw object follows the extracted files its matching twin names, and takes the same text sizes.
 ifeq ($(CHECK),rom)
-$(shell sed -E 's@^build/@build/nmraw/@' build/asm.deps > build/asm-nmraw.deps.$$$$ && mv build/asm-nmraw.deps.$$$$ build/asm-nmraw.deps)
--include build/asm-nmraw.deps
-$(shell cat $(VERSIONS:%=versions/%/text_sizes.mk) | sed -nE 's@^build/@build/nmraw/@p' > build/text_sizes_nmraw.mk.$$$$ && mv build/text_sizes_nmraw.mk.$$$$ build/text_sizes_nmraw.mk)
--include build/text_sizes_nmraw.mk
+$(shell sed -E 's@^$(BUILD)/@$(BUILD)/nmraw/@' $(BUILD)/asm.deps > $(BUILD)/asm-nmraw.deps.$$$$ && mv $(BUILD)/asm-nmraw.deps.$$$$ $(BUILD)/asm-nmraw.deps)
+-include $(BUILD)/asm-nmraw.deps
+$(shell cat $(VERSIONS:%=versions/%/text_sizes.mk) | sed -nE 's@^$(BUILD)/@$(BUILD)/nmraw/@p' > $(BUILD)/text_sizes_nmraw.mk.$$$$ && mv $(BUILD)/text_sizes_nmraw.mk.$$$$ $(BUILD)/text_sizes_nmraw.mk)
+-include $(BUILD)/text_sizes_nmraw.mk
 endif
-build/nm/%.o: build/nmraw/%.o build/%.o
+$(BUILD)/nm/%.o: $(BUILD)/nmraw/%.o $(BUILD)/%.o
 	$(Q)mkdir -p $(@D)
 	$(Q)python3 -I $(MKTOOLS)/nm_pick.py $^ $@ $(OBJCOPY) $(LD)
 # An assembly or binary piece is the matching build's.
-build/nm/%.s.o: build/%.s.o
+$(BUILD)/nm/%.s.o: $(BUILD)/%.s.o
 	$(Q)mkdir -p $(@D)
 	$(Q)cp -p $< $@
-build/nm/%.bin.o: build/%.bin.o
+$(BUILD)/nm/%.bin.o: $(BUILD)/%.bin.o
 	$(Q)mkdir -p $(@D)
 	$(Q)cp -p $< $@
 # Static pattern rules: build/%/link.ld would also match build/nm/<version>/link.ld and write an empty script.
-$(VERSIONS:%=build/nm/%/link.ld): build/nm/%/link.ld: build/%/link.ld
+$(VERSIONS:%=$(BUILD)/nm/%/link.ld): $(BUILD)/nm/%/link.ld: $(BUILD)/%/link.ld
 	$(Q)mkdir -p $(@D)
 	$(Q)cp $< $@
-$(VERSIONS:%=build/nm/%/undefined_syms.ld): build/nm/%/undefined_syms.ld: build/%/undefined_syms.ld
+$(VERSIONS:%=$(BUILD)/nm/%/undefined_syms.ld): $(BUILD)/nm/%/undefined_syms.ld: $(BUILD)/%/undefined_syms.ld
 	$(Q)mkdir -p $(@D)
 	$(Q)cp $< $@
 # A draft may define a name that this version's ROM keeps as data, or the other way round: the first definition in link
 # order wins and link.err lists every such name; any other link error stops the build.
-$(VERSIONS:%=build/nm/%/$(NAME).elf): build/nm/%/$(NAME).elf: $$(OBJS_nm_$$*) build/nm/%/link.ld build/nm/%/undefined_syms.ld
-	$(Q)cd build/nm/$* && { $(LD) -T link.ld -o $(NAME).elf 2> link.err \
+$(VERSIONS:%=$(BUILD)/nm/%/$(NAME).elf): $(BUILD)/nm/%/$(NAME).elf: $$(OBJS_nm_$$*) $(BUILD)/nm/%/link.ld $(BUILD)/nm/%/undefined_syms.ld
+	$(Q)cd $(BUILD)/nm/$* && { $(LD) -T link.ld -o $(NAME).elf 2> link.err \
 	|| $(LD) -T link.ld --allow-multiple-definition -o $(NAME).elf 2>> link.err; } \
-	|| { cat build/nm/$*/link.err >&2; exit 1; }
-$(VERSIONS:%=build/nm/%/$(NAME).bin): build/nm/%/$(NAME).bin: build/nm/%/$(NAME).elf
+	|| { cat $(BUILD)/nm/$*/link.err >&2; exit 1; }
+$(VERSIONS:%=$(BUILD)/nm/%/$(NAME).bin): $(BUILD)/nm/%/$(NAME).bin: $(BUILD)/nm/%/$(NAME).elf
 	$(Q)$(OBJCOPY) $(ROM_SECTIONS_$*) -O binary --gap-fill 0 $< $@
-$(VERSIONS:%=build/nm/%/$(NAME).z64): build/nm/%/$(NAME).z64: build/nm/%/$(NAME).bin roms/baserom.%.z64
-	$(Q){ head -c $(ROM0_$*) roms/baserom.$*.z64; cat $<; } > $@
-	$(Q)truncate -s $$(wc -c < roms/baserom.$*.z64) $@
-	$(Q)cat $(addsuffix .pick,$(OBJS_nm_$*)) 2>/dev/null | grep -v '^same ' | sort > build/nm/$*/report.txt; \
-	echo "NM ROM $*: $$(grep -c '^draft' build/nm/$*/report.txt) unit(s) with drafts in," \
-	"$$(grep -c '^left-out' build/nm/$*/report.txt) left out (build/nm/$*/report.txt)"
+$(VERSIONS:%=$(BUILD)/nm/%/$(NAME).z64): $(BUILD)/nm/%/$(NAME).z64: $(BUILD)/nm/%/$(NAME).bin $(ROMS)/baserom.%.z64
+	$(Q){ head -c $(ROM0_$*) $(ROMS)/baserom.$*.z64; cat $<; } > $@
+	$(Q)truncate -s $$(wc -c < $(ROMS)/baserom.$*.z64) $@
+	$(Q)cat $(addsuffix .pick,$(OBJS_nm_$*)) 2>/dev/null | grep -v '^same ' | sort > $(BUILD)/nm/$*/report.txt; \
+	echo "NM ROM $*: $$(grep -c '^draft' $(BUILD)/nm/$*/report.txt) unit(s) with drafts in," \
+	"$$(grep -c '^left-out' $(BUILD)/nm/$*/report.txt) left out ($(BUILD)/nm/$*/report.txt)"
 endif
 
 endif # admitted make

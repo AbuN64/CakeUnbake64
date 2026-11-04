@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import blob_decode, blob_formats, blobs, rnc
+from unbake import config as configuration
 from unbake.contracts import Config, Finding, Json, Refusal, sha256
 
 
@@ -187,7 +188,7 @@ def run(config: Config, request_path: str, receipt_path: str) -> Json:
                 bad.append(Finding("blobs.proof", f"{row.get('id')}: unknown ROM version {version}"))
                 continue
             if version not in roms:
-                rom = (Path(config.project.root) / "roms" / f"baserom.{version}.z64").read_bytes()
+                rom = (Path(config.project.root) / configuration.root("roms") / f"baserom.{version}.z64").read_bytes()
                 if sha256(rom) != request["rom_sha256"][version]:
                     raise Refusal(Finding("blobs.proof", f"ROM sha256 mismatch: {version}"))
                 roms[version] = rom

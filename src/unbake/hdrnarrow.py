@@ -313,8 +313,12 @@ def _inlined(
     return "\n".join(out)
 
 
-BUILT_MARKER = "build/.pool-built-at"  # content: the commit; mtime: the end of the build that made every unit's .i.ok
-EXTRACTED_MARKER = "build/.pool-extracted-at"  # content: the commit; mtime: the extraction, before that build
+BUILT_MARKER = (
+    ".pool-built-at"  # in the build root; content: the commit; mtime: the end of the build that made every .i.ok
+)
+EXTRACTED_MARKER = (
+    ".pool-extracted-at"  # in the build root; content: the commit; mtime: the extraction, before that build
+)
 _DEFINE = re.compile(rb"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)", re.M)
 _SOURCE_SUFFIX = (".h", ".c", ".cpp", ".s")
 
@@ -398,7 +402,7 @@ def narrow_tree(
 
     stats: dict[str, Any] = {"headers": len(headers), "includers": len(units), "skipped": 0, "why": ""}
     since = -1.0  # with BASE given, no date makes a unit pristine: only its record
-    for name in () if base else (BUILT_MARKER, EXTRACTED_MARKER):
+    for name in () if base else (f"{configuration.root('build')}/{m}" for m in (BUILT_MARKER, EXTRACTED_MARKER)):
         # a build after the extraction touches the units' .i.ok: the later marker
         try:
             base = (root / name).read_text().strip()
@@ -439,7 +443,7 @@ def narrow_tree(
     )
     if not names:
         stats["why"] = "no declaration changed"
-    hdrkey = root / "build/hdrkey"
+    hdrkey = root / f"{configuration.root('build')}/hdrkey"
     made_at_base = _base_made(root, base, headers)
     keep: list[str] = []
     for u in units:
@@ -470,7 +474,10 @@ def records(root: Path) -> dict[str, list[Any]]:
     """The stamp sweep's recorded input keys, {output: [mtime_ns, key]}: build/.inputs.json with build/.inputs.log
     replayed over it (the last record of an output wins), as the sweep reads them. Cached while neither file moves."""
     root = Path(root)
-    state_path, log_path = root / "build/.inputs.json", root / "build/.inputs.log"
+    state_path, log_path = (
+        root / f"{configuration.root('build')}/.inputs.json",
+        root / f"{configuration.root('build')}/.inputs.log",
+    )
     try:
         stat = state_path.stat()
         tag = (str(root), stat.st_mtime_ns, log_path.stat().st_size if log_path.exists() else -1)
@@ -577,10 +584,10 @@ def includers(root: Path, version: str, headers: Sequence[str]) -> list[str]:
     """The units of VERSION whose dependency file (build/<version>/<unit>.d) names one of HEADERS."""
     found: set[str] = set()
     want = set(headers)
-    for dfile in (Path(root) / "build" / version).rglob("*.d"):
+    for dfile in (Path(root) / configuration.root("build") / version).rglob("*.d"):
         deps = _dependencies(dfile)
         if deps and want & set(deps):
-            found.add(str(dfile.relative_to(Path(root) / "build" / version))[: -len(".d")])
+            found.add(str(dfile.relative_to(Path(root) / configuration.root("build") / version))[: -len(".d")])
     return sorted(found)
 
 
@@ -596,7 +603,9 @@ def narrow_command(params: dict[str, Any]) -> dict[str, Any]:
     changed = process.changed(root, against)
     headers = sorted(f for f in changed or () if f.lower().endswith(".h"))
     versions = list(params.get("version") or ()) or sorted(
-        p.name for p in (root / "build").iterdir() if p.is_dir() and (root / "versions" / p.name).is_dir()
+        p.name
+        for p in (root / configuration.root("build")).iterdir()
+        if p.is_dir() and (root / "versions" / p.name).is_dir()
     )
     out: dict[str, Any] = {"against": against, "headers": headers, "versions": {}, "skip_headers": [], "applied": False}
     if not headers:
@@ -605,7 +614,9 @@ def narrow_command(params: dict[str, Any]) -> dict[str, Any]:
     plans: dict[str, tuple[list[str], list[str]]] = {}
     for v in versions:
         units = includers(root, v, headers)
-        keep, stats = narrow_tree(root, v, headers, units, "build/{v}/{unit}.o", base=against)
+        keep, stats = narrow_tree(
+            root, v, headers, units, f"{configuration.root('build')}/{{v}}/{{unit}}.o", base=against
+        )
         kept = set(keep)
         out["versions"][v] = {k: stats[k] for k in ("includers", "skipped", "why")}
         plans[v] = ([u for u in units if u not in kept], keep)
@@ -615,7 +626,7 @@ def narrow_command(params: dict[str, Any]) -> dict[str, Any]:
                 raise Refusal(Finding("narrow.unsafe", f"nothing applied: {out['why']}", versions=(v,)))
             return out
     if params.get("apply"):
-        stamp = "build/{v}/{u}.i.ok"
+        stamp = f"{configuration.root('build')}/{{v}}/{{u}}.i.ok"
         out["signed"] = sign(root, [stamp.format(v=v, u=u) for v, (skip, _) in plans.items() for u in skip])
         out["dropped"] = drop(root, [stamp.format(v=v, u=u) for v, (_, keep) in plans.items() for u in keep])
         out["applied"] = True
@@ -646,7 +657,7 @@ def sign(root: Path, stamps: Sequence[str]) -> int:
         key = hashlib.sha1(" ".join(digest(d) for d in deps).encode()).hexdigest()
         lines.append(json.dumps([stamp, when, key]) + "\n")
     if lines:
-        fd = os.open(root / "build/.inputs.log", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        fd = os.open(root / f"{configuration.root('build')}/.inputs.log", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
         try:
             os.write(fd, "".join(lines).encode())
         finally:
@@ -662,16 +673,18 @@ def resign(root: Path, headers: Sequence[str], before: dict[str, list[Any]]) -> 
     drop every one (2,000-4,500 includers per version, A2 10-25). Returns the number of records written."""
     root = Path(root)
     versions = sorted(
-        p.name for p in (root / "build").iterdir() if p.is_dir() and (root / "versions" / p.name).is_dir()
+        p.name
+        for p in (root / configuration.root("build")).iterdir()
+        if p.is_dir() and (root / "versions" / p.name).is_dir()
     )
     digest = _digester(root)
 
     stamps = []
     for v in versions:
         for u in includers(root, v, headers):
-            stamp = f"build/{v}/{u}.i.ok"
+            stamp = f"{configuration.root('build')}/{v}/{u}.i.ok"
             rec = before.get(stamp)
-            deps = _dependencies(root / f"build/{v}/{u}.d")
+            deps = _dependencies(root / f"{configuration.root('build')}/{v}/{u}.d")
             try:
                 same = rec is not None and len(rec) == 2 and (root / stamp).stat().st_mtime_ns == rec[0]
             except OSError:

@@ -156,7 +156,7 @@ def asm_files(root: Path, version: str) -> list[Path]:
     """Every extracted assembly file of one version, however splat nested it: asm/<v>/nonmatchings/<segment>/<name>.s
     and asm/<v>/data/<segment>/<name>.s, or flat asm/<v>/<segment>.s. The one discovery the commands that read
     assembly share."""
-    return sorted((root / "asm" / version).rglob("*.s"))
+    return sorted((root / configuration.root("asm") / version).rglob("*.s"))
 
 
 def asm_path(config: Config, version: str, name: str) -> Path:
@@ -174,7 +174,14 @@ def asm_path(config: Config, version: str, name: str) -> Path:
                     action=f"add {name} to {symbol_file(version)}",
                 )
             )
-        return config.project.root / "asm" / version / "nonmatchings" / segment_of(config, version, row) / f"{name}.s"
+        return (
+            config.project.root
+            / configuration.root("asm")
+            / version
+            / "nonmatchings"
+            / segment_of(config, version, row)
+            / f"{name}.s"
+        )
 
 
 def _linked(rows: Sequence[Row], spans: Sequence[tuple[int, int]], mask: int) -> dict[str, int]:

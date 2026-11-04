@@ -1,0 +1,9 @@
+[layout]
+source_roots = ["SOURCE", "sdk", "include"]
+header_roots = ["include", "sdk/include"]
+library_source = "sdk/{library}"
+library_header = "sdk/include/{library}.h"
+subsystem_source = "SOURCE/{subsystem}"
+subsystem_header = "SOURCE/{subsystem}.h"
+
+unused_root = "leftover"

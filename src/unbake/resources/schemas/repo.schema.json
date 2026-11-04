@@ -190,6 +190,26 @@
       "minLength": 1
      }
     },
+    "asm_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
+    },
+    "build_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
+    },
+    "roms_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
+    },
+    "unused_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
+    },
+    "region_gap": {
+     "type": "integer",
+     "minimum": 0
+    },
     "module_cap": {
      "type": "integer",
      "minimum": 1
@@ -222,6 +242,11 @@
     "subsystem_source",
     "library_source",
     "module_cap",
+    "unused_root",
+    "asm_root",
+    "build_root",
+    "roms_root",
+    "region_gap",
     "source_roots",
     "header_roots"
    ],

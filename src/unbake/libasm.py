@@ -239,13 +239,13 @@ def _rom_words(
     if size <= 0 or size % 4:
         return None
     if version not in roms:
-        if not (cfg.project.root / "roms" / f"baserom.{version}.z64").is_file():
+        if not (cfg.project.root / config.root("roms") / f"baserom.{version}.z64").is_file():
             if needed:
                 raise Refusal(
                     Finding(
                         "library-asm.rom",
                         f"`{name}` is a library routine nothing owns and only the {version} ROM shows its code",
-                        path=f"roms/baserom.{version}.z64",
+                        path=f"{config.root('roms')}/baserom.{version}.z64",
                         action=f"run unbake sync with roms/baserom.{version}.z64 present and commit the result",
                     )
                 )

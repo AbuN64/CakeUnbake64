@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import blobs
+from unbake import config as configuration
 from unbake.contracts import Config, Json, sha256
 
 LIMIT = 512  # the longest zero run a pad row may record: the widest alignment pad measured is 343 bytes
@@ -68,7 +69,7 @@ def scan(config: Config) -> Json:
     stale = import_module("unbake.blob_stale")
     out: dict[str, Any] = {}
     for version, part in parts.items():
-        rom = (Path(config.project.root) / "roms" / f"baserom.{version}.z64").read_bytes()
+        rom = (Path(config.project.root) / configuration.root("roms") / f"baserom.{version}.z64").read_bytes()
         gaps = stale.unknown(part)
         pad, refused = runs(rom, gaps)
         for low, high in pad:

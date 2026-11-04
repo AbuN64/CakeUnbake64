@@ -4,8 +4,8 @@
 # keeps its date unless the shared asm/<v>/include changed; an object that named a file the extraction no longer
 # makes (asm.deps as make read it before the extraction) is dated long ago, so make compiles it and says what it lacks.
 import hashlib, json, os, sys
-mode, version = sys.argv[1], sys.argv[2]
-root, keep = "asm/" + version, "build/.extract-dates-" + version + ".json"
+asm_root, build, mode, version = sys.argv[1:5]  # the layout's asm and build roots (Makefile ASM, BUILD)
+root, keep = asm_root + "/" + version, build + "/.extract-dates-" + version + ".json"
 stamp = root + "/.extracted"
 def scan():
     found = {}
@@ -17,7 +17,7 @@ def scan():
                     found[path] = hashlib.sha1(data.read()).hexdigest()
     return found
 if mode == "save":
-    os.makedirs("build", exist_ok=True)
+    os.makedirs(build, exist_ok=True)
     files = {path: [digest, os.stat(path).st_mtime_ns] for path, digest in scan().items()}
     when = os.stat(stamp).st_mtime_ns if os.path.exists(stamp) else None
     with open(keep, "w") as out:
@@ -33,8 +33,8 @@ else:
     if old["stamp"] is not None and not any(path.startswith(root + "/include/") for path in moved):
         os.utime(stamp, ns=(old["stamp"], old["stamp"]))
     gone = set(old["files"]) - set(files)
-    if gone and os.path.exists("build/asm.deps"):
-        for line in open("build/asm.deps"):
+    if gone and os.path.exists(build + "/asm.deps"):
+        for line in open(build + "/asm.deps"):
             target, _, named = line.partition(": ")
             if gone.intersection(named.split()) and os.path.exists(target):
                 os.utime(target, ns=(1000000000, 1000000000))

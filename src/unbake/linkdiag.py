@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from unbake import config as configuration
 from unbake import process, store, symbols, tree
 from unbake.contracts import Config, Finding, digest
 
@@ -76,7 +77,7 @@ def _find(config: Config, version: str) -> tuple[str, int, int] | None:
     out = scratch / f"linkdiag-{version}.map"
     elf = scratch / f"linkdiag-{version}.elf"
     argv: list[str | Path] = [process.tool(config, "mips_ld"), "-T", "link.ld", f"-Map={out}", "-o", str(elf)]
-    process.run("linkdiag", argv, root / "build" / version, tmp=scratch)
+    process.run("linkdiag", argv, root / configuration.root("build") / version, tmp=scratch)
     text = out.read_text(errors="replace") if out.is_file() else ""
     out.unlink(missing_ok=True)
     elf.unlink(missing_ok=True)
@@ -86,7 +87,7 @@ def _find(config: Config, version: str) -> tuple[str, int, int] | None:
 def _linked_objects(config: Config, version: str) -> tuple[Path, list[str]] | None:
     """(build/<v>, the objects link.ld takes from sources: not the generated .bin.o) once the version has been built
     (some object link.ld names exists); None before, when there is nothing for a source to be stale against."""
-    build = config.project.root / "build" / version
+    build = config.project.root / configuration.root("build") / version
     try:
         script = (build / "link.ld").read_text(errors="replace")
     except OSError:
@@ -138,7 +139,7 @@ def _link(config: Config, version: str) -> tuple[list[str], str]:
     scratch.mkdir(parents=True, exist_ok=True)
     elf = scratch / f"linkcheck-{version}.elf"
     argv: list[str | Path] = [process.tool(config, "mips_ld"), "-T", "link.ld", "-o", str(elf)]
-    done = process.run("linkcheck", argv, root / "build" / version, tmp=scratch)
+    done = process.run("linkcheck", argv, root / configuration.root("build") / version, tmp=scratch)
     elf.unlink(missing_ok=True)
     if done.exit == 0:
         return [], ""

@@ -5,10 +5,11 @@
 # A stamp whose date did not move but whose inputs' bytes did was made from other bytes: it is dated long ago (make
 # skips a missing stamp when the object is newer than the source), so make makes it again, and an object is removed. A stamp that was rebuilt since (its date moved) records the bytes it now has.
 import hashlib, json, os, sys, time
-state_path = "build/.inputs.json"
+build = sys.argv.pop(1)  # the layout's build root (Makefile BUILD)
+state_path = build + "/.inputs.json"
 seen = {}
 known = {}
-cache_path = "build/.dep-stat.json"
+cache_path = build + "/.dep-stat.json"
 def fingerprint(path):
     try:
         info = os.stat(path)
@@ -44,7 +45,7 @@ def stamp_key(stamp):
     return None if deps is None else hashlib.sha1(" ".join(digest(d) for d in deps).encode()).hexdigest()
 def object_key(obj, extracted):
     return hashlib.sha1(" ".join(digest(a) for a in sorted(set(extracted))).encode()).hexdigest()
-log_path = "build/.inputs.log"
+log_path = build + "/.inputs.log"
 def replay(state, path):
     try:
         with open(path) as handle:
@@ -65,7 +66,7 @@ def load():
     replay(state, log_path)
     return state
 def save(state):
-    os.makedirs("build", exist_ok=True)
+    os.makedirs(build, exist_ok=True)
     tmp = state_path + "." + str(os.getpid())
     with open(tmp, "w") as handle:
         json.dump(state, handle)
@@ -83,8 +84,8 @@ if sys.argv[1] == "record":
     sys.exit(0)
 asm = {}
 asm_text = ""
-if os.path.exists("build/asm.deps"):
-    with open("build/asm.deps") as handle:
+if os.path.exists(build + "/asm.deps"):
+    with open(build + "/asm.deps") as handle:
         asm_text = handle.read()
 for line in asm_text.splitlines():
     target, _, named = line.partition(": ")
@@ -183,7 +184,7 @@ def check(path, key):
         removed += 1
     else:
         state[path] = [when, key]
-for here, _, names in os.walk("build"):
+for here, _, names in os.walk(build):
     for name in names:
         if name.endswith(".i.ok"):
             stamp = os.path.join(here, name)

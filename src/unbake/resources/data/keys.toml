@@ -1,6 +1,10 @@
 # Every Finding key. config.sentence(key) gives the human sentence; tests assert every key used in src exists here.
 schema = 1
 
+[key."rename.reduction"]
+owner = "renameproof"
+sentence = "the file is not its before text reduced by the Retired and Merged record"
+
 [key."adapter.unknown"]
 owner = "adapters"
 sentence = "the toolchain id is not in toolchains.toml"
@@ -496,6 +500,10 @@ sentence = "a data piece sits at a function's first byte, so its assembly starts
 [key."blobs.schema"]
 owner = "blobs"
 sentence = "blobs.toml is not valid against its schema"
+
+[key."blobs.c"]
+owner = "blobs"
+sentence = "a bin row claims bytes the current C builds: the C stays, under the unused root when nothing reads it"
 
 [key."blobs.range"]
 owner = "blobs"

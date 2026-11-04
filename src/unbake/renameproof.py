@@ -39,6 +39,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from unbake import config as configuration
 from unbake import process
 from unbake.contracts import Finding, Json, Refusal
 from unbake.non_matching import _directives, _project
@@ -262,7 +263,17 @@ def _member(tokens: Sequence[str], n: int) -> bool:
     return n > 0 and (tokens[n - 1] == "." or (n > 1 and tokens[n - 1] == ">" and tokens[n - 2] == "-"))
 
 
-BUILD_TOPS = frozenset({"src", "include", "asm", "tools", "roms"})
+def build_tops() -> frozenset[str]:
+    """The top folders a build reads: the layout's source and header roots, its asm and roms roots, and tools."""
+    roots = (
+        *configuration.source_roots(),
+        *configuration.header_roots(),
+        configuration.root("asm"),
+        configuration.root("roms"),
+    )
+    return frozenset({*(Path(r).parts[0] for r in roots), "tools"})
+
+
 BUILD_FILES = frozenset({"Makefile", "config.toml", "config/platform.toml", "local.mk"})
 
 
@@ -272,7 +283,7 @@ def _unread(path: str, makefile: str) -> bool:
     build file, and the generated Makefile never spells its file name (it names versions/<v>/symbol_addrs.txt,
     text_sizes.mk, splat.yaml...). A catalog row added beside a rename made the whole diff "not a rename" (NAMES-2)."""
     parts = PurePosixPath(path).parts
-    if not parts or parts[0] in BUILD_TOPS or path in BUILD_FILES or not makefile:
+    if not parts or parts[0] in build_tops() or path in BUILD_FILES or not makefile:
         return False
     name = parts[-1]
     if PurePosixPath(name).suffix.lower() in (".c", ".cpp", ".h", ".s", ".inc", ".ld", ".mk", ".py", ".sh"):
@@ -1241,3 +1252,19 @@ def rename_command(params: Json) -> Json:
         list(params.get("inert") or ()),
         bool(params.get("steps")),
     )
+
+
+def reduction(before: Mapping[str, str], after: Mapping[str, str], record: Json) -> tuple[Finding, ...]:
+    """Prove a cutover reduction by its record: each file of `after` is its `before` with the `Retired` symbols as
+    their literals and the `Merged` rows as `table[i]` at the same offset (`leftover.replay`); a file the record
+    does not explain, or a path added or dropped, is a finding."""
+    from unbake import leftover
+
+    out = [
+        Finding("rename.reduction", "a path is added or dropped", path=p) for p in sorted(before.keys() ^ after.keys())
+    ]
+    for path in sorted(before.keys() & after.keys()):
+        out += [
+            Finding("rename.reduction", why, path=path) for why in leftover.replay(before[path], after[path], record)
+        ]
+    return tuple(out)

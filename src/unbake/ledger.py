@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import blob_stale
+from unbake import config as configuration
 from unbake.contracts import Json
 
 Spans = list[tuple[int, int]]
@@ -109,7 +110,7 @@ def ledger(config: Any, tree: Any, spans: Json) -> Json:
     cause class and evidence per span, the byte table per class and version, and the unclassified total."""
     parts = import_module("unbake.report").partitions(config, tree)
     root = Path(config.project.root)
-    roms = {v: (root / "roms" / f"baserom.{v}.z64").read_bytes() for v in spans}
+    roms = {v: (root / configuration.root("roms") / f"baserom.{v}.z64").read_bytes() for v in spans}
     held = {}
     for v in roms:
         held[v] = (acc := blob_stale.accounted(parts[v]), [s[0] for s in acc])

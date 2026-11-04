@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import accesses, cheaders, symbols, versions
+from unbake import config as configuration
 from unbake.accesses import Access, Base
 from unbake.contracts import Finding, Refusal
 
@@ -588,7 +589,7 @@ def read_functions(path: Path) -> list[str]:
 def types_command(params: Json) -> Json:
     root = Path(params["project"])
     version = params.get("version") or "us-rev1"
-    if not (root / "asm" / version).is_dir():
+    if not (root / configuration.root("asm") / version).is_dir():
         raise Refusal(Finding("types.input", f"no extracted assembly at asm/{version}: run `unbake setup` first"))
     headers = cheaders.Headers()
     headers.read(root)

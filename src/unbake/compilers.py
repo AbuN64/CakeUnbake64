@@ -233,9 +233,11 @@ def allows(fingerprint: Mapping[str, Any], seen: Mapping[str, Iterable[str]]) ->
 
 def _units(config: Config, version: str, paths: Sequence[str]) -> list[str]:
     """The compiled sources of a version's build (the `.o` files that come from C), sorted."""
-    home = config.project.root / "build" / version
+    home = config.project.root / configuration.root("build") / version
     found = []
-    for obj in sorted((home / "src").rglob("*.o")) if (home / "src").is_dir() else ():
+    for obj in sorted(
+        o for top in configuration.source_roots() if (home / top).is_dir() for o in (home / top).rglob("*.o")
+    ):
         unit = obj.relative_to(home).with_suffix("").as_posix()
         if (
             configuration.is_source(unit)
@@ -257,7 +259,7 @@ def _write(config: Config, path: Path, rows: Iterable[Row]) -> None:
 
 def _fingerprint_job(item: tuple[Config, str, list[str]]) -> list[Row]:
     config, version, units = item
-    home = config.project.root / "build" / version
+    home = config.project.root / configuration.root("build") / version
     listings = _objdump(config, [home / f"{u}.o" for u in units])
     rows = []
     for unit, listing in zip(units, listings, strict=True):
@@ -424,7 +426,7 @@ def _census_job(item: tuple[Config, str, str, list[tuple[str, Recipe]], bool]) -
     config, version, unit, cands, drafts = item
     started = _cpu()
     root = config.project.root
-    build = root / "build" / version
+    build = root / configuration.root("build") / version
     work = _tmp(config) / "compilers" / f"{os.getpid()}-{digest(unit)[:10]}"
     work.mkdir(parents=True, exist_ok=True)
     try:
@@ -478,7 +480,7 @@ def _text(config: Config, unit: str) -> str:
 
 
 def _stamp(config: Config, version: str, unit: str, labels: Mapping[str, Recipe], tools: Mapping[str, str]) -> str:
-    build = config.project.root / "build" / version
+    build = config.project.root / configuration.root("build") / version
     return digest(
         (
             sha256((build / f"{unit}.i").read_bytes()),
@@ -500,7 +502,7 @@ def census(config: Config, params: Json) -> Row:
         drafts = bool(params.get("drafts"))
         budget = float(params.get("cpu") or CPU_BUDGET)
         toolchains = _toolchains(config, params.get("toolchains"))
-        build = config.project.root / "build" / version
+        build = config.project.root / configuration.root("build") / version
         units = [u for u in _units(config, version, paths) if (build / f"{u}.i").is_file()]
         if not units:
             raise Refusal(Finding("compilers.input", f"no built objects and preprocessed texts under build/{version}"))

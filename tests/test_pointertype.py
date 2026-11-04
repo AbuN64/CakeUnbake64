@@ -7,9 +7,9 @@ from types import SimpleNamespace
 from unbake import config
 from unbake import pointertype as pt
 
-SYMBOLS = """g_earlierMenuA_80158C08 = 0x80158C08; //
-g_earlierPoolB_45B380 = 0x0045B380; // rom:0x15437C size:0x34
-g_earlierMenuC_800E2AC8 = 0x800E2AC8; // rom:0x1 size:0x4
+SYMBOLS = """g_menuAUnused_80158C08 = 0x80158C08; //
+g_poolBUnused_45B380 = 0x0045B380; // rom:0x15437C size:0x34
+g_menuCUnused_800E2AC8 = 0x800E2AC8; // rom:0x1 size:0x4
 """
 
 
@@ -24,18 +24,18 @@ def known():
 def test_symbols_key_on_the_low_24_bits_so_a_pool_symbol_without_the_segment_bits_resolves():
     table = pt.read(words(0x80158C08, 0, 0x8045B380), "eu", 0, 12, known())
     assert isinstance(table, pt.Table)
-    assert table.targets == ("g_earlierMenuA_80158C08", None, "g_earlierPoolB_45B380")
+    assert table.targets == ("g_menuAUnused_80158C08", None, "g_poolBUnused_45B380")
 
 
 def test_every_word_resolves_and_the_definition_is_a_typed_pointer_array_of_symbols():
     table = pt.read(words(0x80158C08, 0x800E2AC8, 0x80158C08), "eu", 0, 12, known())
     assert isinstance(table, pt.Table)
-    lines = pt.render(table, "g_earlierAddrTable_461750")
+    lines = pt.render(table, "g_addrTableUnused_461750")
     assert lines == [
-        "extern char g_earlierMenuA_80158C08[];",
-        "extern char g_earlierMenuC_800E2AC8[];",
-        "void *g_earlierAddrTable_461750[3] = "
-        "{ g_earlierMenuA_80158C08, g_earlierMenuC_800E2AC8, g_earlierMenuA_80158C08 };",
+        "extern char g_menuAUnused_80158C08[];",
+        "extern char g_menuCUnused_800E2AC8[];",
+        "void *g_addrTableUnused_461750[3] = "
+        "{ g_menuAUnused_80158C08, g_menuCUnused_800E2AC8, g_menuAUnused_80158C08 };",
     ]
     assert "0x8015" not in "".join(lines)  # no raw word
 
@@ -80,11 +80,11 @@ def test_one_rule_closes_both_versions_with_one_guarded_source(tmp_path, monkeyp
     cfg = _project(tmp_path, monkeypatch, {"eu": b"\0" * 16 + table, "eu-x": b"\0" * 32 + table})
     out = pt.command(cfg, {"spec": ["eu:0x10:0x1c:0x307000", "eu-x:0x20:0x2c:0x312000"]})
     assert out["unfit"] == [] and out["bytes"] == 24
-    assert out["written"] == ["EARLIER_ADDRTABLE_307010.CPP", "EARLIER_ADDRTABLE_312020.CPP"]
-    text = (tmp_path / "src/DATA/EARLIER_BUILD/EARLIER_ADDRTABLE_307010.CPP").read_text()
-    assert "#if defined(VERSION_EU)\n" in text and "void *g_earlierAddrTable_307010[3]" in text
+    assert out["written"] == ["ADDRTABLE_307010.CPP", "ADDRTABLE_312020.CPP"]
+    text = (tmp_path / "unused/DATA/ADDRTABLE_307010.CPP").read_text()
+    assert "#if defined(VERSION_EU)\n" in text and "void *g_addrTableUnused_307010[3]" in text
     rows = (tmp_path / "versions/eu/earlier_build_symbols.txt").read_text().splitlines()
-    assert rows[-1] == "g_earlierAddrTable_307010 = 0x00307010; // rom:0x10 size:0xC"
+    assert rows[-1] == "g_addrTableUnused_307010 = 0x00307010; // rom:0x10 size:0xC"
 
 
 def test_same_vram_in_two_versions_shares_one_source_and_a_refused_span_writes_nothing(tmp_path, monkeypatch):
@@ -92,8 +92,8 @@ def test_same_vram_in_two_versions_shares_one_source_and_a_refused_span_writes_n
     bad = words(0x80158C08, 0x801547B0)
     cfg = _project(tmp_path, monkeypatch, {"eu": b"\0" * 4 + table, "eu-x": b"\0" * 8 + table + bad})
     out = pt.command(cfg, {"spec": ["eu:4:12:0x307000", "eu-x:8:16:0x306FFC", "eu-x:16:24:0x306FFC"]})
-    assert out["written"] == ["EARLIER_ADDRTABLE_307004.CPP"]
-    text = (tmp_path / "src/DATA/EARLIER_BUILD/EARLIER_ADDRTABLE_307004.CPP").read_text()
+    assert out["written"] == ["ADDRTABLE_307004.CPP"]
+    text = (tmp_path / "unused/DATA/ADDRTABLE_307004.CPP").read_text()
     assert text.count("#if defined(VERSION_EU) || defined(VERSION_EU_X)\n") == 1
     assert len(out["unfit"]) == 1 and out["unfit"][0]["word_rom"] == 20 and out["unfit"][0]["word"] == "0x801547B0"
 
@@ -102,7 +102,7 @@ def test_bodies_that_differ_by_version_share_one_source_guarded_apart(tmp_path, 
     eu, eux = words(0x80158C08, 0x800E2AC8), words(0x80158C08, 0x8045B380)
     cfg = _project(tmp_path, monkeypatch, {"eu": b"\0" * 4 + eu, "eu-x": b"\0" * 4 + eux})
     out = pt.command(cfg, {"spec": ["eu:4:12:0x307000", "eu-x:4:12:0x307000"]})
-    assert out["unfit"] == [] and out["written"] == ["EARLIER_ADDRTABLE_307004.CPP"]
-    text = (tmp_path / "src/DATA/EARLIER_BUILD/EARLIER_ADDRTABLE_307004.CPP").read_text()
+    assert out["unfit"] == [] and out["written"] == ["ADDRTABLE_307004.CPP"]
+    text = (tmp_path / "unused/DATA/ADDRTABLE_307004.CPP").read_text()
     assert text.count("#if defined(VERSION_EU)\n") == 1 and text.count("#elif defined(VERSION_EU_X)\n") == 1
-    assert text.count("#endif") == 1 and text.count("g_earlierAddrTable_307004[2]") == 2
+    assert text.count("#endif") == 1 and text.count("g_addrTableUnused_307004[2]") == 2

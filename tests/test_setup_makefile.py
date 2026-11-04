@@ -20,11 +20,12 @@ def test_object_list_stays_complete_while_another_stamp_make_rewrites_it(tmp_pat
     cpp.write_text(
         f"import os\nos.write({ready_w}, b'R')\nos.read({release_r}, 1)\nprint('SOURCE/reproduced.o(.text);')\n"
     )
-    rule = config.template("Makefile.in").split("build/%/objs.mk: $(NAME).ld\n", 1)[1]
+    rule = config.template("Makefile.in").split("$(BUILD)/%/objs.mk: $(NAME).ld\n", 1)[1]
     # Expand only the make variables of this recipe; the real shell pipeline and publication remain intact.
     script = "\n".join(rule.splitlines()[:2])
     for name, value in (
         ("$(Q)", ""),
+        ("$(BUILD)", "build"),
         ("$(@D)", str(target.parent)),
         ("$(CPP)", f"{shlex.quote(sys.executable)} {shlex.quote(str(cpp))}"),
         ("$(VMACRO_$*)", "VERSION_US_REV1"),

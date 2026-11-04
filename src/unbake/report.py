@@ -252,7 +252,7 @@ def _extents(config: Any, tree: Any) -> dict[str, dict[str, int]]:
             if not names or not source.is_file():
                 continue
             key = f"{v}:{sha256_file(source)}"
-            obj = root / "build" / v / f"{module.path}.o"
+            obj = root / configuration.root("build") / v / f"{module.path}.o"
             sizes: dict[str, int] | None = None
             if obj.is_file():
                 sizes = {}
@@ -290,7 +290,7 @@ def _sources(config: Any) -> dict[str, str]:
     functions and macros that carry them live."""
     root = Path(config.project.root)
     out: dict[str, str] = {}
-    for top in ("src", "include"):
+    for top in (*configuration.source_roots(), *configuration.header_roots()):
         for path in sorted((root / top).rglob("*")) if (root / top).is_dir() else ():
             if path.suffix.lower() in (".c", ".cpp", ".h", ".hpp", ".inc") and path.is_file():
                 out[path.relative_to(root).as_posix()] = path.read_text(encoding="utf-8", errors="replace")
@@ -401,7 +401,7 @@ def _asm_text(config: Any, row: Credit) -> str:
         segment = symbols.segment_at(config, row.version, row.member.rom)
     except (AttributeError, KeyError):  # a project that names no segments has no extracted assembly
         return ""
-    path = Path(config.project.root) / f"asm/{row.version}/nonmatchings/{segment}/{row.name}.s"
+    path = Path(config.project.root) / f"{configuration.root('asm')}/{row.version}/nonmatchings/{segment}/{row.name}.s"
     try:
         return path.read_text(errors="replace")
     except OSError:
@@ -539,7 +539,7 @@ def partition(config: Any, v: str, table: Mapping[str, Any], rom_size: int) -> J
     data = [(a, b) for a, b, kind in held if kind != "func"]
     document = blobs.load(config)
     decoded, identified = blobs.ranges(document, v)
-    path = Path(config.project.root) / "roms" / f"baserom.{v}.z64"
+    path = Path(config.project.root) / configuration.root("roms") / f"baserom.{v}.z64"
     rom = path.read_bytes() if path.is_file() else None
     rom = rom if rom is not None and len(rom) == rom_size else None
     linker = [(f.rom, f.rom + f.size) for f in linkfill.read(Path(config.project.root), v)]
@@ -549,7 +549,7 @@ def partition(config: Any, v: str, table: Mapping[str, Any], rom_size: int) -> J
 
 
 def _rom_size(config: Any, v: str) -> int | None:
-    path = Path(config.project.root) / "roms" / f"baserom.{v}.z64"
+    path = Path(config.project.root) / configuration.root("roms") / f"baserom.{v}.z64"
     return path.stat().st_size if path.is_file() else None
 
 

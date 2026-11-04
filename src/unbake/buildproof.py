@@ -157,7 +157,7 @@ def _build(config: Config, targets: Sequence[str], jobs: int) -> tuple[set[str],
 
 
 def _targets(versions: Sequence[str], units: Iterable[str]) -> list[str]:
-    return [f"build/{v}/{u}.o" for v in versions for u in sorted(units)]
+    return [f"{configuration.root('build')}/{v}/{u}.o" for v in versions for u in sorted(units)]
 
 
 def _narrow(
@@ -174,7 +174,9 @@ def _narrow(
     ordered = sorted(units)
     stats: dict[str, Any] = {"headers": len(headers), "includers": len(units), "skipped": 0, "why": ""}
     for v in versions:
-        keep, got = hdrnarrow.narrow(config, v, sorted(headers), ordered, "build/{v}/{unit}.o", texts.get)
+        keep, got = hdrnarrow.narrow(
+            config, v, sorted(headers), ordered, f"{configuration.root('build')}/{{v}}/{{unit}}.o", texts.get
+        )
         stats["why"] = stats["why"] or got["why"]
         kept = set(keep)
         skipped |= {(v, u) for u in ordered if u not in kept}
@@ -239,7 +241,7 @@ def _by_reference(config: Config, params: Json) -> Json:
     compared, differ, missing, unbuilt = 0, [], [], []
     for target in targets:
         v, unit = target.split("/", 2)[1], target.split("/", 2)[2].removesuffix(".o")
-        obj, was = root / target, reference / f"build/{v}/{old_of.get(unit, unit)}.o"
+        obj, was = root / target, reference / f"{configuration.root('build')}/{v}/{old_of.get(unit, unit)}.o"
         if unit in added or target in absent:
             continue
         if not was.is_file():
@@ -335,12 +337,12 @@ def buildproof_command(config: Config, params: Json) -> Json:
         for u in base_units:
             if (v, u) in skipped:
                 continue
-            src = root / f"build/{v}/{u}.o"
-            if f"build/{v}/{u}.o" not in absent_old and src.is_file():
+            src = root / f"{configuration.root('build')}/{v}/{u}.o"
+            if f"{configuration.root('build')}/{v}/{u}.o" not in absent_old and src.is_file():
                 dest = holder / v / f"{new_of[u] or u}.o"
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dest)
-                kept[f"build/{v}/{new_of[u] or u}.o"] = dest
+                kept[f"{configuration.root('build')}/{v}/{new_of[u] or u}.o"] = dest
 
     applied: list[Path] = []
     extracted: list[str] = []
@@ -385,7 +387,7 @@ def buildproof_command(config: Config, params: Json) -> Json:
             build.extract(config, v)
     compared, differ, missing, extra, built_added = 0, [], [], [], []
     for target in new_targets:
-        obj = after.get(target, root / "build" / "no-such-object")
+        obj = after.get(target, root / configuration.root("build") / "no-such-object")
         was = kept.get(target)
         unit = target.split("/", 2)[2].removesuffix(".o")
         if unit in added:

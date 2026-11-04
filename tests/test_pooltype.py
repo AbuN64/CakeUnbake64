@@ -51,7 +51,7 @@ def test_units_split_per_file_after_the_last_string_before_a_path():
     units = pt.units(items)
     assert [u.path for u in units] == [PATH, PATH]  # the refused word splits the file into two windows
     assert [i.kind for i in units[0].items] == ["float", "float", "float", "uint", "str", "double"]
-    assert units[1].file == f"EARLIER_CAMERA_GSKY_{units[1].rom:X}.CPP"
+    assert units[1].file == f"CAMERA_GSKY_{units[1].rom:X}.CPP"
     assert pt.stem(PATH) == "Gsky"
 
 
@@ -106,13 +106,13 @@ def test_pointer_words_are_typed_inside_a_record_never_alone():
 def test_a_pointer_run_is_a_void_pointer_array_of_address_constants():
     items, _ = pt.itemize(rom_of(0x801708C4, 0x0022E004, 0, 0x801708D4), 0, 16, 0)
     unit = pt.Unit("", 0x8000, items)
-    lines, symbols = pt.body(unit, 0x80100000)
+    lines, symbols = pt.body(unit, 0x80100000, "Unused")
     assert lines == [
-        "void *g_earlierPoolPointers_80100000[1] = { (void *)0x801708C4 };",
-        "unsigned int g_earlierPoolWords_80100004[2] = { 0x22E004, 0 };",
-        "void *g_earlierPoolPointers_8010000C[1] = { (void *)0x801708D4 };",
+        "void *g_poolPointersUnused_80100000[1] = { (void *)0x801708C4 };",
+        "unsigned int g_poolWordsUnused_80100004[2] = { 0x22E004, 0 };",
+        "void *g_poolPointersUnused_8010000C[1] = { (void *)0x801708D4 };",
     ]
-    assert all(s["name"].startswith("g_earlier") and "rom" in s for s in symbols)
+    assert all(s["name"].endswith(tuple("0123456789ABCDEF")) and "Unused_" in s["name"] and "rom" in s for s in symbols)
 
 
 def test_words_of_widens_to_words_without_entering_code_data_or_other_windows():
@@ -154,9 +154,9 @@ def test_eu_14d044_the_freed_words_of_a_string_are_one_string_never_floats():
     assert [(i.kind, i.at, i.size) for i in items] == [("str", 0, 36), ("str", 0x24, 44)] and not refused
     freed, refused = pt.itemize(EU_STRINGS, 0x3C, 0x50, 0)  # the false rows over 0x14D080..0x14D094 are deleted
     assert [(i.kind, i.at, i.size, i.value) for i in freed] == [("str", 0x3C, 20, DYNAMIC)] and not refused
-    lines, syms = pt.body(pt.Unit("", 0x3C, freed), 0x14D044)
-    assert lines == ['char g_earlierPoolStr_14D080[20] = "M_INSTANCE_DYNAMIC\\000J";']
-    assert syms == [{"name": "g_earlierPoolStr_14D080", "vram": 0x14D080, "rom": 0x3C, "size": 20}]
+    lines, syms = pt.body(pt.Unit("", 0x3C, freed), 0x14D044, "Unused")
+    assert lines == ['char g_poolStrUnused_14D080[20] = "M_INSTANCE_DYNAMIC\\000J";']
+    assert syms == [{"name": "g_poolStrUnused_14D080", "vram": 0x14D080, "rom": 0x3C, "size": 20}]
 
 
 def test_text_that_continues_a_neighbouring_string_is_a_string_from_its_first_byte():
@@ -190,19 +190,19 @@ def test_false_rows_name_the_float_rows_over_text_and_keep_the_real_ones():
     table = symbols.parse(
         "\n".join(
             [
-                "g_earlierContpadFloats_454080 = 0x454080; // rom:0x14D080 size:0x4",
-                "g_earlierContpadFloats_454088 = 0x454088; // rom:0x14D088 size:0x4",
-                "g_earlierContpadFloats_454090 = 0x454090; // rom:0x14D090 size:0x4",
-                "g_earlierPoolFloats_8015CB64 = 0x8015CB64; // rom:0x15F764 size:0x4",
-                "g_earlierAnimpoolStr_454068 = 0x454068; // rom:0x14D068 size:0x2C",
+                "g_contpadFloatsUnused_454080 = 0x454080; // rom:0x14D080 size:0x4",
+                "g_contpadFloatsUnused_454088 = 0x454088; // rom:0x14D088 size:0x4",
+                "g_contpadFloatsUnused_454090 = 0x454090; // rom:0x14D090 size:0x4",
+                "g_poolFloatsUnused_8015CB64 = 0x8015CB64; // rom:0x15F764 size:0x4",
+                "g_animpoolStrUnused_454068 = 0x454068; // rom:0x14D068 size:0x2C",
             ]
         )
     )
     found = pt._false_rows(bytes(rom), table, 0x14D000, 0x15F770)
     assert [(r["name"], r["text"]) for r in found] == [
-        ("g_earlierContpadFloats_454080", "M_INSTANCE_DYNAMIC"),
-        ("g_earlierContpadFloats_454088", "CE_DYNAMIC"),
-        ("g_earlierContpadFloats_454090", "IC"),
+        ("g_contpadFloatsUnused_454080", "M_INSTANCE_DYNAMIC"),
+        ("g_contpadFloatsUnused_454088", "CE_DYNAMIC"),
+        ("g_contpadFloatsUnused_454090", "IC"),
     ]
 
 
@@ -212,14 +212,14 @@ def test_check_refuses_a_float_row_over_text_naming_it(tmp_path: Path, monkeypat
     (tmp_path / "eu.z64").write_bytes(rom)
     table = tmp_path / windows.symbols_path("eu")
     table.parent.mkdir(parents=True)
-    table.write_text("g_earlierContpadFloats_454088 = 0x454088; // rom:0x14D088 size:0x4\n")
+    table.write_text("g_contpadFloatsUnused_454088 = 0x454088; // rom:0x14D088 size:0x4\n")
     cfg = SimpleNamespace(project=SimpleNamespace(root=tmp_path))
     monkeypatch.setattr(pt.config, "rom", lambda _project, _v: tmp_path / "eu.z64")
     spec = ["eu:0x14D044:0x14D094:0x0"]
     with pytest.raises(Refusal) as refusal:
         pt.command(cfg, {"spec": spec, "check": True})  # type: ignore[arg-type]
     (finding,) = refusal.value.findings
-    assert finding.key == "type-pool.text" and "g_earlierContpadFloats_454088" in finding.reason
+    assert finding.key == "type-pool.text" and "g_contpadFloatsUnused_454088" in finding.reason
     assert "'CE_DYNAMIC'" in finding.reason and finding.versions == ("eu",)
     table.write_text("")
     assert pt.command(cfg, {"spec": spec, "check": True})["unfit"] == []  # type: ignore[arg-type]

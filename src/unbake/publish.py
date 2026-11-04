@@ -1049,7 +1049,7 @@ def accept_each(config: Config, checks: Sequence[tuple[Json, Mapping[str, bytes]
 def build(config: Config, versions: Sequence[str]) -> None:
     """Builds the ROM of each given version (one make, each target once) and refuses unless every sha1 matches."""
     with stages.stage("publish.build"):
-        roms = {v: f"build/{v}/{config.project.name}.z64" for v in versions}
+        roms = {v: f"{configuration.root('build')}/{v}/{config.project.name}.z64" for v in versions}
         made = process.make(config, list(roms.values()), config.host.slots or config.host.workers)
         bad = []
         for v, rom in roms.items():

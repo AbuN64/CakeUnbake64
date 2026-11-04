@@ -20,7 +20,15 @@ def cache(host: Host) -> Path | None:
     return None if content is None else content.with_name(f"{content.name}.cc")
 
 
-_REPLAYED = [0]  # stored failures the batches of this process replayed
+_REPLAYED = [0]  # stored failures the batches of the running command replayed
+
+
+def _zero() -> None:
+    """Start each command's replayed count at zero, as stages does for its hits and misses."""
+    _REPLAYED[0] = 0
+
+
+stages.on_command(_zero)
 
 
 def build[Result](start: Callable[[str | None, bool], Result], root: Path, store: Path | None, workers: int) -> Result:

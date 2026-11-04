@@ -133,7 +133,9 @@ def _checked(result: NativeResult, key: str, name: str) -> None:
         raise Refusal(Finding(key, reason))
 
 
-HEADER = "include/include_asm.h"
+def header() -> str:
+    """The INCLUDE_ASM macros' header, in the layout's first header root (Makefile HEADER_ROOT)."""
+    return f"{configuration.header_roots()[0]}/include_asm.h"
 
 
 _CODE_SEGMENTS = frozenset({"code", "c", "asm"})  # splat segment types that hold code
@@ -186,14 +188,14 @@ def init(params: Json) -> Json:
             store.write(root / path, value)
             created.append(path)
 
-        write(HEADER, configuration.template("include_asm.h.in").encode())
+        write(header(), configuration.template("include_asm.h.in").encode())
         for v, source in sorted(roms.items()):
-            path = f"roms/baserom.{v}.z64"
+            path = f"{configuration.root('roms')}/baserom.{v}.z64"
             (root / path).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, root / path)
             created.append(path)
         for v in sorted(roms):
-            rom = f"roms/baserom.{v}.z64"
+            rom = f"{configuration.root('roms')}/baserom.{v}.z64"
             before = set(root.glob("*.yaml"))
             result = process.run(
                 "splat create_config", [str(host.tools["splat"]), "create_config", rom], root, tmp=process.scratch(root)
@@ -496,7 +498,7 @@ def stand_ins(config: Config, current: Any) -> dict[str, bytes | None]:
     Remove stand-ins superseded by C bodies. Guard new stand-ins by the versions that need them: other versions
     may know the name only as another identity of owned bytes, or not at all. Place each after the previous owner
     in its segment (after its stand-in, else at the end), or before the next owner when nothing precedes it
-    (before its stand-in, else after the includes). Create src/<segment>/<ADDR>.<ext> only without any owner.
+    (before its stand-in, else after the includes). Create <source root>/<segment>/<ADDR>.<ext> only without any owner.
     Foreign code goes at the end of its library file, never a game file (libasm.homes). A data name takes the
     section of its neighbour: its bytes were part of that name's until now.
     """
@@ -577,7 +579,7 @@ def stand_ins(config: Config, current: Any) -> dict[str, bytes | None]:
             elsewhere = next((current.owner(o, name) for o in config.project.versions if current.owner(o, name)), None)
             before = [(path, anchor) for at, path, anchor in rows if at < rom]
             after = [(path, anchor) for at, path, anchor in rows if at > rom]
-            new = (f"src/{segment}/{vram:08X}{ext}", None)
+            new = (f"{configuration.source_roots()[0]}/{segment}/{vram:08X}{ext}", None)
             ahead = not elsewhere and not before and bool(after)
             path, anchor = (elsewhere, None) if elsewhere else before[-1] if before else after[0] if after else new
             if not elsewhere and name in library:
@@ -684,8 +686,8 @@ def _generated(config: Config, current: Any) -> dict[str, bytes]:
         **ci.files(),
         **scaffold(configuration.repo(project)),
     }
-    if not (project.root / HEADER).is_file():
-        wanted[HEADER] = configuration.template("include_asm.h.in").encode()
+    if not (project.root / header()).is_file():
+        wanted[header()] = configuration.template("include_asm.h.in").encode()
     return wanted
 
 
@@ -1061,7 +1063,7 @@ def symbols_command(config: Config, params: Json) -> Json:
 
 
 def _extract_stamp(config: Config, v: str) -> Path:
-    return config.project.root / "asm" / v / ".unbake-extract"
+    return config.project.root / configuration.root("asm") / v / ".unbake-extract"
 
 
 def _extracted_key(config: Config, v: str) -> str | None:
@@ -1084,7 +1086,7 @@ def _facts_hash(root: Path, v: str) -> str:
 def _mark_facts(config: Config, v: str) -> None:
     """Record the facts hash in asm/<v>/.extracted (content only: the mark keeps its mtime, which dates the extraction).
     make refuses to compile against a mark whose hash differs from the tree's facts."""
-    mark = config.project.root / "asm" / v / ".extracted"
+    mark = config.project.root / configuration.root("asm") / v / ".extracted"
     if not mark.is_file():
         return
     want = (_facts_hash(config.project.root, v) + "\n").encode()
@@ -1099,14 +1101,18 @@ def _why_path(config: Config, v: str) -> Path:
 
 
 def _asm_manifest_path(config: Config, v: str) -> Path:
-    return config.project.root / "asm" / v / ".unbake-asm.json"
+    return config.project.root / configuration.root("asm") / v / ".unbake-asm.json"
 
 
 def _asm_files(config: Config, v: str) -> dict[str, Path]:
     """What one extraction generates, by project path: asm/<v>/ and the splat files build/<v>/*_auto.txt."""
     root = config.project.root
-    found = [p for p in sorted((root / "asm" / v).rglob("*")) if p.is_file() and not p.name.startswith(".unbake")]
-    found += sorted((root / "build" / v).glob("*_auto.txt"))
+    found = [
+        p
+        for p in sorted((root / configuration.root("asm") / v).rglob("*"))
+        if p.is_file() and not p.name.startswith(".unbake")
+    ]
+    found += sorted((root / configuration.root("build") / v).glob("*_auto.txt"))
     return {str(p.relative_to(root)): p for p in found}
 
 
@@ -1128,8 +1134,9 @@ def _asm_damaged(config: Config, v: str) -> list[str]:
         return []
     base = config.project.root
     damaged = []
+    mark = f"{configuration.root('asm')}/{v}/.extracted"
     for rel, (size, mtime, digest_) in sorted(rows.items()):
-        if rel == f"asm/{v}/.extracted":
+        if rel == mark:
             continue  # the mark's content is the facts hash, rewritten without a new extraction
         try:
             info = (base / rel).stat()
@@ -1147,11 +1154,11 @@ _TEXT = (".s", ".inc", ".h", ".txt", ".ld")
 
 
 def _facts_snapshot(config: Config, v: str) -> Path:
-    return config.project.root / "asm" / v / ".unbake-facts"
+    return config.project.root / configuration.root("asm") / v / ".unbake-facts"
 
 
 def _yaml_snapshot(config: Config, v: str) -> Path:
-    return config.project.root / "asm" / v / ".unbake-yaml"
+    return config.project.root / configuration.root("asm") / v / ".unbake-yaml"
 
 
 def _snapshot_inputs(config: Config, v: str) -> None:
@@ -1316,7 +1323,7 @@ def _extract_why(config: Config, v: str) -> str:
     runs and every file is written) or 'rename: N renames M drops' (the cheap path). Setup reports this beside
     `extracted`, so a round that rewrites all assembly names the input that forced it."""
     root = config.project.root
-    asm = root / "asm" / v
+    asm = root / configuration.root("asm") / v
     if _extracted_key(config, v) == _extract_key(config, v) and asm.is_dir():
         damaged = _asm_damaged(config, v)
         if not damaged:
@@ -1360,7 +1367,7 @@ def _rename_extraction(
     undefined-symbol lists, so the row goes. False when a new name is already in the text, a file that is not text holds
     a name, or a dropped name is used: splat runs instead."""
     root = config.project.root
-    new = root / "asm" / v
+    new = root / configuration.root("asm") / v
     new.mkdir(parents=True, exist_ok=True)
     mapping = {n.encode(): m.encode() for n, m in renames.items()}
     if mapping:
@@ -1399,7 +1406,10 @@ def _rename_extraction(
             except OSError:
                 shutil.copy2(src, dst)
     store.write(new / ".extracted", b"")  # a cold extraction writes a fresh mark
-    for path in [*sorted((root / "build" / v).glob("*_auto.txt")), root / "build" / v / "splat.ld"]:
+    for path in [
+        *sorted((root / configuration.root("build") / v).glob("*_auto.txt")),
+        root / configuration.root("build") / v / "splat.ld",
+    ]:
         try:
             data = path.read_bytes()
         except FileNotFoundError:
@@ -1427,7 +1437,10 @@ def _prune_superseded(config: Config, v: str) -> bool:
     when the facts call that address by another name): readers of the assembly (sync --place) took it for a second
     function reading the same tables. True when a file went."""
     root = config.project.root
-    if not (root / f"versions/{v}/symbol_addrs.txt").is_file() or not (root / "asm" / v / "nonmatchings").is_dir():
+    if (
+        not (root / f"versions/{v}/symbol_addrs.txt").is_file()
+        or not (root / configuration.root("asm") / v / "nonmatchings").is_dir()
+    ):
         return False
     gone = symbols.superseded_asm(root, v, api.symbols(config, v))
     for file in gone:
@@ -1454,20 +1467,20 @@ def extract_job(job: tuple[Config, str]) -> bool:
     (`build.drop_including`). A rename touches a few callers, not every object of the version."""
     config, v = job
     key = _extract_key(config, v)
-    asm = config.project.root / "asm" / v
+    asm = config.project.root / configuration.root("asm") / v
     damaged = _asm_damaged(config, v) if asm.is_dir() else []  # what the last extraction wrote, still as written?
     if asm.is_dir() and _extracted_key(config, v) == key and not damaged:
         _prune_superseded(config, v)  # facts the stamp names cannot leave a file of an earlier name: one put there does
         if not (_facts_snapshot(config, v).exists() and _yaml_snapshot(config, v).exists()):
             _snapshot_inputs(config, v)  # the key says these facts and pieces made this extraction
-        if not (config.project.root / "build" / f".extract-key-{v}").is_file():
+        if not (config.project.root / configuration.root("build") / f".extract-key-{v}").is_file():
             _stamp_make(config, v)  # a tree made before the Makefile skipped unchanged versions
         _mark_facts(config, v)  # the key says these facts made it: an older mark (empty) learns the hash
         return False
     # "Present" is not "correct": what the extraction generated was missing or changed, so it is made again, and the
     # linker scripts built from it (build/<v>/*.ld) go too, for make to render them from the fresh files.
     renames = None if damaged or not asm.is_dir() else _renames(config, v)
-    for old in (config.project.root / "build" / v).glob("*.ld"):
+    for old in (config.project.root / configuration.root("build") / v).glob("*.ld"):
         if renames is None or old.name != "splat.ld":  # a rename extraction renames inside splat.ld, splat does not run
             old.unlink(missing_ok=True)
     before = None if damaged or not asm.is_dir() else _manifest_rows(config, v)
@@ -1503,7 +1516,7 @@ _SPLIT_KIND = "split"  # host cache kind: a version's whole extraction, keyed by
 def _split_files(config: Config, v: str) -> dict[str, Path]:
     """What `make extract-<v>` writes: asm/<v>/ (not unbake records), the splat link script and the _auto lists."""
     found = dict(_asm_files(config, v))
-    ld = config.project.root / "build" / v / "splat.ld"
+    ld = config.project.root / configuration.root("build") / v / "splat.ld"
     if ld.is_file():
         found[str(ld.relative_to(config.project.root))] = ld
     return found
@@ -1515,7 +1528,7 @@ def _save_extraction(config: Config, v: str, key: str) -> None:
     pool re-extractions of one diff each paid ~40 CPU s per version). Best effort."""
     try:
         files = _split_files(config, v)
-        if not (config.project.root / "asm" / v / ".extracted").is_file():
+        if not (config.project.root / configuration.root("asm") / v / ".extracted").is_file():
             return  # a run that did not finish its recipe is no extraction
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w") as tar:
@@ -1545,10 +1558,13 @@ def _restore_extraction(config: Config, v: str, key: str) -> bool:
     try:
         with tarfile.open(fileobj=io.BytesIO(blob), mode="r") as tar:
             members = [m for m in tar.getmembers() if m.isreg()]
-            if not any(m.name == f"asm/{v}/.extracted" for m in members):
+            mark = f"{configuration.root('asm')}/{v}/.extracted"
+            if not any(m.name == mark for m in members):
                 return False
             for m in members:
-                if ".." in Path(m.name).parts or not m.name.startswith((f"asm/{v}/", f"build/{v}/")):
+                if ".." in Path(m.name).parts or not m.name.startswith(
+                    (f"{configuration.root('asm')}/{v}/", f"{configuration.root('build')}/{v}/")
+                ):
                     raise tarfile.TarError(m.name)
                 target = root / m.name
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -1563,7 +1579,7 @@ def _restore_extraction(config: Config, v: str, key: str) -> bool:
     except (OSError, tarfile.TarError):
         for path in written:
             path.unlink(missing_ok=True)
-        shutil.rmtree(root / "asm" / v, ignore_errors=True)
+        shutil.rmtree(root / configuration.root("asm") / v, ignore_errors=True)
         return False
     return True
 
@@ -1595,7 +1611,7 @@ def _keep_unchanged(config: Config, v: str, before: Mapping[str, list[Any]] | No
     setup reports it (`why`) so a round that rebuilds every object names the file that forced it."""
     if before is None:
         return "whole version rebuilds: no record of the last extraction to compare"
-    root, prefix = config.project.root, f"asm/{v}/"
+    root, prefix = config.project.root, f"{configuration.root('asm')}/{v}/"
     mark = f"{prefix}.extracted"
     changed, includes = [rel for rel in before if not (root / rel).exists()], {}
     for rel, path in _asm_files(config, v).items():

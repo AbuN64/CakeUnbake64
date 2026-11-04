@@ -21,7 +21,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
-from unbake import collapse
+from unbake import collapse, leftover
 
 _ZERO = re.compile(r"(?:0[xX]0*|0+)[uUlL]*")
 _COMMENT_OR_STRING = re.compile(r"(\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*')|/\*.*?\*/|//[^\n]*", re.S)
@@ -203,3 +203,49 @@ def pads(text: str, versions: Sequence[str], known: Mapping[str, Collection[str]
         out.append(line)
     result.text = "\n".join(out if drop else kept)
     return result
+
+
+# Filler words (R2a): word arrays between two tables, named only by a number or ordinal word, are one table each run,
+# named for the definition they trail (`<that>Tail`), else the one they lead (`<that>Head`); the bytes stay.
+_WORDS = re.compile(r"^(unsigned int|u32|s32|int)\s+(\w+)\[(\d+)\]\s*=\s*\{([^{}]*)\};[ \t]*\n?", re.M)
+_DEFINES = re.compile(r"(?:^|\})\s*([A-Za-z_]\w*)\s*(?:\[[^\]]*\])*\s*=\s*\{", re.M)
+_QUIET = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+
+
+def fillers(text: str) -> dict[str, list[str]]:
+    """`table -> [rows]` for each run of filler-word arrays (one type, nothing but blanks and comments between them)."""
+    found = [m for m in _WORDS.finditer(text) if leftover.told_by_number(m[2])]
+    runs: list[list[re.Match[str]]] = []
+    for m in found:
+        last = runs[-1][-1] if runs else None
+        if last and last[1] == m[1] and not _QUIET.sub("", text[last.end() : m.start()]).strip():
+            runs[-1].append(m)
+        else:
+            runs.append([m])
+    out: dict[str, list[str]] = {}
+    for run in runs:
+        before = [d[1] for d in _DEFINES.finditer(text, 0, run[0].start())]
+        after = [d[1] for d in _DEFINES.finditer(text, run[-1].end())]
+        table = f"{before[-1]}Tail" if before else f"{after[0]}Head" if after else None
+        if table is None or table in out:
+            raise ValueError(f"{run[0][2]}: no definition beside it names a unique place")
+        out[table] = [m[2] for m in run]
+    return out
+
+
+def name_fillers(text: str) -> tuple[str, dict[str, list[str]]]:
+    """The text with each filler run of `fillers` written as one table (the words of every row in order, so the bytes
+    stay) and every use of an old row spelled as its cell `table[i]`; with the `Merged` record renameproof replays."""
+    merged = fillers(text)
+    rows = {m[2]: m for m in _WORDS.finditer(text)}
+    for table, names in merged.items():
+        first, last = rows[names[0]], rows[names[-1]]
+        words = [w.strip() for n in names for w in rows[n][4].split(",") if w.strip()]
+        body = "".join(f"    {w},\n" for w in words)
+        text = text.replace(text[first.start() : last.end()], f"{first[1]} {table}[{len(words)}] = {{\n{body}}};\n", 1)
+        at = 0
+        for n in names:
+            text = re.sub(rf"\b{re.escape(n)}\b", f"(&{table}[{at}])" if at else table, text)
+            at += int(rows[n][3])
+        rows = {m[2]: m for m in _WORDS.finditer(text)}
+    return text, merged

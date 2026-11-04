@@ -105,6 +105,11 @@ subsystem_source = "src/game/{subsystem}"
 library_source = "src/sdk/{library}"
 source_roots = ["src"]
 header_roots = ["include"]
+asm_root = "asm"  # the extracted assembly, asm/<version>/ (config.root)
+build_root = "build"  # the build output, build/<version>/
+roms_root = "roms"  # the base ROMs, roms/baserom.<version>.z64
+unused_root = "unused"  # where data nothing reads keeps its C, numbered and address names allowed (leftover.py)
+region_gap = 16  # most bytes between two rows of one contiguous region (leftover.regions)
 module_cap = 32  # most functions an inferred module holds
 
 [readme]

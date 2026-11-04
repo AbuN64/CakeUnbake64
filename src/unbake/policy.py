@@ -36,6 +36,7 @@ from unbake import (
     treelock,
     versions,
 )
+from unbake import config as configuration
 from unbake import view as _view
 from unbake.contracts import Finding, Json, Refusal, Snapshot, SourceView, UnitSpec, code_identity, digest
 
@@ -333,6 +334,12 @@ def _scalar(unit: str, name: str) -> bool:
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*["<]([^">]+)[">]', re.M)
 
 
+def _candidates(at: str, name: str) -> list[str]:
+    """Where an `#include "NAME"` written in AT may live: under a header root, beside AT, under a source root."""
+    roots = (*configuration.header_roots(), Path(at).parent.as_posix(), *configuration.source_roots())
+    return list(dict.fromkeys(f"{top}/{name}" for top in roots))
+
+
 def _included(snapshot: Snapshot, path: str, code: str) -> str:
     """The module's text and the text of every project header it includes, transitively (no preprocessor run: what
     a check without a source view can read of the declarations the module sees)."""
@@ -340,7 +347,7 @@ def _included(snapshot: Snapshot, path: str, code: str) -> str:
     while todo and len(seen) < 400:
         at, text = todo.pop()
         for name in _INCLUDE.findall(text):
-            for candidate in (f"include/{name}", f"{Path(at).parent.as_posix()}/{name}", f"src/{name}"):
+            for candidate in _candidates(at, name):
                 if candidate in seen:
                     break
                 data = snapshot.peek(candidate)

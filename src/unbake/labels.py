@@ -19,7 +19,8 @@ difference of the run and the table. Evidence rules:
 - A word that is an offset without the segment bits (24 bits) is no address of the image: it is listed with the reason
   and never matched.
 
-The names are `g_earlier_<owner>` for the owner's start and `g_earlier_<owner>_<offset in hex>` for a label inside it,
+The names are `g_<owner><Mark>` for the owner's start and `g_<owner><Mark>_<offset in hex>` for a label inside it, where
+<Mark> is the unused tree's word (`leftover.marker`), the only place a name may carry a number,
 the way splat names a label after its function; the comment of a row says which current table the row came from."""
 
 from __future__ import annotations
@@ -33,14 +34,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from unbake import config, windows
+from unbake import config, leftover, windows
 from unbake.contracts import Config, Finding, Json, Refusal
 from unbake.pointertype import RAM
 
 MIN_ENTRIES = 4  # the fewest words of a run (and of a current table) that identify a table
 SEGMENTLESS = 0x00100000  # a word below RAM and from here up is an offset with the segment bits dropped
 _SHOWN = 4  # the most tables and symbols listed for one refusal
-PREFIX = "g_earlier_"
 _SYMBOL = re.compile(r"^(\w+)\s*=\s*0x([0-9A-Fa-f]+);")
 
 
@@ -198,7 +198,7 @@ def candidates(run: Run, tables: Sequence[Table]) -> tuple[list[tuple[Table, int
     return fits, None if best is None else best[1]
 
 
-def claim(run: Run, table: Table, shift: int, delta: int) -> dict[str, int]:
+def claim(run: Run, table: Table, shift: int, delta: int, mark: str) -> dict[str, int]:
     """name -> older address of every label of the run and the start of every function it lies in."""
     out: dict[str, int] = {}
     for i, word in enumerate(run.words):
@@ -206,14 +206,14 @@ def claim(run: Run, table: Table, shift: int, delta: int) -> dict[str, int]:
         if not word or owner is None:
             continue
         cur = table.words[shift + i]
-        out[_name(owner, cur - owner.start)] = word
+        out[_name(owner, cur - owner.start, mark)] = word
         if owner.function:
-            out[_name(owner, 0)] = owner.start + delta
+            out[_name(owner, 0, mark)] = owner.start + delta
     return out
 
 
-def _name(owner: Owner, offset: int) -> str:
-    return PREFIX + owner.name + (f"_{offset:X}" if offset else "")
+def _name(owner: Owner, offset: int, mark: str) -> str:
+    return f"g_{owner.name}{mark}" + (f"_{offset:X}" if offset else "")
 
 
 def _known(text: str) -> dict[str, int]:
@@ -225,7 +225,9 @@ def _known(text: str) -> dict[str, int]:
     return out
 
 
-def decide(run: Run, order: Sequence[str], tables: Mapping[str, Sequence[Table]]) -> tuple[Json, dict[str, int] | None]:
+def decide(
+    run: Run, order: Sequence[str], tables: Mapping[str, Sequence[Table]], mark: str
+) -> tuple[Json, dict[str, int] | None]:
     """(row, claim): the run matched, or the row of its refusal. The first version in `order` with a fitting table
     decides; its tables must all give the same symbols."""
     miss: dict[str, Any] | None = None
@@ -235,7 +237,7 @@ def decide(run: Run, order: Sequence[str], tables: Mapping[str, Sequence[Table]]
             miss = {**near, "version": version}
         if not fits:
             continue
-        claims = [claim(run, t, s, d) for t, s, d in fits]
+        claims = [claim(run, t, s, d, mark) for t, s, d in fits]
         first = claims[0]
         apart = sorted({k for c in claims[1:] for k in c.keys() | first.keys() if c.get(k) != first.get(k)})
         if apart:
@@ -286,7 +288,7 @@ def image(root: Path, project: str, version: str) -> tuple[Owners, list[tuple[in
     from elftools.elf.elffile import ELFFile
     from elftools.elf.sections import SymbolTableSection
 
-    path = root / "build" / version / f"{project}.elf"
+    path = root / config.root("build") / version / f"{project}.elf"
     if not path.is_file():
         return None
     with path.open("rb") as handle:
@@ -350,7 +352,7 @@ def command(cfg: Config, params: Json) -> Json:
             if len(run.words) < MIN_ENTRIES:
                 unfit.append({**where, "why": f"fewer than {MIN_ENTRIES} entries identify no table"})
                 continue
-            row, got = decide(run, order, tables)
+            row, got = decide(run, order, tables, leftover.marker(config.layout(cfg.project)))
             if got is None:
                 unfit.append({**where, **row})
             else:

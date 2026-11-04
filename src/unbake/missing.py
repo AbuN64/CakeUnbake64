@@ -14,6 +14,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from unbake import config as configuration
 from unbake import store, symbols, versions
 from unbake.contracts import Config, Json
 
@@ -64,7 +65,7 @@ def _spelled_in_c(config: Config) -> dict[str, list[tuple[str, int, str]]]:
     them whichever version it is built for, so a real name for the place must leave them defined."""
     root = config.project.root
     found: dict[str, list[tuple[str, int, str]]] = defaultdict(list)
-    for folder in ("src", "include"):
+    for folder in (*configuration.source_roots(), *configuration.header_roots()):
         for file in sorted((root / folder).rglob("*")):
             if file.is_file() and file.suffix.lower() in (".c", ".cpp", ".h"):
                 rel = file.relative_to(root).as_posix()

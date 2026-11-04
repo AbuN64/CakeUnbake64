@@ -48,7 +48,7 @@ _STAND_IN = re.compile(r'\.include\s+"(?:nonmatchings|data)/[^/"]+/([^/"]+)\.s"'
 # ---------------------------------------------------------------- the records
 @dataclass(frozen=True)
 class Module:
-    path: str  # "src/IO/80200500.CPP"
+    path: str  # "SOURCE/IO/80200500.CPP", under a layout source root
     segment: str
     owns: Mapping[str, tuple[str, ...]]  # version -> names in file order (C definitions + stand-ins)
     fuzzy: tuple[str, ...]  # names with a NON_MATCHING body
@@ -542,7 +542,7 @@ class _Headers:
                         *(f"{d}/{name}" for d in extra),
                         f"include/{name}",
                         f"{directory}/{name}",
-                        f"asm/{version}/include/{name}",
+                        f"{configuration.root('asm')}/{version}/include/{name}",
                     )
                     if self.read(p) is not None
                 ),
@@ -800,7 +800,8 @@ def _materialize(home: Path, overlays: Mapping[str, bytes | None] | None) -> tup
         target.parent.mkdir(parents=True, exist_ok=True)
         target.unlink(missing_ok=True)  # never write through a link into the real tree
         target.write_bytes(content)
-    return (f"-I{home / 'include'}", f"-I{home / 'src'}") if written else ()
+    tops = (configuration.header_roots()[0], configuration.source_roots()[0])
+    return tuple(f"-I{home / top}" for top in tops) if written else ()
 
 
 def _preprocess(

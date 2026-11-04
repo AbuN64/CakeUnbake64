@@ -198,7 +198,7 @@ def _index(root: Path, v: str) -> dict[str, list[Path]]:
     key = (str(root), v)
     if key not in _INDEX:
         index: dict[str, list[Path]] = {}
-        for file in sorted((root / "asm" / v / "nonmatchings").rglob("*.s")):
+        for file in sorted((root / configuration.root("asm") / v / "nonmatchings").rglob("*.s")):
             for word in set(_WORD.findall(file.read_text(errors="replace"))):
                 index.setdefault(word, []).append(file)
         _INDEX[key] = index
@@ -646,7 +646,7 @@ def _placed(root: Path, v: str, path: str, own: str, table: Mapping[str, Any], r
     """The refusal when the built object of the file is newer than its source and its .rodata is not the size of the
     `literals_` placement it already has (the link would overlap the next piece or leave a hole); "" when the sizes
     agree or the object is not built after the last edit (then the link proves it)."""
-    obj, src = root / "build" / v / f"{path}.o", root / path
+    obj, src = root / configuration.root("build") / v / f"{path}.o", root / path
     if not obj.is_file() or not src.is_file() or obj.stat().st_mtime < src.stat().st_mtime:
         return ""
     read = _elf(obj)
@@ -663,7 +663,7 @@ def _placed(root: Path, v: str, path: str, own: str, table: Mapping[str, Any], r
 
 def _object(root: Path, v: str, path: str, image: bytes, rom: int, end: int, vram: int) -> tuple[str, str]:
     """(note, refusal) from the built object of the file: its .rodata must fit the ROM bytes it takes the place of."""
-    obj = root / "build" / v / f"{path}.o"
+    obj = root / configuration.root("build") / v / f"{path}.o"
     src = root / path
     if not obj.is_file() or not src.is_file() or obj.stat().st_mtime < src.stat().st_mtime or not image:
         return "object not built after the last edit: the link proves the bytes", ""

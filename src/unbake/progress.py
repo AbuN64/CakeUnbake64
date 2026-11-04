@@ -63,7 +63,7 @@ def header(raw: bytes) -> Json:
 
 def _header(config: Any, version: str) -> Json:
     """The header fields of a version's ROM: the same file the ROM partition measured."""
-    with (Path(config.project.root) / "roms" / f"baserom.{version}.z64").open("rb") as rom:
+    with (Path(config.project.root) / configuration.root("roms") / f"baserom.{version}.z64").open("rb") as rom:
         return header(rom.read(0x40))
 
 

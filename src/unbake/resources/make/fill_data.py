@@ -2,15 +2,15 @@
 # last word and whole tiny pieces, so each extracted data file is rewritten as its ROM slice, every label kept at its
 # offset (from the ROM column of the line after it).
 import os, re, sys
-v = sys.argv[1]
-rom = open("roms/baserom.%s.z64" % v, "rb").read()
+asm, roms, v = sys.argv[1:4]  # the layout's asm and roms roots (Makefile ASM, ROMS)
+rom = open("%s/baserom.%s.z64" % (roms, v), "rb").read()
 rows = []
 for line in open("versions/%s/splat.yaml" % v):
     m = re.match(r"\s+- \[0x([0-9A-Fa-f]+)(?:, (\w+), (\S+))?\]", line) or re.match(r"\s+start: 0x([0-9A-Fa-f]+)()()", line)
     if m:
         rows.append((int(m.group(1), 16), m.group(2), m.group(3)))
 for (start, kind, name), (end, _, _) in zip(rows, rows[1:]):
-    path = "asm/%s/data/%s.s" % (v, name)
+    path = "%s/%s/data/%s.s" % (asm, v, name)
     if kind not in ("data", "rodata") or not os.path.exists(path):
         continue
     head, labels, waiting = [], [], []

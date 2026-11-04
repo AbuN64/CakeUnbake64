@@ -47,14 +47,14 @@ def test_generated_guards_and_header_folders_share_the_path_universe():
         "src/game/MENU/a.c": "int func_80200000(void) { return 0; }\n",
         "src/sdk/a.s": "glabel assembly_function\n",
     }
-    got = symbol_names.census(texts, "a" * 40)
+    got = symbol_names.census(texts, "a" * 40, {"unused_root": "unused"})
     assert {p["path"] for p in got["paths"]} == set(texts)
     assert "include/MENU_2" in got["folders"]["header"]
     assert "include/MENU_2" not in got["folders"]["source"]
     assert [d["name"] for d in got["declarations"] if d["guard"]] == ["MENU_80200000_H"]
     assert any(d["name"] == "D_blob_80200000" for d in got["declarations"])
     assert got["semantic_acceptance"] is False
-    assert symbol_names.census(dict(reversed(list(texts.items()))), "a" * 40) == got
+    assert symbol_names.census(dict(reversed(list(texts.items()))), "a" * 40, {"unused_root": "unused"}) == got
 
 
 def test_inactive_definitions_and_pointer_parameters_do_not_merge():
@@ -105,11 +105,11 @@ def test_real_extern_census_keeps_header_source_and_conditional_identities():
         ),
         "src/language.cpp": "#if VERSION_EU\nu8 g_languageIndex = 0;\n#else\nu8 g_languageIndex = 1;\n#endif\n",
     }
-    result = symbol_names.census(texts, "482b437b9a553d554de3ddaa68add8bfb867fbdf")
+    result = symbol_names.census(texts, "482b437b9a553d554de3ddaa68add8bfb867fbdf", {"unused_root": "unused"})
     rows = result["declarations"]
     assert len(rows) == 5
     assert sum(row["definition"] for row in rows) == 2
     assert all(row["definition"] == (row["path"] == "src/language.cpp") for row in rows)
     assert len({(*row["identity"][:2], row["offset"]) for row in rows}) == 5
     assert result["semantic_acceptance"] is False
-    assert symbol_names.census(texts, result["revision"]) == result
+    assert symbol_names.census(texts, result["revision"], {"unused_root": "unused"}) == result

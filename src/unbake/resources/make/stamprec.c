@@ -15,7 +15,7 @@
  * a command to start or one of the file operations the chain used to start a process for (`@rotate`, `@compile`,
  * `@nonempty`, `@jumptable`, `@settle`, `@out`: cc_cache.object_file lists them).
  *
- *   stamprec object OUT VERSION FACTS CHANGED TEXTSIZE FLAGS STAMPREC [EXTRACTED...] -- PROGRAM...
+ *   stamprec object OUT EXTRACTION FACTS CHANGED TEXTSIZE FLAGS STAMPREC [EXTRACTED...] -- PROGRAM...
  */
 /* The unbake release this tool was built from (the Makefile passes -DTOOLS_RELEASE): `stamprec version` prints it so a
  * Makefile of another release refuses the tool at once; a build without it is "unversioned" and so never matches. */
@@ -188,7 +188,12 @@ static int record(const char *path, char **extracted, int given) {
     i = snprintf(line, sizeof line, "[\"%s\", %lld, \"%s\"]\n", path,
                  (long long)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec, key);
     if (i < 0 || i >= (int)sizeof line) return 2;
-    fd = open("build/.inputs.log", O_WRONLY | O_APPEND | O_CREAT, 0644);
+    {   /* the log sits in the build root, the first folder of PATH (an object or stamp under <build root>/<v>/) */
+        const char *slash = strchr(path, '/');
+        char log[4200];
+        if (!slash || snprintf(log, sizeof log, "%.*s/.inputs.log", (int)(slash - path), path) >= (int)sizeof log) return 2;
+        fd = open(log, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    }
     if (fd < 0) return 1;
     if (write(fd, line, (size_t)i) != i) { close(fd); return 1; }
     close(fd);
@@ -570,7 +575,7 @@ static int step(Object *x, char **w) {
     return spawn(w, 0);
 }
 
-/* object OUT VERSION FACTS CHANGED TEXTSIZE FLAGS STAMPREC [EXTRACTED...] -- PROGRAM...: cc_cache.object_file, step for step */
+/* object OUT EXTRACTION FACTS CHANGED TEXTSIZE FLAGS STAMPREC [EXTRACTED...] -- PROGRAM...: cc_cache.object_file, step for step */
 static int object(int argc, char **argv) {
     char *out = argv[2], *version = argv[3], *facts = argv[4], *changed = argv[5], *textsize = argv[6];
     char *flags = argv[7];
@@ -584,15 +589,15 @@ static int object(int argc, char **argv) {
     while (program < argc && strcmp(argv[program], "--")) program++;
     if (program >= argc - 1) return 64;
     extracted = program - 9;
-    if (strlen(out) < 3 || strlen(out) > 4000 || strlen(version) > 100) return 64;
-    snprintf(path, sizeof path, "asm/%s/.extracted", version);
+    if (strlen(out) < 3 || strlen(out) > 4000 || strlen(version) > 4000) return 64;
+    snprintf(path, sizeof path, "%s/.extracted", version);  /* VERSION is the extraction folder, <asm root>/<v> */
     old = slurp(path, &size);
     snprintf(made, sizeof made, "%s", old ? old : "");
     free(old);
     for (n = (long)strlen(made); n && made[n - 1] == '\n';) made[--n] = 0;
     if (made[0] && strcmp(made, facts)) {
-        fprintf(stderr, "asm/%s was extracted from other symbol_addrs.txt/splat.yaml than this tree holds (%s, now %s): run make extract-%s\n",
-                version, made, facts, version);
+        fprintf(stderr, "%s was extracted from other symbol_addrs.txt/splat.yaml than this tree holds (%s, now %s): run make extract-%s\n",
+                version, made, facts, strrchr(version, '/') ? strrchr(version, '/') + 1 : version);
         return 1;
     }
     sha_init(&c);

@@ -15,7 +15,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
-from unbake import api, build, fakematch, process, symbols, tree
+from unbake import api, build, fakematch, leftover, process, symbols, tree
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Json, Refusal, digest
 
@@ -379,8 +379,8 @@ def cheat_command(config: Config, params: Json) -> Json:
         findings.append(
             Finding(
                 "cheat.infra",
-                "build/compare infrastructure changed (ci/, tools/, asm/, roms/, the platform file, local.mk and the"
-                " macros of include_asm.h are infrastructure; a declaration line in a header is not; a project data"
+                "build and compare infrastructure changed (ci/, tools/, asm/, roms/, the platform file, local.mk and"
+                " the macros of include_asm.h are infrastructure; a declaration line in a header is not; a project data"
                 " file, such as findings, notes or a feed, lives in docs/)",
                 missing=tuple(infra),
             )
@@ -388,7 +388,7 @@ def cheat_command(config: Config, params: Json) -> Json:
     if git("diff", "--name-only", base, head, "--", *rules["blobs"]).strip():
         blobs = import_module("unbake.blobs")
         findings.extend(blobs.verify(config, git("show", f"{base}:{blobs.path_of(config)}", ok=(0, 128)).encode()))
-    rows = re.compile(rules["makefile_row"])
+    rows = re.compile(leftover.row_pattern(rules["makefile_row"], configuration.layout(config.project)))
     changed = [
         ln
         for ln in git("diff", "-U0", base, head, "--", "Makefile").splitlines()

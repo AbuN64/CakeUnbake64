@@ -191,7 +191,7 @@ def batches(units: Mapping[str, frozenset[Unit]]) -> list[list[str]]:
 
 
 def target(unit: Unit) -> str:
-    return f"build/{unit[0]}/{unit[1]}.o"
+    return f"{configuration.root('build')}/{unit[0]}/{unit[1]}.o"
 
 
 def _sha(path: Path) -> str | None:
@@ -922,7 +922,7 @@ def seams(cfg: Config) -> Seams:
     def units() -> dict[str, list[str]]:
         found: dict[str, list[str]] = {}
         for v in cfg.project.versions:
-            home = root / "build" / v
+            home = root / configuration.root("build") / v
             rel = (o.relative_to(home).with_suffix("").as_posix() for o in sorted(home.rglob("*.o")) if home.is_dir())
             found[v] = [
                 u
@@ -948,7 +948,7 @@ def seams(cfg: Config) -> Seams:
     def lane(index: int, files: Collection[str]) -> tuple[Path, Seams]:
         home = process.state(root) / "lanes" / str(index)
         _farm(root, home, files, skip=(process.state(root).name, "build", "local.mk"))
-        (home / "build").mkdir()
+        (home / configuration.root("build")).mkdir()
         own = replace(cfg, project=replace(cfg.project, root=home))
 
         def make_in(targets: Sequence[str]) -> tuple[int, str]:

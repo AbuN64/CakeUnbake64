@@ -458,7 +458,7 @@ class Version:
 
 @dataclass(frozen=True)
 class UnitSpec:
-    path: str  # project-relative source file, e.g. "src/code_80200610.c"
+    path: str  # project-relative source file, e.g. "SOURCE/IO/80200500.CPP"
     kind: str  # id from resources/data/units.toml: "c" | "asm" | "data" | "resource"
     members: tuple[str, ...]  # contiguous run in ROM, address order
     toolchain: str

@@ -298,6 +298,7 @@ def test_the_command_set_is_the_C9_set() -> None:
         "type-pool",
         "type-pointers",
         "reconstruct-labels",
+        "region-census",
     }
     assert [p["name"] for p in COMMANDS["sync"]["params"]] == ["check", "settle", "makefile", "place"]
 
@@ -432,6 +433,16 @@ def test_every_result_carries_the_cache_counts_of_its_command_even_when_short(
             "kinds": {"build": {"hits": 0, "misses": 2}, "score": {"hits": 1, "misses": 0}},
             "replayed": 0,
         }
+
+
+def test_the_replayed_count_is_the_running_commands_own(monkeypatch: Patch, capsys: Capture) -> None:
+    """A count an earlier command left in this process must not reach the next command's `cache`."""
+    monkeypatch.setattr(cli.front, "_REPLAYED", [2])
+    monkeypatch.setattr(cli, "_handler", lambda name: lambda cfg, params: {"unit": "src/f.c", "exact": False})
+    monkeypatch.setattr(cli.config, "load", lambda root, host: object())
+    monkeypatch.setattr(cli.effort, "bind", lambda cfg: None)
+    cli.main(["score", "f.c", "--host", "host.toml"])
+    assert _envelope(capsys.readouterr().out)["cache"]["replayed"] == 0
 
 
 def test_a_refused_command_still_reports_its_cache_counts(monkeypatch: Patch, capsys: Capture) -> None:

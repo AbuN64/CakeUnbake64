@@ -80,7 +80,7 @@ def test_a_run_fits_a_table_with_one_delta_and_the_same_zero_pattern():
 def test_labels_that_disagree_on_the_delta_are_refused_with_the_measured_closest_table():
     tab = table(0x80001000, 0x80001010, 0x80001020, 0x80001204)
     run = labels.Run(0, (0x80001400, 0x80001410, 0x80001420, 0x80001999))
-    row, got = labels.decide(run, ["eu"], {"eu": [tab]})
+    row, got = labels.decide(run, ["eu"], {"eu": [tab]}, "Unused")
     assert got is None
     assert row["closest"] == {
         "table": "t",
@@ -96,15 +96,15 @@ def test_labels_that_disagree_on_the_delta_are_refused_with_the_measured_closest
 def test_a_match_names_each_label_by_its_owner_and_gives_the_function_start_the_same_delta():
     tab = table(0x80001010, 0x80001020, 0x80001204, 0x80002010)
     run = labels.Run(0, tuple(w + 0x400 for w in tab.words))
-    row, got = labels.decide(run, ["eu"], {"eu": [tab]})
+    row, got = labels.decide(run, ["eu"], {"eu": [tab]}, "Unused")
     assert row == {"version": "eu", "table": "t", "table_at": "0x80002100", "copies": 1, "delta": 0x400}
     assert got == {
-        "g_earlier_f_a": 0x80001400,
-        "g_earlier_f_a_10": 0x80001410,
-        "g_earlier_f_a_20": 0x80001420,
-        "g_earlier_f_b_4": 0x80001604,
-        "g_earlier_f_b": 0x80001600,
-        "g_earlier_d_one_10": 0x80002410,
+        "g_f_aUnused": 0x80001400,
+        "g_f_aUnused_10": 0x80001410,
+        "g_f_aUnused_20": 0x80001420,
+        "g_f_bUnused_4": 0x80001604,
+        "g_f_bUnused": 0x80001600,
+        "g_d_oneUnused_10": 0x80002410,
     }
 
 
@@ -112,12 +112,12 @@ def test_copies_that_give_the_same_symbols_decide_and_tables_that_give_other_sym
     one = table(0x80001010, 0x80001020, 0x80001030, 0x80001040)
     run = labels.Run(0, tuple(w + 0x400 for w in one.words))
     same = {"eu": [one, table(*one.words, at=0x80002200, name="u")]}
-    assert labels.decide(run, ["eu"], same)[0]["copies"] == 2
+    assert labels.decide(run, ["eu"], same, "Unused")[0]["copies"] == 2
     other = table(0x80001010, 0x80001020, 0x80001030, 0x80001040)
     other = labels.Table(
         "eu", 0x80002300, other.words, tuple(labels.Owner("f_z", 0x80001000, True) for _ in other.words), "v"
     )
-    row, got = labels.decide(run, ["eu"], {"eu": [one, other]})
+    row, got = labels.decide(run, ["eu"], {"eu": [one, other]}, "Unused")
     assert got is None and row["why"].startswith("ambiguous") and row["tables"] == 2 and row["differ"]
 
 
@@ -125,12 +125,12 @@ def test_the_runs_own_version_decides_before_the_others():
     a = table(0x80001010, 0x80001020, 0x80001030, 0x80001040, name="own")
     b = table(0x80001010, 0x80001020, 0x80001030, 0x80001040, name="other")
     run = labels.Run(0, tuple(w + 0x400 for w in a.words))
-    assert labels.decide(run, ["eu-x", "eu"], {"eu": [b], "eu-x": [a]})[0]["table"] == "own"
-    assert labels.decide(run, ["us", "eu"], {"eu": [b]})[0]["table"] == "other"
+    assert labels.decide(run, ["eu-x", "eu"], {"eu": [b], "eu-x": [a]}, "Unused")[0]["table"] == "own"
+    assert labels.decide(run, ["us", "eu"], {"eu": [b]}, "Unused")[0]["table"] == "other"
 
 
 def test_a_run_that_fits_nothing_is_refused_without_a_closest_row():
-    row, got = labels.decide(labels.Run(0, (0x80001000,) * 4), ["eu"], {})
+    row, got = labels.decide(labels.Run(0, (0x80001000,) * 4), ["eu"], {}, "Unused")
     assert got is None and row == {"why": "no current table has these entries with one delta"}
 
 
@@ -168,7 +168,7 @@ def test_the_command_writes_the_symbols_of_a_matched_run_once_with_the_table_as_
     assert got["labels"] == 6 and got["symbols"] == {"eu": 6} and got["tables"][0]["table"] == "d_one"
     assert [u["why"] for u in got["unfit"]] == ["fewer than 4 entries identify no table"]
     text = (tmp_path / "versions/eu/earlier_build_symbols.txt").read_text()
-    assert "g_earlier_f_a_10 = 0x80001410; // from eu d_one@0x80002100" in text
+    assert "g_f_aUnused_10 = 0x80001410; // from eu d_one@0x80002100" in text
     # a key:value word in a comment is a splat attribute, so provenance carries none
     assert not [c for c in (ln.partition("//")[2] for ln in text.splitlines()) if ":" in c]
     labels.command(cfg, params)

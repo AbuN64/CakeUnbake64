@@ -895,7 +895,7 @@ def _quick_owner(config: Config, version: str, name: str, extras: Mapping[str, b
     root, word = config.project.root, name.encode()
     defined: list[str] = []
     standing: list[str] = []
-    for folder, _, names in os.walk(root / "src"):
+    for folder, _, names in (row for top in configuration.source_roots() for row in os.walk(root / top)):
         for file in names:
             if not file.lower().endswith(tree.SOURCE_SUFFIXES):
                 continue

@@ -30,6 +30,7 @@ from unbake import (
     snpage,
     snsym,
 )
+from unbake import config as configuration
 from unbake.contracts import Config, Json
 
 SHORT_COPY = 8  # the fewest bytes of a whole leftover stretch that equals accounted bytes (a table tail, a cut record)
@@ -332,7 +333,9 @@ def scan(config: Config) -> Json:
     `unbake blobs prove` takes (without an id or its evidence), the pieces it could not rebuild and the bytes left."""
     tree = import_module("unbake.tree").capture(config)
     parts = import_module("unbake.report").partitions(config, tree)
-    roms = {v: (Path(config.project.root) / "roms" / f"baserom.{v}.z64").read_bytes() for v in parts}
+    roms = {
+        v: (Path(config.project.root) / configuration.root("roms") / f"baserom.{v}.z64").read_bytes() for v in parts
+    }
     spans = {v: accounted(p) for v, p in parts.items()}
     windows = index(roms, spans)
     text_sources = text_index(roms, spans)

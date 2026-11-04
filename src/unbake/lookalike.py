@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from unbake import cheaders
+from unbake import config as configuration
 
 _LIMIT = 3  # records named in one hint
 _Index = dict[str, list[tuple[str, int | None, set[tuple[int, int]]]]]
@@ -37,7 +38,7 @@ def _index(root: Path) -> tuple[cheaders.Headers, _Index]:
                     by_size.setdefault(str(size), []).append((f"{name} ({where})", size, fields))
 
     keep(base, [n for n in base._raw if not n.startswith("_")], "headers")
-    for path in sorted((root / "src").rglob("*")):
+    for path in sorted(p for top in configuration.source_roots() for p in (root / top).rglob("*")):
         if path.suffix.lower() not in (".c", ".cpp", ".h"):
             continue
         text = path.read_text(errors="replace")

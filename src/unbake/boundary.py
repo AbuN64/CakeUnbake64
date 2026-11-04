@@ -300,7 +300,7 @@ def _stand_ins(config: Config, names: Sequence[str]) -> tuple[dict[str, str], li
     from unbake import widen
 
     root = config.project.root
-    files = widen.files_spelling(config, names, ("src", "include"))
+    files = widen.files_spelling(config, names, (*configuration.source_roots(), *configuration.header_roots()))
     texts: dict[str, str] = {}
     spelled: set[str] = set()
     for path in files:

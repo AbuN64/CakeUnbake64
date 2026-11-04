@@ -308,6 +308,7 @@ handler = "folders.run"
 params = [
   { name = "action", kind = "argument", type = "str", required = true, multiple = false, help = "plan | apply | literals | carry | verify | reorg | header | collapse | mergecheck | merge | split | pads | fill" },
   { name = "rules", kind = "option", type = "path", required = false, multiple = false, help = "plan: the rules file ([[rule]] rows: match, to, optional row)" },
+  { name = "unused", kind = "option", type = "path", required = false, multiple = false, help = "plan: units whose data nothing reads, one path per line; each moves to its unused home under the layout's unused_root" },
   { name = "map", kind = "option", type = "path", required = false, multiple = false, help = "plan, reorg: old<TAB>new paths; header: reviewed header identity rows (old equals new) to normalize guards as one batch" },
   { name = "file", kind = "option", type = "path", required = false, multiple = false, help = "header: tracked source whose exports go to its header, or tracked header whose guard is normalized; collapse: one source; split: the unit to split" },
   { name = "modules", kind = "option", type = "path", required = false, multiple = false, help = "mergecheck, merge: a module map, a TSV with a header row holding `unit` and `module` columns and optionally `target` (the path of the module's merged file); split: also rewritten" },
@@ -346,7 +347,7 @@ help = "Type an older build's rodata pool: strings, floats, doubles and small in
 handler = "pooltype.command"
 params = [
   { name = "spec", kind = "option", type = "str", required = true, multiple = true, help = "VERSION:LOW:HIGH:DELTA (hex ok): the ROM range of a version and the older build's vram - rom" },
-  { name = "dest", kind = "option", type = "path", required = false, multiple = false, help = "folder of the sources, default src/DATA/EARLIER_BUILD" },
+  { name = "dest", kind = "option", type = "path", required = false, multiple = false, help = "folder of the sources, default the layout unused_root/DATA" },
   { name = "check", kind = "flag", type = "str", required = false, multiple = false, help = "report the windows and refusals, write nothing" },
   { name = "unknown", kind = "flag", type = "str", required = false, multiple = false, help = "type only the words of the ROM spans no class holds (widened to word boundaries), inside each --spec range" },
 ]
@@ -356,8 +357,15 @@ help = "Type an older build's address tables: each ROM span whose every word is 
 handler = "pointertype.command"
 params = [
   { name = "spec", kind = "option", type = "str", required = true, multiple = true, help = "VERSION:LOW:HIGH:DELTA (hex ok): the ROM span of a version and the older build's vram - rom" },
-  { name = "dest", kind = "option", type = "path", required = false, multiple = false, help = "folder of the sources, default src/DATA/EARLIER_BUILD" },
+  { name = "dest", kind = "option", type = "path", required = false, multiple = false, help = "folder of the sources, default the layout unused_root/DATA" },
   { name = "check", kind = "flag", type = "str", required = false, multiple = false, help = "report the tables and refusals, write nothing" },
+]
+
+[command.region-census]
+help = "Read only: group each version's older-build symbols into contiguous address regions, each with one range and every name and family inside it, so ownership follows the region and not the name pattern."
+handler = "leftover.command"
+params = [
+  { name = "gap", kind = "option", type = "str", required = true, multiple = false, help = "the most bytes between two rows of one region (hex ok)" },
 ]
 
 [command.reconstruct-labels]

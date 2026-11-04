@@ -137,9 +137,9 @@ def build_context(config: Config, name: str, version: str, text: bytes | None = 
             "as": [str(process.tool(config, "mips_as"))],
             "asflags": recipe.asflags,
             "includes": [
-                f"-I{root / 'asm' / version}",
-                f"-I{root / 'asm' / version / 'include'}",
-                f"-I{root / 'include'}",
+                f"-I{root / _config.root('asm') / version}",
+                f"-I{root / _config.root('asm') / version / 'include'}",
+                f"-I{root / _config.header_roots()[0]}",
             ],
             "source": [str(root / target)],
             "out": ["{out}"],
@@ -284,7 +284,7 @@ def naming_census(config: Config) -> Json:
         root = config.project.root
         paths = sorted(p for p in process.tracked(root) if _config.is_source(p) or _config.is_header(p))
         texts = {p: (root / p).read_text(errors="surrogateescape") for p in paths}
-        return symbol_names.census(texts, _head(config))
+        return symbol_names.census(texts, _head(config), _config.layout(config.project))
 
 
 def record_scope(texts: Mapping[str, str], tag: str, path: str, line: int = 0) -> tuple[list[str], str]:

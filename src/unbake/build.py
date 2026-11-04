@@ -344,6 +344,12 @@ def makefile(config: Config) -> bytes:
             f"TOOLS_RELEASE := {__version__}",
             f"NAME := {project.name}",
             f"VERSIONS := {' '.join(project.versions)}",
+            "# The layout's roots ([layout] of config.toml over repo.toml): no path below spells one itself.",
+            f"ASM := {configuration.root('asm')}",
+            f"BUILD := {configuration.root('build')}",
+            f"ROMS := {configuration.root('roms')}",
+            f"HEADER_ROOT := {configuration.header_roots()[0]}",
+            f"SOURCE_LIST := {','.join(configuration.source_roots())}",
             f"TOOLCHAIN := {_key(project.toolchain)}",
             f"NM_DEFINE := {nm or ''}".rstrip(),
             "LABEL := [A-Za-z_.]*" + re.escape(_REPO["splat"]["options"]["symbol_name_format"].replace("$VRAM", "")),
@@ -562,12 +568,28 @@ def text_sizes(config: Config, held: Tree, v: str) -> bytes:
             f"ROM0_{v} := {version.segments[0].rom}",
             f"ROM_SECTIONS_{v} := {' '.join(_image_sections(config, v))}".rstrip(),
         ]
-        rows += [f"build/{v}/{path}.o: TEXTSIZE := 0x{size:X}" for path, size in sorted(sizes.items()) if size]
-        rows += [f"build/{v}/{path}.o: NOALIGN := {m}" for path, m in _unaligned(config, held, v).items()]
+        rows += [
+            f"{configuration.root('build')}/{v}/{path}.o: TEXTSIZE := 0x{size:X}"
+            for path, size in sorted(sizes.items())
+            if size
+        ]
+        rows += [
+            f"{configuration.root('build')}/{v}/{path}.o: NOALIGN := {m}"
+            for path, m in _unaligned(config, held, v).items()
+        ]
         if "function_sections" in configuration.toolchain(config.project.toolchain):
-            rows += [f"build/{v}/{path}.o: FSPLIT := fsplit" for path in sorted(_apart_paths(config, held, v))]
-        rows += [f"build/{v}/{path}.o: POOLPHASE := {m}" for path, m in sorted(_phased(config, held, v).items())]
-        rows += [f"build/{v}/{path}.o: TEXTCUT := {cuts}" for path, cuts in sorted(_text_cuts(held, v).items())]
+            rows += [
+                f"{configuration.root('build')}/{v}/{path}.o: FSPLIT := fsplit"
+                for path in sorted(_apart_paths(config, held, v))
+            ]
+        rows += [
+            f"{configuration.root('build')}/{v}/{path}.o: POOLPHASE := {m}"
+            for path, m in sorted(_phased(config, held, v).items())
+        ]
+        rows += [
+            f"{configuration.root('build')}/{v}/{path}.o: TEXTCUT := {cuts}"
+            for path, cuts in sorted(_text_cuts(held, v).items())
+        ]
         return "\n".join([f"# {_GENERATED}", *rows, ""]).encode()
 
 
@@ -888,7 +910,7 @@ def splat_yaml(config: Config, v: str, held: Tree) -> bytes:
         project = config.project
         row = configuration.toolchain(project.toolchain)
         cuts = versions.segments(config, v)
-        placeholders = {"version": v, "name": project.name, "rom": f"roms/baserom.{v}.z64"}
+        placeholders = {"version": v, "name": project.name, "rom": f"{configuration.root('roms')}/baserom.{v}.z64"}
         out = [f"# {_GENERATED}", "options:"]
         for key, value in _REPO["splat"]["options"].items():
             text = value.format(**placeholders) if isinstance(value, str) else value
@@ -1175,7 +1197,7 @@ def extract(config: Config, version: str | None = None) -> NativeResult:
     """`make extract`: splat splits one version's baserom (default: all) into asm/<v>/."""
     with stages.stage("build.extract"):
         # splat writes in place; a tree set up from a shared cache holds hard links to it, so no link may survive
-        root = config.project.root / "asm"
+        root = config.project.root / configuration.root("asm")
         store.unshare(root / version if version else root)
         result = _make(config, f"extract-{version}" if version else "extract")
         if result.exit != 0:
@@ -1195,9 +1217,15 @@ def inputs(config: Config) -> str:
 def project_inputs(project: Project) -> str:
     """Build input/output identity without a host config, shared by make's verdict and the report reader."""
     root = str(project.root)
-    roms = (f"build/{v}/{project.name}.z64" for v in project.versions)
+    roms = (f"{configuration.root('build')}/{v}/{project.name}.z64" for v in project.versions)
     paths = [f"{root}/{p}" for p in ("config.toml", "Makefile", "local.mk", f"{project.name}.ld", *roms)]
-    for place in ("src", "include", "asm", "versions", "tools"):
+    for place in (
+        *configuration.source_roots(),
+        *configuration.header_roots(),
+        configuration.root("asm"),
+        "versions",
+        "tools",
+    ):
         paths += [f"{top}/{name}" for top, _, names in os.walk(f"{root}/{place}") for name in names]
     rows = []
     for path in sorted(paths):
@@ -1226,7 +1254,7 @@ def _objects(config: Config, version: str) -> list[Path]:
     """The compiled objects of one version: build/<v>/<source>.o, not the assembled (.s.o) or binary (.bin.o) ones,
     whose rule names their one input file."""
     found = []
-    for directory, _, names in os.walk(config.project.root / "build" / version):
+    for directory, _, names in os.walk(config.project.root / configuration.root("build") / version):
         found += [Path(directory) / n for n in names if n.endswith(".o") and not n.endswith((".s.o", ".bin.o"))]
     return found
 
@@ -1234,7 +1262,7 @@ def _objects(config: Config, version: str) -> list[Path]:
 def _stamps(config: Config, version: str) -> list[Path]:
     """The .i stamps of one version: build/<v>/<source>.i.ok, one per source the .i rule preprocessed."""
     found = []
-    for directory, _, names in os.walk(config.project.root / "build" / version):
+    for directory, _, names in os.walk(config.project.root / configuration.root("build") / version):
         found += [Path(directory) / n for n in names if n.endswith(".i.ok")]
     return found
 
@@ -1467,17 +1495,21 @@ def drop_reflagged(config: Config, new: bytes | None = None) -> int:
     }
     dropped = 0
     for version in config.project.versions:
-        base = root / "build" / version
+        base = root / configuration.root("build") / version
         gone = set()
         for obj in _objects(config, version):
             name = str(obj.relative_to(base))
-            if remade is None or name in remade or (targets and _maker(patterns, f"build/{version}/{name}") in targets):
+            if (
+                remade is None
+                or name in remade
+                or (targets and _maker(patterns, f"{configuration.root('build')}/{version}/{name}") in targets)
+            ):
                 obj.unlink(missing_ok=True)
                 gone.add(name)
                 dropped += 1
         for stamp in _stamps(config, version):  # an object already gone may still have the stamp of an old text
             name = str(stamp.relative_to(base))[: -len(".i.ok")] + ".o"
-            if targets and _maker(patterns, f"build/{version}/{name[:-2]}.i.ok") in targets:
+            if targets and _maker(patterns, f"{configuration.root('build')}/{version}/{name[:-2]}.i.ok") in targets:
                 if (base / name).exists():
                     (base / name).unlink()
                     dropped += 1
@@ -1550,7 +1582,7 @@ def verify(params: Json) -> Json:
         findings.append(Finding("build.failed", f"make exited {status}; no version receives matched credit"))
     else:
         for version in project.versions:
-            path = project.root / "build" / version / f"{project.name}.z64"
+            path = project.root / configuration.root("build") / version / f"{project.name}.z64"
             try:
                 data = path.read_bytes()
             except OSError as error:

@@ -392,7 +392,8 @@ def _asm_includes(config: Config, version: str) -> list[str]:
     """Where the build's assembler finds the `.include` lines a C unit's INCLUDE_ASM leaves in its assembly: the
     version's extraction, its include folder and the project's, absolute because a script runs from any directory."""
     root = config.project.root
-    return [f"-I{root / 'asm' / version}", f"-I{root / 'asm' / version / 'include'}", f"-I{root / 'include'}"]
+    asm, header = root / configuration.root("asm") / version, root / configuration.header_roots()[0]
+    return [f"-I{asm}", f"-I{asm / 'include'}", f"-I{header}"]
 
 
 def script(config: Config, recipe: Recipe, version: str) -> str:

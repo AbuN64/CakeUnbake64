@@ -7,21 +7,21 @@
 # of each version that its lines name and that exist (a line another version does not extract adds nothing).
 import os, re, sys
 named = re.compile(rb'INCLUDE_(ASM|RODATA|DATA)\(\s*"(\w+)"\s*,\s*(\w+)\s*[,)]')
-out, lines = sys.argv[1], []
-for here, _, names in sorted(os.walk("src")):
+asm_root, build, sources, out, lines = *sys.argv[1:5], []  # the layout's roots (Makefile ASM, BUILD, SOURCE_LIST)
+for here, _, names in sorted(w for top in sources.split(",") for w in os.walk(top)):
     for name in sorted(names):
         path = os.path.join(here, name)
         with open(path, "rb") as source:
             found = sorted(set(named.findall(source.read())))
-        for version in sys.argv[2:]:
+        for version in sys.argv[5:]:
             files = []
             for kind, segment, symbol in found:
                 folder = "nonmatchings" if kind == b"ASM" else "data"
-                asm = "asm/%s/%s/%s/%s.s" % (version, folder, segment.decode(), symbol.decode())
+                asm = "%s/%s/%s/%s/%s.s" % (asm_root, version, folder, segment.decode(), symbol.decode())
                 if os.path.exists(asm):
                     files.append(asm)
             if files:
-                lines.append("build/%s/%s.o: %s\n" % (version, path, " ".join(files)))
+                lines.append("%s/%s/%s.o: %s\n" % (build, version, path, " ".join(files)))
 tmp = "%s.%d" % (out, os.getpid())
 with open(tmp, "w") as handle:
     handle.write("".join(lines))

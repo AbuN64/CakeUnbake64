@@ -216,7 +216,7 @@ def recorded(snapshot: Snapshot, unit: UnitSpec, version: str, recipe: Recipe) -
     cfg = snapshot.config
     if config.is_assembly(unit.path):
         return ()
-    home = cfg.project.root / "build" / version / Path(unit.path).with_suffix("")
+    home = cfg.project.root / config.root("build") / version / Path(unit.path).with_suffix("")
     for kept in sorted(home.glob("*/compile.err")):
         return tuple(adapters.toolchain(cfg, recipe.toolchain).refused(kept.read_text(errors="replace")))
     *_, key = _compile_inputs(snapshot, unit, version, recipe, _include(snapshot, version))

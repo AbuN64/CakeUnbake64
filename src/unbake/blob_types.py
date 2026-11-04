@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import blobs
+from unbake import config as configuration
 from unbake.contracts import Config
 
 Json = dict[str, Any]  # the blobs document, edited in place (contracts.Json is read-only)
@@ -84,7 +85,7 @@ def run(config: Config) -> Json:
     document: Json = dict(blobs.parse(config, path.read_bytes()))
     roms: dict[str, bytes] = {}
     for version in config.project.version:
-        rom = Path(config.project.root) / "roms" / f"baserom.{version}.z64"
+        rom = Path(config.project.root) / configuration.root("roms") / f"baserom.{version}.z64"
         if rom.is_file():
             roms[version] = rom.read_bytes()
     typed: dict[str, dict[str, int]] = {}

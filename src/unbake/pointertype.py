@@ -17,7 +17,7 @@ import struct
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from unbake import config, windows
+from unbake import config, leftover, windows
 from unbake.contracts import Config, Finding, Json, Refusal
 
 RAM = (0x80000000, 0x80800000)  # the address window an older-build pointer lies in
@@ -79,8 +79,8 @@ def render(table: Table, name: str) -> list[str]:
     return [*[f"extern char {t}[];" for t in used], f"void *{name}[{len(cells)}] = {{ {', '.join(cells)} }};"]
 
 
-def label(vram: int) -> str:
-    return f"g_earlierAddrTable_{vram & KEY:06X}"
+def label(vram: int, mark: str) -> str:
+    return f"g_addrTable{mark}_{vram & KEY:06X}"
 
 
 def command(cfg: Config, params: Json) -> Json:
@@ -93,6 +93,7 @@ def command(cfg: Config, params: Json) -> Json:
         specs.append((v, int(low, 0), int(high, 0), int(delta, 0)))
     if not specs:
         raise Refusal(Finding("type-pointers.spec", "give --spec VERSION:LOW:HIGH:DELTA (hex ok) at least once"))
+    mark = leftover.marker(config.layout(cfg.project))
     rows: list[Json] = []
     refused: list[Json] = []
     found: dict[int, dict[tuple[str, ...], list[str]]] = {}  # older vram -> body -> versions
@@ -108,7 +109,7 @@ def command(cfg: Config, params: Json) -> Json:
             refused.append(got)
             continue
         vram = (got.rom + delta) & windows.MASK
-        body = tuple(render(got, label(vram)))
+        body = tuple(render(got, label(vram, mark)))
         found.setdefault(vram, {}).setdefault(body, []).append(v)
         rows.append(
             {
@@ -120,18 +121,18 @@ def command(cfg: Config, params: Json) -> Json:
             }
         )
         symbols_of.setdefault(v, []).append(
-            {"name": label(vram), "vram": vram, "rom": got.rom, "size": got.end - got.rom}
+            {"name": label(vram, mark), "vram": vram, "rom": got.rom, "size": got.end - got.rom}
         )
     written = []
     for vram, bodies in sorted(found.items()):
-        name = f"EARLIER_ADDRTABLE_{vram & KEY:06X}.CPP"  # one source per address: bodies that differ are guarded apart
+        name = f"ADDRTABLE_{vram & KEY:06X}.CPP"  # one source per address: bodies that differ are guarded apart
         written.append(name)
         if not params.get("check"):
             arms = []
             for i, (body, vs) in enumerate(bodies.items()):
                 guard = " || ".join("defined(VERSION_" + v.upper().replace("-", "_") + ")" for v in vs)
                 arms.append(("#if " if i == 0 else "#elif ") + guard + "\n" + "\n".join(body) + "\n")
-            target = cfg.project.root / (params.get("dest") or "src/DATA/EARLIER_BUILD") / name
+            target = cfg.project.root / (params.get("dest") or _dest(cfg)) / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("/* Older build's address table. */\n" + "".join(arms) + "#endif\n")
     if not params.get("check"):
@@ -147,3 +148,8 @@ def command(cfg: Config, params: Json) -> Json:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("\n".join([*have, *add]) + "\n")
     return {"tables": rows, "unfit": refused, "written": written, "bytes": sum(r["end"] - r["rom"] for r in rows)}
+
+
+def _dest(cfg: Config) -> str:
+    """The default folder of generated older-build sources: the layout's unused tree."""
+    return leftover.unused_root(config.layout(cfg.project)) + "/DATA"

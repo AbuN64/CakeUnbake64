@@ -212,18 +212,34 @@ def is_assembly(path: str) -> bool:
     return path.lower().endswith(kind("asm")["suffix"])
 
 
-_ROOTS: dict[str, tuple[str, ...]] = {"source_roots": ("src",), "header_roots": ("include",)}  # the loaded project's
+_ROOTS: dict[str, tuple[str, ...]] = {}  # the loaded project's source and header roots and asm/build/roms root
 
 
 def source_roots() -> tuple[str, ...]:
     """The folders holding compiled sources (layout `source_roots`, default src), as of the last project loaded."""
-    return _ROOTS["source_roots"]
+    return _ROOTS.get("source_roots") or tuple(load_resource("repo.toml")["layout"]["source_roots"])
 
 
 def header_roots() -> tuple[str, ...]:
     """The folders includes are written against (layout `header_roots`, default include), as of the last project
     loaded."""
-    return _ROOTS["header_roots"]
+    return _ROOTS.get("header_roots") or tuple(load_resource("repo.toml")["layout"]["header_roots"])
+
+
+BUILD_ROOTS = ("asm", "build", "roms")  # the layout's `<kind>_root` keys of the build trees
+
+
+def root(kind: str) -> str:
+    """The folder of one kind of build tree (layout `asm_root`, `build_root`, `roms_root`: the extracted assembly, the
+    build output, the base ROMs), as of the last project loaded; no generator spells one itself."""
+    return (_ROOTS.get(kind) or (load_resource("repo.toml")["layout"][f"{kind}_root"],))[0]
+
+
+def use_layout(rows: Mapping[str, Any]) -> tuple[str, ...]:
+    """Make ROWS (a whole [layout]) the roots `source_roots`, `header_roots` and `root` answer; its source roots."""
+    _ROOTS["source_roots"], _ROOTS["header_roots"] = tuple(rows["source_roots"]), tuple(rows["header_roots"])
+    _ROOTS.update({kind: (rows[f"{kind}_root"],) for kind in BUILD_ROOTS})
+    return _ROOTS["source_roots"]
 
 
 def under_source(path: str) -> bool:
@@ -448,7 +464,7 @@ _VERIFIED: dict[tuple[str, int, int], str] = {}
 def rom(project: Project, vid: str) -> Path:
     """The baserom of a version, once its bytes are known to be the configured ones: a command that uses ROM bytes
     asks here and a missing or different ROM refuses by name; a command that never does runs without ROMs."""
-    path = project.root / "roms" / f"baserom.{vid}.z64"
+    path = project.root / root("roms") / f"baserom.{vid}.z64"
     key = f"version.{vid}.sha1"
     try:
         stat = path.stat()
@@ -461,7 +477,9 @@ def rom(project: Project, vid: str) -> Path:
             )
         got = _VERIFIED.get((str(path), stat.st_mtime_ns, stat.st_size)) or sha1(path.read_bytes())
     except FileNotFoundError:
-        raise Refusal(Finding("config.file", f"roms/baserom.{vid}.z64 does not exist", path=f"project:{key}")) from None
+        raise Refusal(
+            Finding("config.file", f"{root('roms')}/baserom.{vid}.z64 does not exist", path=f"project:{key}")
+        ) from None
     _VERIFIED[(str(path), stat.st_mtime_ns, stat.st_size)] = got
     if got != project.version[vid].sha1:
         raise Refusal(
@@ -483,8 +501,8 @@ def _tracked(root: Path) -> set[str]:
     return process.tracked(root)
 
 
-def _folder(path: str, slash: bool = True, roots: Sequence[str] = ("src",)) -> bool:
-    """Whether a row path is a source directory under a source root (src/ by default), ending in / when `slash`."""
+def _folder(path: str, slash: bool = True, roots: Sequence[str] = ()) -> bool:
+    """Whether a row path is a source directory under one of the layout's source roots, ending in / when `slash`."""
     parts = Path(path).parts
     ok = not (Path(path).is_absolute() or ".." in parts) and any(
         parts[: len(top)] == top and len(parts) > len(top) for top in (Path(r).parts for r in roots)
@@ -530,8 +548,7 @@ def load_project(
     problems: list[Finding] = []
     bad = partial(_bad, "project", origins=origins)
     layout_rows = {**load_resource("repo.toml")["layout"], **document.get("layout", {})}
-    roots = tuple(layout_rows["source_roots"])
-    _ROOTS["source_roots"], _ROOTS["header_roots"] = roots, tuple(layout_rows["header_roots"])
+    roots = use_layout(layout_rows)
     if names_from not in versions:
         problems.append(bad("names_from", f"{names_from} is not a [version] table"))
     readme_map = document.get("readme_map")

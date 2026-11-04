@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from unbake import config as configuration
 from unbake import mipsstream
 from unbake.contracts import Json, sha256
 
@@ -568,7 +569,7 @@ def compiled(config: Any, tree: Any) -> list[Compiled]:
     skip |= {(v, n) for m in tree.modules for v in m.owns for n in m.fuzzy}
     out: list[Compiled] = []
     for version in config.project.version:
-        path = root / "build" / version / f"{config.project.name}.elf"
+        path = root / configuration.root("build") / version / f"{config.project.name}.elf"
         if not path.is_file():
             continue
         digest = sha256(path.read_bytes())

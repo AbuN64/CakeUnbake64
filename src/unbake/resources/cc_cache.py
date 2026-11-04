@@ -606,7 +606,7 @@ def _remove(path: str) -> None:
 
 
 def record_stamp(stamprec: str, stamp: str, *extracted: str) -> int:
-    """The stamp's input record (build/.inputs.log): the C tool when it was built, else the sweep script."""
+    """The stamp's input record (<build root>/.inputs.log): the C tool when it was built, else the sweep script."""
     import subprocess
 
     if (
@@ -619,6 +619,7 @@ def record_stamp(stamprec: str, stamp: str, *extracted: str) -> int:
             "python3",
             "-I",
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "make", "stamp_sweep.py"),
+            os.path.dirname(stamprec),  # the build root: the Makefile's STAMPREC is $(BUILD)/stamprec
             "record",
             stamp,
             *extracted,
@@ -831,14 +832,14 @@ def object_file(
     the program (`rest` after the extracted files and a `--`: steps separated by `&&`, see object_step) makes it and
     the trim and `.textsize` follow; then the flags, the sum and the input record."""
     try:
-        made = read(f"asm/{version}/.extracted").decode().rstrip("\n")
+        made = read(f"{version}/.extracted").decode().rstrip("\n")
     except OSError:
         made = ""
     if made and made != facts:
         sys.stderr.write(
-            f"asm/{version} was extracted from other symbol_addrs.txt/splat.yaml than this tree holds "
+            f"{version} was extracted from other symbol_addrs.txt/splat.yaml than this tree holds "
             f"({made}, now {facts}): "
-            f"run make extract-{version}\n"
+            f"run make extract-{os.path.basename(version)}\n"
         )
         return 1
     split = rest.index("--") if "--" in rest else len(rest)

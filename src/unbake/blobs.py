@@ -18,7 +18,7 @@ from typing import Any
 from abucache import memo, stages
 
 from unbake import config as configuration
-from unbake import journal, rnc, store, windows
+from unbake import journal, leftover, rnc, store, windows
 from unbake.contracts import Config, Finding, Json, Plan, Refusal, digest, sha256, sha256_file
 
 Spans = list[tuple[int, int]]
@@ -73,7 +73,7 @@ def _read(config: Config) -> bytes | None:
 
 
 def _rom_size(config: Config, version: str) -> int | None:
-    path = Path(config.project.root) / "roms" / f"baserom.{version}.z64"
+    path = Path(config.project.root) / configuration.root("roms") / f"baserom.{version}.z64"
     return path.stat().st_size if path.is_file() else None
 
 
@@ -479,7 +479,7 @@ class _Reads:
 
 
 def _rom_sha(config: Config, version: str) -> str:
-    path = Path(config.project.root) / "roms" / f"baserom.{version}.z64"
+    path = Path(config.project.root) / configuration.root("roms") / f"baserom.{version}.z64"
     return memo.memo(("rom-sha256", str(path)), lambda: sha256_file(path))
 
 
@@ -598,10 +598,36 @@ def apply_import(config: Config, plan: Plan) -> Json:
 _KEPT = ("rom_size", "code", "data", "platform", "blobs", "blobs_decoded", "blobs_identified", "linker_fill", "unknown")
 
 
-def _partitions(config: Config) -> Json:
-    tree = import_module("unbake.tree").capture(config)
-    parts = import_module("unbake.report").partitions(config, tree)
+def _raw_partitions(config: Config) -> Json:
+    parts: Json = import_module("unbake.report").partitions(config, import_module("unbake.tree").capture(config))
+    return parts
+
+
+def _kept(parts: Json) -> Json:
     return {v: {k: p[k] for k in (*_KEPT, "overlap", "outside")} for v, p in parts.items()}
+
+
+def _partitions(config: Config) -> Json:
+    return _kept(_raw_partitions(config))
+
+
+def _c_findings(config: Config, packet: Json, parts: Json) -> list[Finding]:
+    """A packet row over bytes the current C builds is refused: data that has C keeps it (moved under the layout's
+    unused root by `layout plan --unused` when nothing reads it), never a bin segment."""
+    current = {v: [tuple(s) for k in ("code", "data") for s in p["spans"][k]] for v, p in parts.items()}
+    rows = {
+        n: {v: [tuple(s) for s in spans] for v, spans in r.get("rom", {}).items()} for n, r in packet["blob"].items()
+    }
+    root = leftover.unused_root(configuration.layout(config.project))
+    return [
+        Finding(
+            "blobs.c",
+            f"blob {name} claims bytes the C builds in {', '.join(vs)}: keep the C, under {root}/ when unread",
+            path=path_of(config),
+            unit=name,
+        )
+        for name, vs in leftover.with_c(rows, current).items()
+    ]
 
 
 def _counts(have: Json, packet: Json) -> Json:
@@ -625,7 +651,10 @@ def land(config: Config, packet: Json, plan_files: str | None = None) -> Json:
         plan = import_plan(config, packet)
         if plan.blocking:
             raise Refusal(*plan.blocking)
-        before = _partitions(config)
+        raw = _raw_partitions(config)
+        if c := _c_findings(config, packet, raw):
+            raise Refusal(*c)
+        before = _kept(raw)
         have = load(config)["blob"]
         counts = _counts(have, packet)
         text = plan.writes[file]
@@ -727,7 +756,7 @@ def _pad_bytes_findings(config: Config, document: Json, file: str) -> list[Findi
         if row.get("format") != "pad":
             continue
         for v, spans in row.get("rom", {}).items():
-            path = Path(config.project.root) / "roms" / f"baserom.{v}.z64"
+            path = Path(config.project.root) / configuration.root("roms") / f"baserom.{v}.z64"
             if not path.is_file():
                 found.append(
                     Finding("blobs.range", f"blob {name} cannot be proved: no ROM for {v}", path=file, versions=(v,))
@@ -859,7 +888,7 @@ def scan(config: Config) -> Json:
     document = load(config)["blob"]
     out: dict[str, Any] = {}
     for v, p in parts.items():
-        rom = (Path(config.project.root) / "roms" / f"baserom.{v}.z64").read_bytes()
+        rom = (Path(config.project.root) / configuration.root("roms") / f"baserom.{v}.z64").read_bytes()
         checked, failed = 0, []
         for name, row in sorted(document.items()):
             if row.get("codec") not in {"rnc1", "rnc2"} or "parent" in row or v not in row.get("rom", {}):

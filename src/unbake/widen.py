@@ -427,12 +427,19 @@ def derive(
     return derived, refused
 
 
-def files_spelling(config: Config, names: Collection[str], where: Sequence[str] = ("src",)) -> list[str]:
+def files_spelling(config: Config, names: Collection[str], where: Sequence[str] = ()) -> list[str]:
     """The tracked files under WHERE that spell any of NAMES as a word."""
     if not names:
         return []
     try:
-        out = process.git(config, "grep", "-lw", *(a for n in sorted(names) for a in ("-e", n)), "--", *where)
+        out = process.git(
+            config,
+            "grep",
+            "-lw",
+            *(a for n in sorted(names) for a in ("-e", n)),
+            "--",
+            *(where or configuration.source_roots()),
+        )
     except Refusal:  # git grep exits 1 when nothing matches
         return []
     return sorted(out.stdout.decode().split())

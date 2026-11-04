@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from typing import Any
 
-from unbake import config, windows
+from unbake import config, leftover, windows
 from unbake import symbols as symbol_file
 from unbake.contracts import Config, Finding, Json, Refusal
 
@@ -50,7 +50,9 @@ WORDY = 3  # ASCII letters a string has (a float like 0x3F333333, "?333", is no 
 VARIETY = 8  # distinct characters a neighbouring string and its continuation have (bitmap bytes repeat a few)
 LETTERS = frozenset(range(0x41, 0x5B)) | frozenset(range(0x61, 0x7B))
 ACCENTED = range(0xA0, 0x100)  # Latin-1 letters and signs: a string's byte in it needs an ASCII letter before it
-FLOATY = re.compile(r"^g_earlier\w*?(?:Floats|Ints|Words)_[0-9A-F]+$")  # the rows type-pool names for numeric words
+FLOATY = re.compile(
+    r"^g_\w*?(?:[Ff]loats|[Ii]nts|[Ww]ords)[A-Z][a-z0-9]*_[0-9A-F]+$"
+)  # the rows type-pool names for numeric words
 PATH = re.compile(r"[A-Za-z]:[/\\](?:[^/\\]+[/\\])*([^/\\]+)\.(?:cpp|c|h)$", re.IGNORECASE)
 ESCAPES = {9: "\\t", 10: "\\n", 13: "\\r", 34: '\\"', 92: "\\\\"}
 KINDS = {"str": "Str", "float": "Floats", "double": "Doubles", "int": "Ints", "uint": "Words", "ptr": "Pointers"}
@@ -373,7 +375,7 @@ class Unit:
         match = PATH.search(self.path)
         parts = [p for p in re.split(r"[/\\]", match.group(0)) if p][-2:-1] if match else []
         names = [re.sub(r"[^A-Za-z0-9]", "", p).upper() for p in (*parts, match.group(1) if match else "POOL")]
-        return "EARLIER_" + "_".join(n for n in names if n) + f"_{self.rom:X}.CPP"
+        return "_".join(n for n in names if n) + f"_{self.rom:X}.CPP"
 
 
 def units(items: Sequence[Item]) -> list[Unit]:
@@ -389,14 +391,16 @@ def units(items: Sequence[Item]) -> list[Unit]:
     return out
 
 
-def body(unit: Unit, delta: int) -> tuple[list[str], list[Row]]:
-    """(C lines, symbol rows) of one unit; names carry the older build's address, so both versions agree."""
+def body(unit: Unit, delta: int, mark: str) -> tuple[list[str], list[Row]]:
+    """(C lines, symbol rows) of one unit; names say what the rows are, carry the unused tree's `mark` and the older
+    build's address, so both versions agree."""
     label = stem(unit.path)
     lines: list[str] = []
     symbols: list[Row] = []
     for obj in objects(unit.items):
         vram = (obj.at + delta) & windows.MASK
-        name = f"g_earlier{label}{KINDS[obj.kind]}_{vram:06X}"
+        kind = label + KINDS[obj.kind]
+        name = f"g_{kind[:1].lower()}{kind[1:]}{mark}_{vram:06X}"
         lines.extend(render(obj, name))
         symbols.append({"name": name, "vram": vram, "rom": obj.at, "size": obj.size})
     return lines, symbols
@@ -492,7 +496,7 @@ def command(cfg: Config, params: Json) -> Json:
             items += found_items
             refused += [{"version": v, **g} for g in gaps]
         for unit in units(items):
-            lines, syms = body(unit, delta)
+            lines, syms = body(unit, delta, leftover.marker(config.layout(cfg.project)))
             first = unit.items[0].at
             found.setdefault((unit.path, (first + delta) & windows.MASK), {}).setdefault(tuple(lines), []).append(v)
             rows.append(
@@ -515,7 +519,7 @@ def command(cfg: Config, params: Json) -> Json:
             name = Unit(path, vram, []).file + ("" if len(bodies) == 1 else "." + "_".join(vs))
             written.append(name)
             if not params.get("check"):
-                target = cfg.project.root / (params.get("dest") or "src/DATA/EARLIER_BUILD") / name
+                target = cfg.project.root / (params.get("dest") or _dest(cfg)) / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(f"#if {guard}\n/* {note} */\n" + "\n".join(text) + "\n#endif\n")
     if not params.get("check"):
@@ -532,3 +536,8 @@ def command(cfg: Config, params: Json) -> Json:
             table.parent.mkdir(parents=True, exist_ok=True)
             table.write_text("\n".join([*have, *add]) + "\n")
     return {"windows": rows, "unfit": refused, "written": written, "bytes": sum(r["end"] - r["rom"] for r in rows)}
+
+
+def _dest(cfg: Config) -> str:
+    """The default folder of generated older-build sources: the layout's unused tree."""
+    return leftover.unused_root(config.layout(cfg.project)) + "/DATA"

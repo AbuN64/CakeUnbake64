@@ -320,7 +320,9 @@ def test_the_c_record_writes_the_python_record_and_a_tree_without_a_compiler_sti
     for argv in ([stamp], obj, ["build/us/src/nodeps.i.ok"]):
         log.write_text("")
         subprocess.run(
-            [sys.executable, "-I", adapters.make_tool("stamp_sweep.py"), "record", *argv], cwd=tmp_path, check=False
+            [sys.executable, "-I", adapters.make_tool("stamp_sweep.py"), "build", "record", *argv],
+            cwd=tmp_path,
+            check=False,
         )
         subprocess.run([str(rec), "record", *argv], cwd=tmp_path, check=True)
         lines.append([json.loads(x) for x in log.read_text().splitlines()])

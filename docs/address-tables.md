@@ -3,7 +3,7 @@
 `unbake type-pointers --spec VERSION:LOW:HIGH:DELTA ...` types the address tables an older link left in a ROM
 (jump tables, handler lists) as pointer arrays of the older build's symbols. `DELTA` is the older build's vram minus
 the ROM offset, as in `type-pool`. `--check` reports and writes nothing; `--dest` moves the sources (default
-`src/DATA/EARLIER_BUILD`).
+the layout's `unused_root`/DATA, default `unused/DATA`).
 
 ## Proof rule
 
@@ -56,3 +56,17 @@ so `type-pointers` closes the run on the next call.
   reason and given no symbol.
 
 The result lists `tables`, `unfit`, the `symbols` added per version and the `labels` matched.
+
+## Cutover reductions (leftover.py)
+
+Generated older-build names say what the rows are and carry the unused tree's word (`unused_root = "leftover"` gives
+`g_addrTableLeftover_1CA224`, `ADDRTABLE_1CA224.CPP`); no name says `earlier`. `unbake layout plan --unused FILE`
+sends units nothing reads to their unused home, carrying includes and Makefile rows. The naming census lists
+placeholder names outside the unused root. `renameproof.reduction` proves a reduction by replaying its `Retired` and
+`Merged` record. `unbake region-census --gap N` (read only) gives each version's contiguous older-build regions with
+every family inside. `pads.name_fillers` writes each run of filler-word arrays told apart only by a number or ordinal
+word as one table named for the definition it trails (`g_menuInventoryDataTail`), every word in its place.
+
+Every root a generator writes comes from `[layout]`: `source_roots`, `header_roots`, `unused_root`, and `asm_root`,
+`build_root`, `roms_root` (read through `config.root`). The Makefile gets them as `ASM`, `BUILD`, `ROMS`, `HEADER_ROOT`
+and `SOURCE_LIST`, and passes them to its helper programs, so an all-uppercase layout needs no hand edit.

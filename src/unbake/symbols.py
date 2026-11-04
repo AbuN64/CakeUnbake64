@@ -254,7 +254,7 @@ def asm_path(config: Config, version: str, name: str) -> str:
         raise Refusal(
             Finding("tree.segments", f"{name} lies in no segment of {version}", unit=name, versions=(version,))
         )
-    return f"asm/{version}/{'nonmatchings' if row[3] == 'func' else 'data'}/{segment}/{name}.s"
+    return f"{configuration.root('asm')}/{version}/{'nonmatchings' if row[3] == 'func' else 'data'}/{segment}/{name}.s"
 
 
 def tokens(text: str) -> set[str]:
@@ -605,7 +605,7 @@ def superseded_asm(root: Path, version: str, facts: Mapping[str, Symbol]) -> lis
     facts call by another name. An auto-named function (no fact) and a file whose address no fact holds stay."""
     by_rom = {row[1]: n for n, row in facts.items() if row[3] == "func" and row[1] is not None}
     found = []
-    for file in sorted((root / "asm" / version / "nonmatchings").rglob("*.s")):
+    for file in sorted((root / configuration.root("asm") / version / "nonmatchings").rglob("*.s")):
         if file.stem in facts:
             continue
         with file.open(errors="replace") as handle:

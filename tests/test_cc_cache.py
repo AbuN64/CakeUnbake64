@@ -537,7 +537,7 @@ def test_local_mk_puts_the_stamp_recipe_in_one_process(tmp_path):
         and ">" not in recipe.split("endef")[0]
     )
     rule = Path(build.__file__).parent / "resources" / "templates" / "Makefile.in"
-    lines = rule.read_text().split("\nbuild/%.i.ok:")[1].split("\n# The extracted files")[0].splitlines()
+    lines = rule.read_text().split("\n$(BUILD)/%.i.ok:")[1].split("\n# The extracted files")[0].splitlines()
     assert lines[1:] == ["\t$(PREPROCESS_$(TC))"]  # the stamp's recipe is the one process, no shell lines around it
 
 

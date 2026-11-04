@@ -59,7 +59,7 @@ from elftools.elf.elffile import ELFFile
 
 from unbake import collapse as collapsing
 from unbake import config as configuration
-from unbake import guards, hoist, linkfill, objectplan, process, repo, store, symbols
+from unbake import guards, hoist, leftover, linkfill, objectplan, process, repo, store, symbols
 from unbake import merge as unitmerge
 from unbake import mergecheck as merging
 from unbake import pads as padding
@@ -148,6 +148,12 @@ def rules_from_map(text: str, file: str = "map") -> list[Row]:
     return rules
 
 
+def unused_rules(units: Collection[str], layout: Mapping[str, Any]) -> list[Row]:
+    """The rules that send each unit whose data nothing reads to its unused home (`leftover.home`), so `moves`,
+    `includes` and `makefile_rules` carry it like any other move and its bytes stay the same."""
+    return [{"match": u, "to": leftover.home(u, layout)} for u in sorted(units)]
+
+
 def place(rules: Sequence[Mapping[str, Any]], path: str) -> str:
     """Where a path goes: by the rule with the longest match, else where it is. A directory match keeps the rest of the
     path; a file match goes to `to` (a directory keeps the file name)."""
@@ -168,16 +174,18 @@ def place(rules: Sequence[Mapping[str, Any]], path: str) -> str:
 
 def moves(rules: Sequence[Mapping[str, Any]], tracked: Sequence[str]) -> tuple[dict[str, str], list[Row]]:
     """(old -> new for every tracked path a rule moves, the destination rows the moving rules ask for). Refuses two
-    paths landing on one, and a path landing on a file that stays."""
+    paths landing on one, and a path landing on a file that stays, both compared case folded: a case-folding host
+    (a Windows target) would see one file where the tree has two."""
     mapping = {old: new for old in sorted(tracked) if (new := place(rules, old)) != old}
     problems = []
     landing: dict[str, str] = {}
+    stays = {path.casefold(): path for path in tracked if path not in mapping}
     for old, new in mapping.items():
-        if new in landing:
-            problems.append(Finding("layout.collision", f"{old} and {landing[new]} both move to {new}", path=old))
-        landing[new] = old
-        if new in tracked and new not in mapping:
-            problems.append(Finding("layout.collision", f"{old} would replace {new}, which stays", path=old))
+        if (key := new.casefold()) in landing:
+            problems.append(Finding("layout.collision", f"{old} and {landing[key]} both move to {new}", path=old))
+        landing[key] = old
+        if key in stays:
+            problems.append(Finding("layout.collision", f"{old} would replace {stays[key]}, which stays", path=old))
     if problems:
         raise Refusal(*problems)
     rows: dict[str, Row] = {}
@@ -258,12 +266,15 @@ def _tracked(config: Config) -> list[str]:
 def plan(config: Config, params: Json) -> Row:
     """Write the plan and the map for a rules file; moves nothing."""
     with stages.stage("layout.plan"):
-        path, mapped = params.get("rules"), params.get("map")
-        if not path and not mapped:
-            raise _refuse("plan needs --rules FILE or --map FILE")
+        path, mapped, unused = params.get("rules"), params.get("map"), params.get("unused")
+        if not path and not mapped and not unused:
+            raise _refuse("plan needs --rules FILE, --map FILE or --unused FILE")
         root = config.project.root
         given = rules_from(Path(path).read_text(), str(path)) if path else {"rules": [], "rows": [], "libraries": None}
         rules = [*given["rules"], *(rules_from_map(Path(mapped).read_text(), str(mapped)) if mapped else [])]
+        if unused:
+            units = [line.strip() for line in Path(unused).read_text().splitlines() if line.strip()]
+            rules += unused_rules(units, configuration.layout(config.project))
         tracked = _tracked(config)
         mapping, rows = moves(rules, tracked)
         taken = {r["path"] for r in rows}
@@ -782,7 +793,10 @@ def verify(config: Config, params: Json) -> Row:
         bad: list[str] = []
         for version in config.project.versions:
             for source, target in mapping.items():
-                one, two = before / "build" / version / f"{source}.o", root / "build" / version / f"{target}.o"
+                one, two = (
+                    before / configuration.root("build") / version / f"{source}.o",
+                    root / configuration.root("build") / version / f"{target}.o",
+                )
                 if not one.is_file():
                     continue
                 if not two.is_file():
@@ -833,10 +847,10 @@ def _built_rom(config: Config, version: str, baserom: bytes, jobs: int) -> bytes
     image after it, cut or padded to the baserom's length. The image is relinked when the failed build lost it; None
     when it cannot be linked."""
     project = config.project
-    built = project.root / "build" / version / f"{project.name}.z64"
+    built = project.root / configuration.root("build") / version / f"{project.name}.z64"
     if built.is_file():
         return built.read_bytes()
-    image = project.root / "build" / version / f"{project.name}.bin"
+    image = project.root / configuration.root("build") / version / f"{project.name}.bin"
     if not image.is_file():
         make = process.tool(config, "make")
         process.run(
@@ -863,12 +877,12 @@ def _moved(config: Config, version: str, owners: Mapping[str, str], limit: int =
     if ours is None:
         return [f"{version}: no ROM was built and the image does not link"]
     lines = [] if len(ours) == len(theirs) else [f"{version}: ROM is {len(ours)} bytes, the baserom {len(theirs)}"]
-    elf = project.root / "build" / version / f"{project.name}.elf"
+    elf = project.root / configuration.root("build") / version / f"{project.name}.elf"
     addresses, table = _symbols(elf) if elf.is_file() else ([], [])
     cuts = [(start, end, vram) for _, start, end, vram in rommap.pieces(config, version)]
     names: dict[str, str] = {}
     for path, module in owners.items():
-        obj = project.root / "build" / version / f"{path}.o"
+        obj = project.root / configuration.root("build") / version / f"{path}.o"
         if obj.is_file():
             names.update({n: module for n in merging.object_facts(obj)[3] if n})
     seen: set[str] = set()
@@ -948,8 +962,8 @@ def _module_facts(config: Config, params: Json) -> Facts:
         seqs, statics = merging.facts_of(
             config.project.root,
             config.project.versions,
-            params.get("ld") or "build/{version}/link.ld",
-            params.get("obj") or "build/{version}/{unit}.o",
+            params.get("ld") or f"{configuration.root('build')}/{{version}}/link.ld",
+            params.get("obj") or f"{configuration.root('build')}/{{version}}/{{unit}}.o",
         )
     except (OSError, ValueError) as error:
         raise _refuse(f"cannot read the module facts: {error}") from error
@@ -1090,7 +1104,7 @@ def _arranged(
     """The module's units arranged into the one text of `merged_path`, with the conflicts the text arrangement finds.
     merge writes it; mergecheck --prove judges the same conflicts."""
     root = config.project.root
-    obj = params.get("obj") or "build/{version}/{unit}.o"
+    obj = params.get("obj") or f"{configuration.root('build')}/{{version}}/{{unit}}.o"
 
     def built(unit: str) -> list[Path]:
         return [
@@ -1439,7 +1453,7 @@ def _build_merged(
     object's sections (name -> (size, alignment) pieces). The in-object padding of a merged unit is the compiler's, so
     it is measured on the object and not estimated."""
     root = config.project.root
-    obj = str(params.get("obj") or "build/{version}/{unit}.o")
+    obj = str(params.get("obj") or f"{configuration.root('build')}/{{version}}/{{unit}}.o")
     targets = {(v, p): obj.format(version=v, unit=p) for v in config.project.versions for p in paths}
     make = process.tool(config, "make")
     jobs = int(params.get("jobs") or 4)

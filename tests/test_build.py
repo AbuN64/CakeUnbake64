@@ -1069,7 +1069,7 @@ def test_extract_rewrites_each_data_piece_as_its_rom_slice_keeping_labels(tmp_pa
         '.include "macro.inc"\n\ndlabel d_1\n/* 1010 80200410 10111213 */ .word 0x10111213\ndlabel d_2\n'
         "/* 1014 80200414 1415 */ .short 0x1415\n"
     )
-    assert fixture.program([adapters.make_tool("fill_data.py"), "us"], work).returncode == 0
+    assert fixture.program([adapters.make_tool("fill_data.py"), "asm", "roms", "us"], work).returncode == 0
     assert (work / "asm/us/data/main/d_1.s").read_text().splitlines() == [
         '.include "macro.inc"',
         "dlabel d_1",
@@ -1197,9 +1197,11 @@ def test_undefined_syms_waits_for_every_object_it_reads_and_reads_no_object(tmp_
     """The rule that writes undefined_syms.ld depends on every object of the version (the .i and .s it greps are
     complete once the object is built) and feeds its sed the fact files only, never a binary object."""
     text = build.makefile(make_config(tmp_path)).decode()
-    rule = text[text.index("build/%/undefined_syms.ld:") :].split("\n", 2)
-    assert "asm/%/.extracted" in rule[0] and "OBJS_" not in rule[0]  # make 4.4.1 segfaults on it as a second expansion
-    assert "eval build/$(v)/undefined_syms.ld: $(OBJS_$(v))" in text
+    rule = text[text.index("$(BUILD)/%/undefined_syms.ld:") :].split("\n", 2)
+    assert (
+        "$(ASM)/%/.extracted" in rule[0] and "OBJS_" not in rule[0]
+    )  # make 4.4.1 segfaults on it as a second expansion
+    assert "eval $(BUILD)/$(v)/undefined_syms.ld: $(OBJS_$(v))" in text
     assert "$(filter-out %.o,$^) > $@" in rule[1]
 
 
@@ -1286,10 +1288,10 @@ def test_the_makefile_builds_and_verifies_standalone_without_our_tools(tmp_path)
     a version not yet extracted is extracted by the build itself."""
     text = build.makefile(make_config(tmp_path)).decode()
     assert not any("unbake" in line.lower() for line in text.splitlines() if line.startswith("\t"))  # no recipe
-    assert "else ifeq ($(CHECK),rom)\ncheck: $(VERSIONS:%=build/%/$(NAME).z64)\n" in text
-    assert "asm/%/.extracted: | roms/baserom.%.z64\n\t+$(Q)$(MAKE) --no-print-directory extract-$*\n" in text
-    assert "build/%/undefined_syms_auto.txt build/%/undefined_funcs_auto.txt: | asm/%/.extracted\n" in text
-    assert "asm/%.bin: | asm/$$(call ver,$$*)/.extracted\n" in text
+    assert "else ifeq ($(CHECK),rom)\ncheck: $(VERSIONS:%=$(BUILD)/%/$(NAME).z64)\n" in text
+    assert "$(ASM)/%/.extracted: | $(ROMS)/baserom.%.z64\n\t+$(Q)$(MAKE) --no-print-directory extract-$*\n" in text
+    assert "$(BUILD)/%/undefined_syms_auto.txt $(BUILD)/%/undefined_funcs_auto.txt: | $(ASM)/%/.extracted\n" in text
+    assert "$(ASM)/%.bin: | $(ASM)/$$(call ver,$$*)/.extracted\n" in text
     assert '|| { echo "$@: SHA-1 is not $(SHA1_$*)" >&2; exit 1; }' in text
 
 
@@ -1709,9 +1711,9 @@ def test_a_non_matching_table_adds_the_nm_build_with_the_files_rows(tmp_path):
     assert "NM_DEFINE := DRAFT" in lines and "ifeq ($(NON_MATCHING),1)\n.DEFAULT_GOAL := nm\nendif" in text
     assert "FILE.src/a.c := gcc_2_8_1_sn64" in lines and "CFLAGS.src/a.c := -O1" in lines
     assert not any(line.startswith(("FILE.", "CFLAGS.")) and "nmraw" in line for line in lines)
-    assert "nm: $(VERSIONS:%=build/nm/%/$(NAME).z64)" in text
-    assert "$(VERSIONS:%=build/nm/%/link.ld): build/nm/%/link.ld: build/%/link.ld" in text
-    nm_link = text[text.index("build/nm/%/$(NAME).z64: build/nm/%/$(NAME).bin") :]
+    assert "nm: $(VERSIONS:%=$(BUILD)/nm/%/$(NAME).z64)" in text
+    assert "$(VERSIONS:%=$(BUILD)/nm/%/link.ld): $(BUILD)/nm/%/link.ld: $(BUILD)/%/link.ld" in text
+    nm_link = text[text.index("$(BUILD)/nm/%/$(NAME).z64: $(BUILD)/nm/%/$(NAME).bin") :]
     assert "SHA-1" not in nm_link.split("\n\n")[0]  # an NM ROM matches no hash: nothing checks one
 
 

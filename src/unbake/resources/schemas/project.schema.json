@@ -308,6 +308,26 @@
       "minLength": 1
      }
     },
+    "asm_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
+    },
+    "build_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
+    },
+    "roms_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
+    },
+    "unused_root": {
+     "type": "string",
+     "pattern": "^[^/.][^/]*$"
+    },
+    "region_gap": {
+     "type": "integer",
+     "minimum": 0
+    },
     "module_cap": {
      "type": "integer",
      "minimum": 1

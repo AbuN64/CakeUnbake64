@@ -11,6 +11,7 @@ from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
 from functools import cache, lru_cache
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from unbake import config
 from unbake.contracts import Finding, Json
@@ -325,11 +326,13 @@ def bindings(text: str) -> tuple[Binding, ...]:
     return tuple(out[at] for at in sorted(out))
 
 
-def census(texts: Mapping[str, str], revision: str) -> Json:
-    """One inventory for declaration facts, source/header paths and their directory views."""
+def census(texts: Mapping[str, str], revision: str, layout: Mapping[str, Any]) -> Json:
+    """One inventory for declaration facts, source/header paths and their directory views. `placeholders` lists every
+    global, function or type named by an address, number or ordinal outside the layout's unused root
+    (`leftover.findings`): such a name is a finding, under the unused root it is allowed."""
     import bisect
 
-    from unbake import guards
+    from unbake import guards, leftover
 
     rows: list[Json] = []
     paths: list[Json] = []
@@ -377,8 +380,10 @@ def census(texts: Mapping[str, str], revision: str) -> Json:
     }
     domains = ("function", "global", "static", "type", "member", "parameter", "local", "macro", "enumerator")
     counts = Counter(r["kind"] for r in rows)
+    named = {r["name"]: r["path"] for r in rows if r["kind"] in ("function", "global", "type") and r["definition"]}
     return {
         "revision": revision,
+        "placeholders": leftover.findings(named, layout),
         "paths": paths,
         "folders": folders,
         "declarations": rows,

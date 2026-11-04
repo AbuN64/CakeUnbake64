@@ -111,7 +111,7 @@ def snapshot(root: Path) -> dict[str, bytes]:
 def run_object(
     root: Path, how: str, stamprec: str, changed: str, textsize: str, program: list[str], env=None
 ) -> subprocess.CompletedProcess:
-    args = [OUT, "us", FACTS, changed, textsize, FLAGS, stamprec, "asm/us/a.s", "asm/us/b.s", "--", *program]
+    args = [OUT, "asm/us", FACTS, changed, textsize, FLAGS, stamprec, "asm/us/a.s", "asm/us/b.s", "--", *program]
     command = [stamprec, "object", *args] if how == "c" else [sys.executable, "-I", "-S", str(CC), "--object", *args]
     return subprocess.run(command, cwd=root, capture_output=True, text=True, env={**os.environ, **(env or {})})
 
