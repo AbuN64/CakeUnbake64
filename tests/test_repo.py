@@ -814,6 +814,82 @@ def test_sync_puts_a_shrunk_array_before_the_function_whose_literals_follow_it(w
     assert (world.root / "src/main/chunk.c").read_text().count("d_chunk[1]") == 1
 
 
+# Slices of RageWarsDecomp: a word array the hoist moves before the function whose literals follow it, from inside the
+# version block it is defined in (Source/Ai/Enemies/turretai.cpp, Source/Ai/weaponai.cpp, Source/Frontend/widget.cpp).
+_TURRET = (
+    "struct Owner;\n\n"
+    "void Turret_Move(struct Owner *owner, Rider *rider, s32 mode, SharedPlayer *target) {\n"
+    "    Segment *segment;\n}\n\n",
+    "#if defined(VERSION_DE)\n"
+    "/* two stale words ahead of the up vector (0, 0.99999f): linker fill, read by nothing */\n"
+    "unsigned int g_turretUpDirectionLinkerFill[2] = {\n    0x00000000, 0x3F7FFF58,\n};\n"
+    "/* 800C19F0: world up, copied to the stack by CVector3_GetDirectionRotation2 (lw x3) */\n"
+    "CVector3 k_turretUpDirection = { 0.0f, 1.0f, 0.0f };\n"
+    "#endif\n",
+    "g_turretUpDirectionLinkerFill",
+    2,
+    "Turret_Move",
+    "#if defined(VERSION_DE)\nunsigned int g_turretUpDirectionLinkerFill[2] = {\n    0x00000000, 0x3F7FFF58,\n};\n"
+    "#endif\n",
+)
+_WEAPON = (
+    "s32 Weaponai_CanStartFiring(void *owner, void *slot) {\n    return 0;\n}\n\n",
+    "/* The PAL copy of Weapon_UpdateIdleWeaponSelection: the weapon switch and the idle request are two calls "
+    "here. */\n"
+    "#if defined(VERSION_EU)\nconst unsigned int k_WeaponUpdateidleweaponselectionDataBlock1[1] = { 0x00000000 };\n"
+    "#endif\n\n#if !(defined(VERSION_EU) || defined(VERSION_EU_X))\nint later;\n#endif\n",
+    "k_WeaponUpdateidleweaponselectionDataBlock1",
+    1,
+    "Weaponai_CanStartFiring",
+    "#if defined(VERSION_EU)\nconst unsigned int k_WeaponUpdateidleweaponselectionDataBlock1[1] = { 0x00000000 };\n"
+    "#endif\n",
+)
+_WIDGET = (
+    "void Widget_DrawWidget(DraftWidget *widget, sm_dldc args) {\n    switch (widget->type) {\n    }\n}\n\n",
+    "/* unit K_WIDGETCONSTANTWORDS.CPP */\n"
+    "#if defined(VERSION_US)\nconst unsigned int k_widgetConstantWords[1] = {\n    0x10000B00,\n};\n#endif\n",
+    "k_widgetConstantWords",
+    1,
+    "Widget_DrawWidget",
+    "#if defined(VERSION_US)\nconst unsigned int k_widgetConstantWords[1] = {\n    0x10000B00,\n};\n#endif\n",
+)
+
+
+@pytest.mark.parametrize("code, block, name, words, function, moved", [_TURRET, _WEAPON, _WIDGET])
+def test_sync_keeps_a_hoisted_array_under_the_version_guard_it_sat_in(
+    world, monkeypatch, code, block, name, words, function, moved
+):
+    _write(world.root, "src/main/unit.cpp", code + block)
+    literals = (0x80100000 + 4 * words, 0x2000 + 4 * words, None, "data")
+    facts = {name: (0x80100000, 0x2000, 4 * words, "data"), f"literals_{function}": literals}
+    monkeypatch.setattr(repo.api, "symbols", lambda config, v: facts)
+    world.tree = _tree({"src/main/unit.cpp": {"a": (name,), "b": (name,)}}, sections={name: ".rodata"})
+    repo.sync(world.cfg, {"check": False})
+    text = (world.root / "src/main/unit.cpp").read_text()
+    head = code.index(next(line for line in code.splitlines() if function + "(" in line))
+    assert text.startswith(code[:head] + moved + code[head:])  # in front of the function, still under its guard
+    left = text[len(code) + len(moved) :]
+    assert name not in left and left.count("#if") == left.count("#endif")  # the old block lost only the array
+    repo.sync(world.cfg, {"check": False})
+    assert (world.root / "src/main/unit.cpp").read_text() == text  # a second sync moves nothing
+
+
+def test_a_hoisted_array_on_an_else_side_keeps_the_negated_guard() -> None:
+    chain = ["#if defined(VERSION_A)", "int a;", "#elif defined(VERSION_B)", "int b;", "#else"]
+    array = "const unsigned int d_x[1] = { 0x00000001 };"
+    lines = ["void f(void) {", "}", *chain, array, "#endif"]
+    assert repo._hoist(lines, "d_x", "f")
+    assert lines == [
+        "#if !(defined(VERSION_A)) && !(defined(VERSION_B))",
+        array,
+        "#endif",
+        "void f(void) {",
+        "}",
+        *chain,
+        "#endif",
+    ]
+
+
 def test_a_name_in_no_segment_is_refused(world):
     world.tree = _tree({}, {"a": ["f_main"], "b": ()})
     monkey = {"f_main": (0x1, 0x10, 0, "func")}

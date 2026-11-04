@@ -378,11 +378,45 @@ def _shrink(lines: list[str], name: str, words: int) -> bool:
     return True
 
 
+_BRANCH = re.compile(r"^[ \t]*#[ \t]*(if|ifdef|ifndef|elif|else|endif)\b(.*)$")
+
+
+def _test(kind: str, rest: str) -> str:
+    """The condition an `#if`/`#ifdef`/`#ifndef`/`#elif` line tests, as an `#if` expression without its comments."""
+    bare = re.sub(r"/\*.*?\*/|//.*$", "", rest).strip()
+    return f"defined({bare})" if kind == "ifdef" else f"!defined({bare})" if kind == "ifndef" else bare
+
+
+def _guards_at(lines: Sequence[str], at: int) -> list[tuple[int, str]]:
+    """The conditionals open at line `at`, outermost first: (the line that opens each, an `#if` line that selects the
+    side `at` sits on). On a first side that is the opening line itself; on an `#elif` or `#else` side it is the test
+    of that side with every earlier side of the chain negated."""
+    stack: list[tuple[int, list[str], str]] = []  # (opening line, the tests of the earlier sides, this side's line)
+    for i in range(at):
+        found = _BRANCH.match(lines[i])
+        if found is None:
+            continue
+        kind = found[1]
+        if kind in ("if", "ifdef", "ifndef"):
+            stack.append((i, [_test(kind, found[2])], lines[i]))
+        elif kind == "endif":
+            if stack:
+                stack.pop()
+        elif stack:
+            opener, earlier, _ = stack[-1]
+            negated = " && ".join(f"!({t})" for t in earlier)
+            side = f"#if {negated}" if kind == "else" else f"#if {negated} && ({_test(kind, found[2])})"
+            stack[-1] = (opener, earlier + ([_test(kind, found[2])] if kind == "elif" else []), side)
+    return [(opener, side) for opener, _, side in stack]
+
+
 def _hoist(lines: list[str], name: str, function: str) -> bool:
-    """Move the word array `name`, with an `#if` around it that holds nothing else, in front of the definition of
-    `function` (and of any `#if` that definition sits in): the object's .rodata holds a module's data in source order
-    and the function's own literals (a jump table) where it is defined, so an array the ROM has before them must be
-    defined before it. False when the array is already first or either is not found."""
+    """Move the word array `name` in front of the definition of `function` (and of any `#if` that definition sits in):
+    the object's .rodata holds a module's data in source order and the function's own literals (a jump table) where it
+    is defined, so an array the ROM has before them must be defined before it. The array keeps every guard it sat
+    under: each conditional open at its old place and not at the new one is reopened around it there (an `#if` that
+    holds nothing else goes with it), so a definition for some versions never becomes one for all. False when the
+    array is already first or either is not found."""
     found = _array_of(lines, name)
     definition = re.compile(rf"^[A-Za-z_][\w \t\*]*\b{re.escape(function)}\s*\([^;]*$")
     at = next((i for i, line in enumerate(lines) if definition.match(line)), None)
@@ -401,7 +435,9 @@ def _hoist(lines: list[str], name: str, function: str) -> bool:
             elif open_ifs:
                 open_ifs.pop()
     at = open_ifs[0] if open_ifs else at
-    block = lines[low:high]
+    shared = {opener for opener, _ in _guards_at(lines, at)}
+    carried = [side for opener, side in _guards_at(lines, first) if opener not in shared]
+    block = [*carried, *lines[first : last + 1], *(["#endif"] * len(carried))]
     del lines[low:high]
     lines[at:at] = block
     return True
