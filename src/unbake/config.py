@@ -130,7 +130,7 @@ def kinds() -> Json:
 
 
 def layout(project: Project) -> Json:
-    """The project's layout: repo.toml [layout] with each key its config.toml [layout] spells replaced."""
+    """The project's layout: repo.toml [layout] overridden or extended by its verbatim named roots and settings."""
     return {**load_resource("repo.toml")["layout"], **getattr(project, "layout", {})}
 
 

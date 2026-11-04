@@ -471,7 +471,6 @@ def test_the_layout_is_the_packaged_one_with_the_projects_keys_over_it(tmp_path:
     assert api.layout(tmp_path / "none") == packaged  # no config.toml: the packaged layout
 
 
-def test_a_layout_key_the_schema_does_not_know_is_refused(tmp_path: Path) -> None:
+def test_a_named_layout_root_is_returned_by_the_public_api(tmp_path: Path) -> None:
     (tmp_path / "config.toml").write_text('[layout]\nsdk_root = "sdk"\n')
-    with pytest.raises(Refusal):
-        api.layout(tmp_path)
+    assert api.layout(tmp_path)["sdk_root"] == "sdk"

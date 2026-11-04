@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -661,6 +662,61 @@ def test_config_toml_layout_and_cheat_rows_are_read_over_the_packaged_ones(tmp_p
     assert configuration.layout(moved)["library_header"] == packaged["layout"]["library_header"]
     assert configuration.cheat(moved)["asm_home"] == ["sdk/"]
     assert configuration.cheat(moved)["source"] == packaged["cheat"]["source"]
+
+
+# RageWarsDecomp config.toml at e1fe67806: the layout rejected by public sync.
+NAMED_LAYOUT = """[layout]
+source = "Source"
+header = "Include"
+leftover = "leftover"
+sdk = "sdk"
+sdk_header = "sdk/include"
+asm = "asm"
+versions = "versions"
+roms = "roms"
+build = "build"
+assets = "assets"
+source_roots = ["Source", "sdk", "Include", "leftover"]
+header_roots = ["Include", "leftover/Include", "sdk/include"]
+library_source = "sdk/{library}"
+library_header = "sdk/include/{library}.h"
+subsystem_source = "Source/{subsystem}"
+subsystem_header = "Include/{subsystem}.h"
+"""
+
+
+def test_named_layout_roots_preserve_reported_slice(tmp_path: Path) -> None:
+    rows = NAMED_LAYOUT + 'textures = "Art/Textures"\n'
+    declared = tomllib.loads(rows)["layout"]
+    project = _load(tmp_path, BT + "\n" + rows, tracked=[])
+    expected = {**configuration.load_resource("repo.toml")["layout"], **declared}
+    assert configuration.layout(project) == expected
+    assert configuration.layout_at(tmp_path) == expected
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        "textures = 7",
+        "textures = true",
+        'textures = ["Art"]',
+        'textures = {root = "Art"}',
+        'source_roots = "Source"',
+        "source_roots = []",
+        'source_roots = ["Source", "Source"]',
+        'header_roots = ["../Include"]',
+        "header_roots = [7]",
+        "shared_headers = [false]",
+        "library_source = 7",
+        'library_header = ""',
+        "subsystem_source = []",
+        'subsystem_header = ""',
+    ],
+)
+def test_named_layout_roots_retain_typed_validation(tmp_path: Path, row: str) -> None:
+    text = BT + "\n[layout]\n" + row + "\n"
+    assert _keys(_refusal(_load, tmp_path, text)) == {"config.schema"}
+    assert _keys(_refusal(configuration.layout_at, tmp_path)) == {"config.schema"}
 
 
 def test_config_toml_repo_declares_the_generated_paths_and_their_one_command(tmp_path: Path) -> None:

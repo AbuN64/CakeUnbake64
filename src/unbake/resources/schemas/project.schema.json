@@ -365,8 +365,10 @@
      "pattern": "^[^/.][^/]*$"
     }
    },
-   "additionalProperties": false,
-   "description": "Optional: keys of repo.toml [layout] this project replaces (source_roots, header_roots, library_source, library_header, subsystem_source, subsystem_header, shared_headers, module_cap)."
+   "additionalProperties": {
+    "type": "string"
+   },
+   "description": "Optional: overrides of repo.toml [layout] and additional named string roots, preserved verbatim. Declared layout settings retain their own types and constraints."
   },
   "cheat": {
    "type": "object",
