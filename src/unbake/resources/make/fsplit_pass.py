@@ -2,8 +2,8 @@
 # front rewrites the assembly and puts every function back in `.text`, every string, jump table and float pool in one
 # `.rdata`. FSPLIT (text_sizes.mk: an object whose functions or read-only data the ROM places apart) puts each function
 # in `.text.Fn` again and tags each read-only block with the function it belongs to, as `.rdata.Fn`: a block inside the
-# function (jump table, float pool) is that function's, a block is named as the ROM names it (its first label, else its
-# function's pool), so the link script lays every block at its ROM address.
+# function (jump table, float pool) is that function's. Each source global opens its own section; compiler labels
+# remain in their function's literal pool, so the link script lays every item at its ROM address.
 # A block the ROM holds at 4 mod 8 (POOLPHASE, `key:phase` arguments from text_sizes.mk) was laid in the original
 # single `.rdata` by address, but the object's section starts on an 8: an `.align 3` inside it pads against the section
 # start and would miss the pad word the ROM has. The pass spells that pad out against the block's address instead.
@@ -30,9 +30,9 @@ data = re.compile(r"\s*\.(word|half|short|byte|float|double|dword|quad|ascii|asc
 def first_align(block):
     """The `.align` a block's first item is placed by (0 when an item comes before any)."""
     for x in block:
-        m = re.match(r"\s*\.align\s+(\d+)", x)
+        m = re.match(r"\s*\.(align|p2align|balign)\s+(\d+)", x)
         if m:
-            return int(m.group(1))
+            return (int(m.group(2)).bit_length() - 1) if m.group(1) == "balign" else int(m.group(2))
         if data.match(x):
             return 0
     return 0
@@ -52,6 +52,43 @@ for line in lines:
     elif in_code and at and not label_any.match(line):
         for word in token.findall(line):
             owner.setdefault(word, at)
+def split_globals(source):
+    """Give source globals their own blocks, carrying their leading alignment with them."""
+    result = []
+    i = 0
+    while i < len(source):
+        if not re.match(r"^\s*\.section\s+\.(rdata|rodata)\s*\Z", source[i]):
+            result.append(source[i])
+            i += 1
+            continue
+        end = next_block(i)
+        start, kind = i + 1, None
+        chunks = []
+        for j in range(start, end):
+            label = label_any.match(source[j])
+            if not label:
+                continue
+            source_label = label_re.match(source[j])
+            # Compiler labels stay together as a function pool. A source label always
+            # opens a new section, even when the compiler emitted no section directive.
+            new_kind = "global" if source_label else "pool"
+            if kind is not None and (source_label or kind != new_kind):
+                boundary = j
+                while boundary > start and re.match(
+                    r"^\s*(?:$|#|\.(?:align|p2align|balign|globl|global|type)\b)", source[boundary - 1]
+                ):
+                    boundary -= 1
+                chunks.append((kind, source[start:boundary]))
+                start = boundary
+            kind = new_kind
+        chunks.append((kind, source[start:end]))
+        for kind, chunk in chunks:
+            result.append(".section .rdata" if kind == "global" else source[i])
+            result.extend(chunk)
+        i = end
+    return result
+
+lines = split_globals(lines)
 sized = {"word": 4, "4byte": 4, "long": 4, "int": 4, "float": 4, "half": 2, "short": 2, "2byte": 2, "byte": 1,
          "double": 8, "dword": 8, "quad": 8, "8byte": 8}
 plain = {"globl", "global", "type", "size", "set", "weak", "local", "ent", "end", "frame", "mask", "fmask", "file", "ident"}

@@ -2271,3 +2271,63 @@ def test_a_stamprec_of_another_unbake_version_is_refused_and_one_built_by_the_ma
     assert subprocess.run([str(tool), "version"], capture_output=True, text=True).stdout == f"{__version__}\n"
     again = subprocess.run(["make", "-n", "build/stamprec"], cwd=tmp_path, capture_output=True, text=True)
     assert again.returncode == 0, again.stderr  # and accepts it
+
+
+@pytest.mark.parametrize("section", ["rdata", "rodata"])
+def test_fsplit_successive_globals_keep_separate_alignment_and_phase(tmp_path, section):
+    out = _fsplit(
+        tmp_path,
+        f'.section .{section}\n.align 2\nfirst:\n.word 1\n'
+        '.align 3\nsecond:\n.word 2\n.word 3\n'
+        '.align 2\nthird:\n.word 4\n.align 3\n.word 5\n.word 6\n',
+        "first:4", "second:4", "third:4",
+    )  # fmt: skip
+    sections = [line for line in out if line.startswith(".section")]
+    assert sections == [f'.section\t.rdata.{name},"a",@progbits' for name in ("first", "second", "third")]
+    assert [line for line in out if ".set __align8_" in line] == ["\t.set __align8_second, 0"]
+    third = out[out.index(sections[2]) + 1 :]
+    assert _pool(third) == [".align 2", ".word 4", ".word 5", ".word 6"]
+    assert _pool(out[out.index(sections[0]) + 1 : out.index(sections[1])]) == [".align 2", ".word 1"]
+
+
+@pytest.mark.parametrize("section", ["rdata", "rodata"])
+def test_fsplit_mixed_globals_and_pool_pieces_keep_function_ownership(tmp_path, section):
+    out = _fsplit(
+        tmp_path,
+        f'.section .{section}\n.align 2\nRODATA_SYM_0:\n.word 1\n'
+        '.align 3\nglobal_one:\n.word 2\n.word 3\n'
+        '.align 2\n.LC0:\n.word 4\n'
+        '.section .f_1,"ax"\nf_1:\n lui $4,%hi(RODATA_SYM_0)\n lui $5,%hi(.LC0)\n'
+        f'.section .{section}\n.align 3\nRODATA_SYM_1:\n.word 5\n.word 6\n'
+        '.align 2\nglobal_two:\n.word 7\n',
+        "literals_f_1:4", "global_one:4", "global_two:4",
+    )  # fmt: skip
+    assert out.count(f'.section\t.{section}.literals_f_1,"a",@progbits') == 3
+    assert [line for line in out if ".set __align8_" in line] == ["\t.set __align8_global_one, 0"]
+    assert "\t.space 4" in out
+    assert '.section\t.rdata.global_two,"a",@progbits' in out
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "symbol", "expected"),
+    [
+        ("fsplit_player.s", "g_Nav_SteerAlongRouteConstantWords", 36),
+        ("fsplit_cbarrel.s", "k_barrelGetFacingSideUnit", 4),
+    ],
+)
+def test_fsplit_real_compiler_globals_have_their_own_size(tmp_path, fixture_name, symbol, expected):
+    # Entire read-only blocks captured from SN64 GCC 2.8.1 + asn64 for the original translation units.
+    # Pinned decomp tree: 9300a4fca47a39af82311d91f0ae8d64cca9d241, VERSION_US, -ffunction-sections.
+    text = (Path(__file__).parent / fixture_name).read_text()
+    out = _fsplit(tmp_path, text)
+    sizes = {}
+    current = None
+    for line in out:
+        if line.startswith(".section"):
+            current = line.split()[1].split(",")[0]
+            sizes[current] = 0
+        elif line.strip().startswith(".word"):
+            sizes[current] += 4
+    assert sizes[f".rdata.{symbol}"] == expected
+    labels = re.findall(r"^([A-Za-z_][A-Za-z_0-9]*):", text, re.MULTILINE)
+    assert set(sizes) == {f".rdata.{label}" for label in labels}
