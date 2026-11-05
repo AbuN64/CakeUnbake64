@@ -111,6 +111,7 @@ def _fresh_module_state(monkeypatch, _process_state):
     monkeypatch.delenv("WORKTREE_Projects_AbuN64_AbuCache64", raising=False)  # fixture installers own their sources
     forget()
     memo._clear()
+    monkeypatch.setattr(configuration, "_ROOTS", {})  # a loaded project's layout belongs to this test alone
     front._REPLAYED[0] = 0  # the count of replayed failures is the process's: each test starts at none
     stages._listeners[:] = [effort._track]  # the hold beat reads the open stage from the one tracker
     monkeypatch.chdir(_process_state / "cwd")  # a command's stage log goes under its working directory

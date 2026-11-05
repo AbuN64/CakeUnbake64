@@ -19,6 +19,7 @@ def world(tmp_path, monkeypatch):
     (tmp_path / "src/a.c").write_text("#ifdef NON_MATCHING\nint f(void) { return 1; }\n#endif\n")
     (tmp_path / "src/b.c").write_text("int g(void) { return 1; }\n")
     stored, measured = {}, []
+    monkeypatch.setattr(rescore, "_scorer", lambda: "test-scorer")  # code identity has its own unit coverage
     monkeypatch.setattr(rescore, "_lookup", lambda config, key: stored.get(key))
     monkeypatch.setattr(rescore, "_record", lambda config, key, value: stored.__setitem__(key, value))
     monkeypatch.setattr(
