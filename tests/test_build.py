@@ -2171,7 +2171,7 @@ def test_fsplit_pass_moves_the_label_of_a_padded_double_behind_the_pad(tmp_path)
 
 
 def test_fsplit_pass_leaves_a_pool_the_rom_holds_on_an_8_as_the_compiler_wrote_it(tmp_path):
-    for phases in ((), ("literals_f_1:0",), ("literals_other:4",)):
+    for phases in ((), ("literals_other:4",)):
         out = _pool(_fsplit(tmp_path, _POOL, *phases))
         assert ".align 3" in out and not any(ln.startswith(".space") for ln in out)
 
@@ -2186,7 +2186,7 @@ def test_fsplit_pass_pads_nothing_where_the_address_already_holds_the_alignment(
 def test_fsplit_pass_leaves_a_block_whose_first_item_is_aligned_to_the_link_script(tmp_path):
     head = '.section .f_1,"ax"\nf_1:\n l.s $f0,%lo(.LC0)($2)\n.section .rdata\n.align 3\n.LC0:\n'
     out = _fsplit(tmp_path, head + ".word 1\n.word 2\n.align 3\n.word 3\n", "literals_f_1:4")
-    assert _pool(out) == [".align 3", ".word 1", ".word 2", ".align 3", ".word 3"]  # the block starts on an 8
+    assert _pool(out) == [".align 3", ".word 1", ".word 2", ".word 3"]  # the block starts on an 8
     assert "\t.set __align8_literals_f_1, 0" in out
 
 
@@ -2205,11 +2205,11 @@ def test_fsplit_pass_counts_strings_and_guesses_nothing_after_data_it_cannot_mea
 def test_a_literals_row_at_4_mod_8_in_an_apart_object_is_given_its_phase_and_the_recipe_passes_it_on(tmp_path):
     config, tree = make_config(tmp_path), _merged_unit()
     on_an_8 = build.text_sizes(config, tree, "us").decode()
-    assert "POOLPHASE" not in on_an_8  # the pools at 0x8 and 0x18 sit on an 8
+    assert "POOLPHASE := literals_f_1:0 literals_f_2:0" in on_an_8
     for v in ("us", "eu-1"):
         tree.symbols[v]["literals_f_1"] = (0x80200000 + 0xC, 0x1000 + 0xC, 8, "data")  # 4 mod 8
     rows = build.text_sizes(config, tree, "us").decode().splitlines()
-    assert "build/us/src/a.c.o: POOLPHASE := literals_f_1:4" in rows
+    assert "build/us/src/a.c.o: POOLPHASE := literals_f_1:4 literals_f_2:0" in rows
     assert sum("POOLPHASE" in r for r in rows) == 1
     assert "$(PASS)fsplit_pass.py $(@:.o=.n.s) $(@:.o=.f.s) $(POOLPHASE)" in build._recipe("gcc-2.8.1-sn64")
 
@@ -2443,3 +2443,49 @@ def test_contiguous_split_data_detects_packed_global(tmp_path, monkeypatch):
         build, "_rows", lambda *args: [(0, "src/contpad.cpp", ".data"), (2, "src/contpad.cpp", ".data")]
     )
     assert build._unaligned(make_config(tmp_path), held, "us") == {"src/contpad.cpp": "1"}
+
+
+def test_objs_empty_path_from_ragewars_split_rows(tmp_path):
+    """r56's valid selectors must not turn os* section names into .text.o/.data.o."""
+    rows = [
+        "sdk/libultra/io/epirawread.c.o(.text.osEPiRawReadIo)",
+        "sdk/libultra/io/pirawread.c.o(.text.osPiRawReadIo)",
+        "Source/Data/common.cpp.o(.data.osViModeTable)",
+        "sdk/libultra/io/vitbl.c.o(.data.osViModeTableFloatConstant)",
+    ]
+    config = make_config(tmp_path)
+    text = build.makefile(config).decode()
+    start = text.index("$(BUILD)/%/objs.mk:")
+    rule = text[start : text.index("ifeq", start)]
+    (tmp_path / "Makefile").write_text("BUILD := build\nNAME := Game\nCPP := cpp\n" + rule)
+    (tmp_path / "Game.ld").write_text("SECTIONS {\n" + ";\n".join(rows) + ";\n}\n")
+    # Mock the POSIX grep seam while exercising the generated recipe's actual pattern.
+    pattern = re.search(r"grep -oE '([^']+)'", rule)[1].replace("[:alnum:]", "a-zA-Z0-9")
+    objects = ["build/us/" + match.removesuffix("(") for match in re.findall(pattern, ";\n".join(rows))]
+    assert sorted(objects) == sorted("build/us/" + row.split("(")[0] for row in rows)
+
+
+def test_literal_pool_4_mod_8_follows_an_implicit_function_pool(tmp_path):
+    """US's InitMover row spans GetGlyphWidth (0x34) and DrawScaledMaskedTileGrid (0x14)."""
+    first = "OnScreen_GetGlyphWidth"
+    second = "OnScreen_DrawScaledMaskedTileGrid"
+    assembly = (
+        '.section .OnScreen_InitMover,"ax"\nOnScreen_InitMover:\n nop\n'
+        f'.section .{first},"ax"\n{first}:\n lui $2,%hi(RODATA_SYM_0)\n'
+        ".section .rdata\n.align 2\nRODATA_SYM_0:\n"
+        + ".word 0\n"
+        * 13
+        + f'.section .{second},"ax"\n{second}:\n lui $2,%hi(RODATA_SYM_1)\n'
+        ".section .rdata\n.align 2\nRODATA_SYM_1:\n.word 0x3f800000\n"
+        ".text\n nop\n.section .rdata\n.align 3\nRODATA_SYM_2:\n"
+        ".word 0x41f00000\n.word 0\n.text\n nop\n.section .rdata\n.align 2\n"
+        "RODATA_SYM_3:\n.word 0x3f800000\n.word 0x3f800000\n"
+    )
+    out = _fsplit(tmp_path, assembly, "literals_OnScreen_InitMover:0")
+    start = out.index(f'.section\t.rdata.literals_{second},"a",@progbits')
+    pool = _pool(out[start:])
+    assert ".align 3" not in pool
+    assert not any(line.startswith(".space") for line in pool)
+    assert len([line for line in pool if line.startswith(".word")]) * 4 == 0x14
+    assert 0x800C6128 + 0x34 == 0x800C615C
+    assert 0x800C615C + 4 == 0x800C6160

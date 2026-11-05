@@ -630,7 +630,7 @@ def _unaligned(config: Config, held: Tree, v: str) -> dict[str, str]:
 
 
 def _phased(config: Config, held: Tree, v: str) -> dict[str, str]:
-    """For each object built with a section per function, the read-only blocks the ROM holds at 4 mod 8 (`key:4`,
+    """For each object built with a section per function, the read-only blocks with a known ROM phase (`key:0` or `key:4`,
     space apart). The original single `.rdata` padded an `.align 3` in such a block against its address, the
     object's section against its own start: FSPLIT_PASS spells the pad out, so the block links with the pad word
     the ROM has. A block at a word boundary or off it (an object packed at the byte, NOALIGN) needs none."""
@@ -639,8 +639,8 @@ def _phased(config: Config, held: Tree, v: str) -> dict[str, str]:
     found: dict[str, list[str]] = {}
     for piece, *_ in versions.pieces(config, v):
         for _, path, section, name in _named(config, held, v, piece):
-            if path in apart and path not in packed and section in (".rodata", ".data") and table[name][0] % 8 == 4:
-                found.setdefault(path, []).append(f"{name}:4")
+            if path in apart and path not in packed and section in (".rodata", ".data") and table[name][0] % 4 == 0:
+                found.setdefault(path, []).append(f"{name}:{table[name][0] % 8}")
     return {path: " ".join(keys) for path, keys in found.items()}
 
 

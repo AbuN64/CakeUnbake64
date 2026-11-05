@@ -154,9 +154,10 @@ $(if $(filter 0,$(MAKELEVEL)),$(shell python3 -I $(MKTOOLS)/stamp_sweep.py $(BUI
 endif
 # The link script names every object, so no rule here lists a file: build/<version>/objs.mk is its list, made again
 # (and make restarted) only when the script changes.
+$(VERSIONS:%=$(BUILD)/%/objs.mk): $(firstword $(MAKEFILE_LIST))
 $(BUILD)/%/objs.mk: $(NAME).ld
 	$(Q)mkdir -p $(@D)
-	$(Q){ printf 'OBJS_$* :='; $(CPP) -P -undef -D$(VMACRO_$*) $< | grep -oE '[[:alnum:]_./+-]+[.]o' | sort -u | sed 's@^@ $(BUILD)/$*/@' | tr -d '\n'; echo; } > $@.$$$$ && mv -f $@.$$$$ $@
+	$(Q){ printf 'OBJS_$* :='; $(CPP) -P -undef -D$(VMACRO_$*) $< | grep -oE '[[:alnum:]_./+-]+[.]o[(]' | sed 's/[(]//' | sort -u | sed 's@^@ $(BUILD)/$*/@' | tr -d '\n'; echo; } > $@.$$$$ && mv -f $@.$$$$ $@
 ifeq ($(CHECK),rom)
 -include $(VERSIONS:%=$(BUILD)/%/objs.mk)
 endif

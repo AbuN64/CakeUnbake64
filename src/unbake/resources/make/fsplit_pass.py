@@ -8,7 +8,7 @@
 # single `.rdata` by address, but the object's section starts on an 8: an `.align 3` inside it pads against the section
 # start and would miss the pad word the ROM has. The pass spells that pad out against the block's address instead.
 import re, sys
-phase = {k: int(v) for k, _, v in (a.partition(":") for a in sys.argv[3:]) if int(v) % 8}
+phase = {k: int(v) for k, _, v in (a.partition(":") for a in sys.argv[3:])}
 lines = open(sys.argv[1]).read().replace("\r", "").split("\n")
 code = re.compile(r"^\.section\s+\.([^\s,\"]+),\"ax\"")
 reopen = re.compile(r"^\.section\s+\.([^\s,\"]+)\Z")
@@ -109,6 +109,7 @@ def size_of(line):
         return int(n, 0) if re.fullmatch(r"0[xX][0-9A-Fa-f]+|\d+", n) else None
     return 0 if op in plain else None
 out, current, opened = [], None, set()
+previous = {}  # last data block in each input section; unnamed pools continue its ROM phase
 block, used = None, {}  # the phased block being written, and the bytes of each written so far (None: not known)
 for i, line in enumerate(lines):
     if re.match(r"\s*\.(section|data|text)\b", line):
@@ -118,7 +119,7 @@ for i, line in enumerate(lines):
         if asked:
             width = int(asked.group(2)) if asked.group(1) == "balign" else 1 << int(asked.group(2))
             if width > 4 and not used[block]:
-                used[block] = None  # one before the block's first item: the link script moves the block to the 8 (__align8_)
+                phase[block] = 0  # the link script aligns the first item (__align8_); later pools follow its end
             else:
                 pad = -(phase[block] + used[block]) % width
                 used[block] += pad
@@ -135,6 +136,10 @@ for i, line in enumerate(lines):
     found = code.match(line)
     if found:
         current = found.group(1)
+        anchor = "literals_" + current
+        if anchor in phase and anchor not in used:
+            used[anchor] = 0
+            previous.update(rdata=anchor, rodata=anchor)
         out.append('.section\t.text.%s,"ax",@progbits' % current)
     elif reopen.match(line) and reopen.match(line).group(1) in funcs:
         current = reopen.match(line).group(1)
@@ -154,6 +159,10 @@ for i, line in enumerate(lines):
         if key and key not in opened and first_align(lines[i + 1 : next_block(i)]) >= 3:
             out.append("\t.weak __align8_%s\n\t.set __align8_%s, 0" % (key, key))
         opened.add(key)
+        prior = previous.get(base)
+        if key and key not in phase and prior in phase and used.get(prior) is not None:
+            phase[key] = (phase[prior] + used[prior]) % 8
+        previous[base] = key
         if key in phase:
             block = key
             used.setdefault(key, 0)
