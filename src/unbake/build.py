@@ -456,7 +456,7 @@ def _scattered(rows: Sequence[tuple[int, str, str]]) -> set[str]:
         if last == key:
             continue
         last = key
-        if section in (".text", ".rodata"):
+        if section in (".text", ".rodata", ".data"):
             if key in seen:
                 found.add(path)
             seen.add(key)
@@ -476,9 +476,14 @@ def _merged(rows: Sequence[tuple[int, str, str, str]]) -> set[str]:
 def _apart_paths(config: Config, held: Tree, v: str) -> set[str]:
     """The files whose object is built with a section per function (FSPLIT) in one version."""
     found: set[str] = set()
+    data_globals: dict[tuple[str, str], set[str]] = defaultdict(set)
     for piece, *_ in versions.pieces(config, v):
         rows = _named(config, held, v, piece)
         found |= _scattered([row[:3] for row in rows]) | _merged(rows)
+        for _, path, section, name in rows:
+            if section in (".data", ".rodata"):
+                data_globals[path, section].add(name)
+        found |= {path for (path, _), names in data_globals.items() if len(names) > 1}
         found |= {path for _, path, _, name in rows if tree.textpiece(name)}  # a cut function is its own section
     return found
 
@@ -602,6 +607,7 @@ def _unaligned(config: Config, held: Tree, v: str) -> dict[str, str]:
     value then names the sections that lose it (`1:data,sdata`). Data off 8 only is not here: whether the ROM pads it
     against the address or the section start differs per object, and the build keeps its own result for every one (the
     native measure alone re-assembles it, where the ROM proves it)."""
+    apart = _apart_paths(config, held, v)
     found: set[str] = set()
     off: dict[str, set[str]] = defaultdict(set)
     every: dict[str, set[str]] = defaultdict(set)
@@ -610,7 +616,7 @@ def _unaligned(config: Config, held: Tree, v: str) -> dict[str, str]:
             continue
         last = None
         for rom, path, section in _rows(config, held, v, piece):
-            if (path, section) != last and section != ".text":
+            if ((path, section) != last or path in apart) and section != ".text":
                 vram = rom - segment.rom + (segment.vram or segment.rom)
                 found |= {path} if vram % 4 else set()
                 every[path].add(section)
@@ -633,7 +639,7 @@ def _phased(config: Config, held: Tree, v: str) -> dict[str, str]:
     found: dict[str, list[str]] = {}
     for piece, *_ in versions.pieces(config, v):
         for _, path, section, name in _named(config, held, v, piece):
-            if path in apart and path not in packed and section == ".rodata" and table[name][0] % 8 == 4:
+            if path in apart and path not in packed and section in (".rodata", ".data") and table[name][0] % 8 == 4:
                 found.setdefault(path, []).append(f"{name}:4")
     return {path: " ".join(keys) for path, keys in found.items()}
 
@@ -745,12 +751,14 @@ def _items(config: Config, held: Tree, v: str, piece: str, per_object: bool, ver
         tuple[str, str, int | None, bool]
     ] = []  # (path, section, offset, whether the section is one function's)
     start, end, _ = _piece(config, v, piece)
-    pools = {name for _, path, section, name in named_rows if path in apart and section == ".rodata"}
+    pools = set(version.literal.values())
     seen: set[tuple[str, str]] = set()
     for rom, path, section, name in named_rows:
         if path in apart and section == ".text":
             # an object with a section per function: each at the offset its ROM address gives in the piece
             items.append((path, f".text.{name}", rom - start, True))
+        elif path in apart and section == ".data":
+            items.append((path, f".data.{name}", rom - start, True))
         elif path in apart and section == ".rodata":
             items.append(
                 (path, _covered(code.get(path, ()), version.where.get(path, {}), pools, name), rom - start, True)
@@ -772,10 +780,10 @@ def _items(config: Config, held: Tree, v: str, piece: str, per_object: bool, ver
             out.append(f". = MAX(., 0x{offset:X})")
         if apart_section:
             for one in section.split():
-                if one.startswith(".rodata.") and path not in unaligned:
+                if one.startswith((".rodata.", ".data.")) and path not in unaligned:
                     # the assembler tagged the blocks it aligned to 8 (FSPLIT_PASS): `SUBALIGN(1)` drops that. An
                     # object the build packs at the byte (NOALIGN) was not aligned: its rows' addresses stand
-                    out.append(f". = DEFINED({_ALIGN8}{one[len('.rodata.') :]}) ? ALIGN(8) : .")
+                    out.append(f". = DEFINED({_ALIGN8}{one.split('.', 2)[2]}) ? ALIGN(8) : .")
                 out.append(f"{path}.o({_spelled(one)})")
             continue
         if section == ".rodata" and path in doubled:

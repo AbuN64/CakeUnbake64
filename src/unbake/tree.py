@@ -1182,7 +1182,7 @@ def _literals(
                     )
                 )
                 continue
-            names = [*owned[path][version], name]
+            names = list(dict.fromkeys([*owned[path][version], name]))
             owned[path][version] = sorted(names, key=lambda n, t=table: (_rom(t, n), n))  # type: ignore[misc]
             sections[path][version][name] = ".rodata"
     return findings

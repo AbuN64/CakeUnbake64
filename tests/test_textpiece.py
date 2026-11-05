@@ -48,7 +48,8 @@ def _held():
     }
     held.symbols["us"] = held.symbols["eu-1"] = table
     for m in held.modules:
-        m.sections["us"]["textpiece1_f_1"] = m.sections["us"]["textpiece2_f_1"] = ".text"
+        for version in ("us", "eu-1"):
+            m.sections[version]["textpiece1_f_1"] = m.sections[version]["textpiece2_f_1"] = ".text"
     return held
 
 

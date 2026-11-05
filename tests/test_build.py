@@ -14,7 +14,7 @@ from unittest.mock import Mock
 import fixture
 import pytest
 
-from unbake import __version__, adapters, build, compilerrors
+from unbake import __version__, adapters, build, compilerrors, symbols, tree
 from unbake.contracts import FileFacts, NativeResult, Refusal, Segment
 from unbake.resources import cc_cache
 from unbake.tree import Module, Tree
@@ -2331,3 +2331,115 @@ def test_fsplit_real_compiler_globals_have_their_own_size(tmp_path, fixture_name
     assert sizes[f".rdata.{symbol}"] == expected
     labels = re.findall(r"^([A-Za-z_][A-Za-z_0-9]*):", text, re.MULTILINE)
     assert set(sizes) == {f".rdata.{label}" for label in labels}
+
+
+def test_de_start_round_alias_pool_has_one_four_byte_slot(tmp_path, monkeypatch):
+    # de session.cpp at a31ebac9: the source defines the same pool aliases.txt places.
+    name = "literals_SetN64_StartRound"
+    table = symbols.merged(
+        "SetN64_StartRound = 0x80010000; // rom:0x10C00 type:func\n",
+        f"{name} = 0x800C54D8;\n",
+        [(0x80000000, 0x80100000, 0xC00)],
+    )
+    path = "Source/Engine/session.cpp"
+    owned = {path: {"de": ["SetN64_StartRound", name]}}
+    sections = {path: {"de": {"SetN64_StartRound": ".text", name: ".rodata"}}}
+    assert tree._literals({"de": table}, owned, sections) == []
+    assert owned[path]["de"].count(name) == 1
+    held = Tree("slice", (Module(path, "main", owned[path], (), {}, sections[path]),), {"de": table})
+    monkeypatch.setattr(build, "_piece", lambda *args: (0xC60D8, 0xC60DC, 0x800C54D8))
+    version = build._Version({path}, {path: ["SetN64_StartRound"]}, {path: {"SetN64_StartRound": 0}}, {}, [], {})
+    lines = build._items(make_config(tmp_path), held, "de", "main", False, version)
+    assert lines.count(". = MAX(., 0x0)") == 1
+    assert sum(f".rodata.{name} " in line for line in lines) == 1
+    out = _fsplit(tmp_path, f".section .rdata\n.align 2\n{name}:\n.word 0x3F800000\n")
+    assert f'.section\t.rdata.{name},"a",@progbits' in out
+    assert _pool(out) == [".align 2", ".word 0x3F800000"]  # exactly the four bytes of its slot
+
+
+@pytest.mark.parametrize("directive", [".data", ".section .data", ".section\t.data"])
+def test_de_patrol_writable_globals_have_individual_twelve_byte_slots(tmp_path, monkeypatch, directive):
+    # de Data/Overlays/Patrol/constants.cpp: two real 12-byte retained records shared a 0x18 .data.
+    first = "k_NavUpdatepatrolrouteEncodedWords"
+    second = "k_BarrelSpawneffectsfrommaskEncodedWords"
+    out = _fsplit(
+        tmp_path,
+        f"{directive}\n.align 2\n{first}:\n.word 0x424CCCCC,0xAFB10014,0x00C08821\n"
+        f".align 2\n{second}:\n.word 0x3F000000,0x4F000000,0x3B4CCCCD\n",
+    )
+    headers = [f'.section\t.data.{name},"aw",@progbits' for name in (first, second)]
+    assert [line for line in out if line.startswith(".section")] == headers
+    for index, header in enumerate(headers):
+        chunk = out[out.index(header) + 1 : out.index(headers[1]) if index == 0 else len(out)]
+        assert sum(4 * len(line.split(None, 1)[1].split(",")) for line in chunk if line.startswith(".word")) == 12
+    path = "Source/Data/Overlays/Patrol/constants.cpp"
+    table = {
+        first: (0x800C20D4, 0xC2CD4, 12, "data"),
+        second: (0x800C21F4, 0xC2DF4, 12, "data"),
+        "g_Nav_ResetPatrolRouteSelectionConstants": (0x800C20E0, 0xC2CE0, 8, "data"),
+    }
+    held = Tree(
+        "slice",
+        (
+            Module(path, "main", {"de": (first, second)}, (), {}, {"de": {first: ".data", second: ".data"}}),
+            Module(
+                "Source/Ai/nav.cpp",
+                "main",
+                {"de": ("g_Nav_ResetPatrolRouteSelectionConstants",)},
+                (),
+                {},
+                {"de": {"g_Nav_ResetPatrolRouteSelectionConstants": ".rodata"}},
+            ),
+        ),
+        {"de": table},
+    )
+    monkeypatch.setattr(build.versions, "pieces", lambda *args: [("main", 0xC2CD4, 0xC2E00, 0x800C20D4)])
+    config = make_config(tmp_path)
+    assert build._apart_paths(config, held, "de") == {path}
+    version = build._Version({path}, {}, {}, {}, [], {})
+    lines = build._items(config, held, "de", "main", False, version)
+    assert f"{path}.o(.data.{first})" in lines and f"{path}.o(.data.{second})" in lines
+    assert ". = MAX(., 0x0)" in lines and ". = MAX(., 0x120)" in lines
+    assert lines[lines.index(f"{path}.o(.data.{first})") + 1] == ". = MAX(., 0xC)"
+
+
+def test_pool_in_another_piece_is_not_consumed_by_previous_pool(tmp_path, monkeypatch):
+    path = "Source/Ai/player.cpp"
+    functions = ["Player_BuildPlayerViewTransform", "Playerai_ApplyStun"]
+    pools = ["literals_" + f for f in functions]
+    table = {pools[0]: (0x800C2B74, 0xC3774, 8, "data"), pools[1]: (0x800C2C58, 0xC3858, 40, "data")}
+    held = Tree(
+        "slice",
+        (Module(path, "main", {"de": tuple(pools)}, (), {}, {"de": dict.fromkeys(pools, ".rodata")}),),
+        {"de": table},
+    )
+    monkeypatch.setattr(build, "_piece", lambda *args: (0xC3774, 0xC3780, 0x800C2B74))
+    version = build._Version(
+        {path},
+        {path: functions},
+        {path: dict(zip(functions, range(2), strict=True))},
+        {},
+        [],
+        {(table[name][1], path): name for name in pools},
+    )
+    lines = build._items(make_config(tmp_path), held, "de", "main", False, version)
+    assert f"{path}.o(.rodata.{pools[0]} .rdata.{pools[0]})" in lines
+    assert all(pools[1] not in line for line in lines)
+
+
+def test_writable_globals_in_separate_pieces_still_split(tmp_path, monkeypatch):
+    held = Tree("slice", (), {})
+    monkeypatch.setattr(build.versions, "pieces", lambda *args: [("first", 0, 12, 0), ("second", 24, 36, 24)])
+    monkeypatch.setattr(
+        build, "_named", lambda c, h, v, piece: [(0 if piece == "first" else 24, "src/data.cpp", ".data", piece)]
+    )
+    assert build._apart_paths(make_config(tmp_path), held, "us") == {"src/data.cpp"}
+
+
+def test_contiguous_split_data_detects_packed_global(tmp_path, monkeypatch):
+    held = Tree("slice", (), {})
+    monkeypatch.setattr(build, "_apart_paths", lambda *args: {"src/contpad.cpp"})
+    monkeypatch.setattr(
+        build, "_rows", lambda *args: [(0, "src/contpad.cpp", ".data"), (2, "src/contpad.cpp", ".data")]
+    )
+    assert build._unaligned(make_config(tmp_path), held, "us") == {"src/contpad.cpp": "1"}

@@ -115,7 +115,7 @@ def test_accepts_local_environment_and_forwards_arguments(checkout: Path, spaces
 
 @pytest.mark.seconds(10)
 def test_setup_clears_moved_environment_and_test_accepts_it(checkout: Path, tmp_path: Path) -> None:
-    """Use real venv/ensurepip; only the package installer and toolkit discovery are stand-ins."""
+    """Mock environment creation, package installation and discovery; verify the public setup/test handoff."""
     stale = checkout / ".venv/stale-from-old-checkout"
     stale.write_text("must disappear")
     (checkout / ".venv/pyvenv.cfg").write_text("command = /usr/bin/python3 -m venv /old/.venv\n")
@@ -131,12 +131,19 @@ def test_setup_clears_moved_environment_and_test_accepts_it(checkout: Path, tmp_
     executable(
         wrapper,
         f"#!{sys.executable}\n"
-        "import json, pathlib, subprocess, sys\n"
+        "import json, pathlib, shutil, sys\n"
         "args = sys.argv[1:]\n"
         "with open('setup-calls', 'a') as log: log.write(json.dumps(args) + '\\n')\n"
         "if args[:2] == ['-c', 'import abucache, unbake']: sys.exit(0)\n"
         f"if args[:1] == ['-c']: print({str(toolkit_site)!r}); sys.exit(0)\n"
-        f"subprocess.run([{sys.executable!r}, *args], check=True)\n"
+        "assert args == ['-m', 'venv', '--clear', '.venv']\n"
+        "root = pathlib.Path('.venv').resolve()\n"
+        "shutil.rmtree(root)\n"
+        "(root / 'bin').mkdir(parents=True)\n"
+        f"(root / 'pyvenv.cfg').write_text('command = python3 -m venv ' + str(root) + '\\n')\n"
+        f"(root / 'bin/python').symlink_to({sys.executable!r})\n"
+        "(root / 'bin/pip').write_text('#!' + str(root / 'bin/python') + '\\nimport sys\\n')\n"
+        "(root / 'bin/pip').chmod(0o755)\n"
         "pip = pathlib.Path('.venv/bin/pip')\n"
         "pathlib.Path('generated-pip').write_text(pip.read_text())\n"
         "header = pip.read_text().split('import ', 1)[0]\n"

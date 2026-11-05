@@ -57,7 +57,7 @@ def split_globals(source):
     result = []
     i = 0
     while i < len(source):
-        if not re.match(r"^\s*\.section\s+\.(rdata|rodata)\s*\Z", source[i]):
+        if not re.match(r"^\s*(?:\.section\s+\.(?:rdata|rodata|data)|\.data)\s*\Z", source[i]):
             result.append(source[i])
             i += 1
             continue
@@ -83,7 +83,7 @@ def split_globals(source):
             kind = new_kind
         chunks.append((kind, source[start:end]))
         for kind, chunk in chunks:
-            result.append(".section .rdata" if kind == "global" else source[i])
+            result.append(".section .data" if re.match(r"^\s*(?:\.section\s+)?\.data\s*\Z", source[i]) else ".section .rdata" if kind == "global" else source[i])
             result.extend(chunk)
         i = end
     return result
@@ -141,13 +141,13 @@ for i, line in enumerate(lines):
         out.append('.section\t.text.%s,"ax",@progbits' % current)
     elif line.strip() == ".text":
         out.append('.section\t.text.%s,"ax",@progbits' % current if current else line)
-    elif re.match(r"^\s*\.section\s+\.(rdata|rodata)\s*\Z", line):
-        base = "rdata" if "rdata" in line else "rodata"
+    elif re.match(r"^\s*(?:\.section\s+\.(?:rdata|rodata|data)|\.data)\s*\Z", line):
+        base = "rdata" if "rdata" in line else "rodata" if "rodata" in line else "data"
         label = next((m.group(1) for m in map(label_re.match, lines[i + 1 : next_block(i)]) if m), None)
         # a block is named as the ROM names it: its first source label, else the pool of the function it sits in (strings before the first function: that one's)
         user = next((owner[m.group(1)] for m in map(label_any.match, lines[i + 1 : next_block(i)]) if m and m.group(1) in owner), None)
         key = label or ("literals_" + (user or current or names[0]) if names else None)
-        out.append('.section\t.%s.%s,"a",@progbits' % (base, key) if key else line)
+        out.append('.section\t.%s.%s,"%s",@progbits' % (base, key, 'aw' if base == 'data' else 'a') if key else line)
         # `SUBALIGN(1)` drops the section's alignment: a block whose first item is aligned to 8 says so to the link
         # script. A `.align 3` further in (a double after a float) pads inside the block, never moves its start, and
         # the compiler writes a pool in several pieces: only the piece that opens the block holds its first item

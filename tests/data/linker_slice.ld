@@ -98,7 +98,8 @@ SECTIONS
         . = MAX(., 0x2510);
         src/AI/NAV/ROUTECOST/ROUTECOST.CPP.o(.text.Nav_AddPickupCategoryCosts);
         . = MAX(., 0x25C0);
-        src/AI/NAV/ROUTECOST/ROUTECOST.CPP.o(.data);
+        . = DEFINED(__align8_func_8020EF74_eu_padding_FB74) ? ALIGN(8) : .;
+        src/AI/NAV/ROUTECOST/ROUTECOST.CPP.o(.data.func_8020EF74_eu_padding_FB74);
         . = MAX(., 0x25CC);
         src/AI/NAV/PICKUPSELECT/PICKUPSELECT.CPP.o(.text);
         . = MAX(., 0x27BC);
