@@ -199,6 +199,27 @@ the project. `census` prints a row per clashing name: `name`, `ntypes`, `declara
 declared as `file:line kind` and in which versions), `users` (the count and the files whose text holds the name) and
 `status` (`open`). The kinds are `proto`, `fdef`, `ext` and `vdef`. The first array bound is not part of a type.
 
+### Data read at another width
+
+`unbake census --widths WIDTH.tsv` writes the width table in the same pass (`--out` is unchanged). A match on a
+big-endian target cannot see a data symbol defined at one element width and read at another; a port can. A row per
+data symbol whose definition element width differs from a reader's (`other-width`), and a row per data symbol no reader
+the tool sees reads (`unread`), so the census says what it cannot see and both counts go to zero. A symbol read only at
+its own width is not a row; the command prints the count per status (`other-width`, `unread`, `same-width`).
+
+Definitions are the variables defined in the preprocessed units and the labels of the extracted data assembly followed
+by data directives (`.word` 4, `.half` 2, `.byte` 1, `.float` 4, `.double` 8). Readers are every `extern` declaration,
+the load and store widths of the extracted assembly that reads the symbol (`accesses.py`, through a struct field or a
+cast by its opcode) and the relocations of the built objects against it (`build/<version>/**/*.o`). Names at one address
+in a version's `symbol_addrs.txt` and `aliases.txt` are one symbol, listed by the name its code reads by. The element
+width is the type with its first array bound dropped, sized by the target C ABI (char 1, short 2, int, long, float and
+pointer 4, long long and double 8); a struct, union or enum element is written by its tag and differs from every scalar.
+
+Columns: `name`, `def_width` (bytes, or the tag), `definition` (`type width => file:line`, `asm` for a data label),
+`readers` (`type width => file:line kind`, joined by `; `), `loads` (`width => function`, joined by `; `, empty when no
+code is seen), `versions` (where the symbol is defined) and `status`. The result carries `widths` (the path) and
+`width_counts`.
+
 `unify` builds the tree as it is (the baseline: every object of every version), then per name takes the candidate
 types in order, the most declared first (a definition with a body or initialiser is the only candidate), rewrites each
 declaration of another type to the chosen one, and makes only the units whose text holds a file the rewrite reads or

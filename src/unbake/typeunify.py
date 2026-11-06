@@ -15,7 +15,7 @@ from pathlib import Path
 
 from abucache import pool, stages
 
-from unbake import build, compilerrors, hoist, mergecheck, process, store, tree
+from unbake import build, compilerrors, hoist, mergecheck, process, store, tree, widthcensus
 from unbake import config as configuration
 from unbake.contracts import Config, Finding, Host, Json, Refusal
 from unbake.typecensus import Decl, Norm, Stmt, clashes, declarations, files_of, index, scan, table, tkey
@@ -969,12 +969,14 @@ def _names(path: Path | None) -> list[str] | None:
     return [r for r in rows if r and r != "name"]
 
 
-def census_command(cfg: Config, params: Json) -> Json:
+def census_command(
+    cfg: Config, params: Json, real: Seams | None = None, evidence: widthcensus.Evidence | None = None
+) -> Json:
     """`unbake census`: the clashes of the tree in the CLASH.tsv shape, to --out or to the count only. With --folds
     (a fold list: header and target per line) the table is the fold-check instead: the names two types meet at in a
     unit once each group of folded headers is one header, `fold-only` where the tree as it is has no clash of the name;
     nothing is written but --out."""
-    real = seams(cfg)
+    real = real or seams(cfg)
     units = real.units()
     if not any(units.values()):
         raise Refusal(Finding("unify.units", "no compiled unit found: build the tree first (unbake setup)"))
@@ -999,7 +1001,14 @@ def census_command(cfg: Config, params: Json) -> Json:
             else table(census.per, users)
         )
         store.write(Path(out), rows.encode())
+    wide = params.get("widths")
+    measured: Json = {}
+    if wide:
+        records = widthcensus.rows(census.per, evidence or widthcensus.real(cfg), units)
+        store.write(Path(wide), widthcensus.table(records).encode())
+        measured = {"widths": str(wide), "width_counts": widthcensus.counts(records)}
     return {
+        **measured,
         "units": sum(len(v) for v in units.values()),
         "names": len(census.per),
         "clashing": len(found),

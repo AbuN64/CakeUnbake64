@@ -8,7 +8,18 @@
     "names": {"type": "integer", "minimum": 0},
     "clashing": {"type": "integer", "minimum": 0},
     "declarations": {"type": "integer", "minimum": 0},
-    "written": {"type": "string"}
+    "written": {"type": "string"},
+    "widths": {"type": "string"},
+    "width_counts": {
+      "type": "object",
+      "required": ["other-width", "unread", "same-width"],
+      "properties": {
+        "other-width": {"type": "integer", "minimum": 0},
+        "unread": {"type": "integer", "minimum": 0},
+        "same-width": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

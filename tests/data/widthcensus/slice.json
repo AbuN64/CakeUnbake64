@@ -1,0 +1,623 @@
+{
+ "359dc614^": {
+  "rev": "5231cad6baea36a1da3c81a96c90496ba23a88e8",
+  "names": {
+   "g_weaponActionRecords_StorageWords": {
+    "definition": [
+     [
+      "code/game/src/DATA/PLAYER_STATE_NORMAL/PLAYER_STATE_NORMAL.CPP",
+      9,
+      "unsigned int g_weaponActionRecords_StorageWords[1] = {"
+     ]
+    ],
+    "externs": [],
+    "all": 3
+   },
+   "g_weaponActionRecords": {
+    "definition": [],
+    "externs": [
+     [
+      "code/game/src/AI/WEAPON/WEAPON.CPP",
+      405,
+      "extern WeaponActionRecord g_weaponActionRecords[];"
+     ],
+     [
+      "code/game/src/AI/WEAPONAI/WEAPONAI_DRAWREDMARKERQUAD.CPP",
+      24,
+      "extern WeaponActionRecord g_weaponActionRecords[];"
+     ],
+     [
+      "code/game/src/AI/WEAPONAI/WEAPONAI_TOGGLEFIRINGMODEWITHAMMOCHECK.CPP",
+      25,
+      "extern WeaponActionRecord g_weaponActionRecords[];"
+     ]
+    ],
+    "all": 34
+   },
+   "g_ConstantsEncodedWordsBlock13": {
+    "definition": [
+     [
+      "code/game/src/DATA/FRONTEND/H/CONSTANTS/G_CONSTANTSENCODEDWORDSBLOCK13.CPP",
+      4,
+      "unsigned int g_ConstantsEncodedWordsBlock13[1] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/MENU_LABEL_SLOTS/MENU_LABEL_SLOTS.CPP",
+      188,
+      "extern char g_ConstantsEncodedWordsBlock13[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_ResourcesEncodedWordsBlock6": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/G_RESOURCESENCODEDWORDSBLOCK6.CPP",
+      6,
+      "unsigned int g_ResourcesEncodedWordsBlock6[3] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      13,
+      "extern char g_ResourcesEncodedWordsBlock6[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_ResourcesEncodedWordsBlock15": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/G_RESOURCESENCODEDWORDSBLOCK15.CPP",
+      5,
+      "unsigned int g_ResourcesEncodedWordsBlock15[2] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      15,
+      "extern char g_ResourcesEncodedWordsBlock15[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_ResourcesEncodedWordsBlock44": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/G_RESOURCESENCODEDWORDSBLOCK44.CPP",
+      5,
+      "unsigned int g_ResourcesEncodedWordsBlock44[2] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      10,
+      "extern char g_ResourcesEncodedWordsBlock44[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_ResourcesEncodedWordsBlock51": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/G_RESOURCESENCODEDWORDSBLOCK51.CPP",
+      5,
+      "unsigned int g_ResourcesEncodedWordsBlock51[2] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      16,
+      "extern char g_ResourcesEncodedWordsBlock51[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_ResourcesEncodedWordsBlock67": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/G_RESOURCESENCODEDWORDSBLOCK67.CPP",
+      5,
+      "unsigned int g_ResourcesEncodedWordsBlock67[3] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      12,
+      "extern char g_ResourcesEncodedWordsBlock67[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_ResourcesEncodedWordsBlock69": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/G_RESOURCESENCODEDWORDSBLOCK69.CPP",
+      5,
+      "unsigned int g_ResourcesEncodedWordsBlock69[3] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      11,
+      "extern char g_ResourcesEncodedWordsBlock69[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_ResourcesEncodedWordsBlock73": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/G_RESOURCESENCODEDWORDSBLOCK73.CPP",
+      5,
+      "unsigned int g_ResourcesEncodedWordsBlock73[4] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      14,
+      "extern char g_ResourcesEncodedWordsBlock73[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_actorHandlerRun1_us_rev1": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/THREE/LINKTABLES/ACTOR_HANDLER_RUN1_US_REV1_DATA.CPP",
+      12,
+      "unsigned int g_actorHandlerRun1_us_rev1[2] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      3,
+      "extern char g_actorHandlerRun1_us_rev1[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_actorHandlerRun3_us_rev1": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/THREE/LINKTABLES/ACTOR_HANDLER_RUN3_US_REV1_DATA.CPP",
+      6,
+      "unsigned int g_actorHandlerRun3_us_rev1[3] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      4,
+      "extern char g_actorHandlerRun3_us_rev1[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_actorHandlerRun6_us_rev1": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/THREE/LINKTABLES/ACTOR_HANDLER_RUN6_US_REV1_DATA.CPP",
+      5,
+      "unsigned int g_actorHandlerRun6_us_rev1[2] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      5,
+      "extern char g_actorHandlerRun6_us_rev1[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_actorHandlerRun8_us_rev1": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/THREE/LINKTABLES/ACTOR_HANDLER_RUN8_US_REV1_DATA.CPP",
+      5,
+      "unsigned int g_actorHandlerRun8_us_rev1[2] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      6,
+      "extern char g_actorHandlerRun8_us_rev1[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_actorHandlerRun11_us_rev1": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/THREE/LINKTABLES/ACTOR_HANDLER_RUN11_US_REV1_DATA.CPP",
+      5,
+      "unsigned int g_actorHandlerRun11_us_rev1[2] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      7,
+      "extern char g_actorHandlerRun11_us_rev1[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_actorHandlerRun14_us_rev1": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/THREE/LINKTABLES/ACTOR_HANDLER_RUN14_US_REV1_DATA.CPP",
+      5,
+      "unsigned int g_actorHandlerRun14_us_rev1[2] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      8,
+      "extern char g_actorHandlerRun14_us_rev1[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_actorHandlerRun17_us_rev1": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/THREE/LINKTABLES/ACTOR_HANDLER_RUN17_US_REV1_DATA.CPP",
+      5,
+      "unsigned int g_actorHandlerRun17_us_rev1[2] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/FOUR/RESOURCES/K_RESOURCESENCODEDWORDSBLOCK1.CPP",
+      9,
+      "extern char g_actorHandlerRun17_us_rev1[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_MenuAbbreviationsStorage": {
+    "definition": [
+     [
+      "code/game/src/DATA/FRONTEND/H/CONSTANTS/MENU_ABBREVIATIONS_DATA.CPP",
+      4,
+      "unsigned int g_MenuAbbreviationsStorage[2] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/MENU_LABEL_SLOTS/MENU_LABEL_SLOTS.CPP",
+      107,
+      "extern char g_MenuAbbreviationsStorage[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_MenuNoLabelStorage": {
+    "definition": [
+     [
+      "code/game/src/DATA/FRONTEND/H/CONSTANTS/MENU_NO_LABEL_DATA.CPP",
+      4,
+      "unsigned int g_MenuNoLabelStorage[1] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/MENU_LABEL_SLOTS/MENU_LABEL_SLOTS.CPP",
+      51,
+      "extern char g_MenuNoLabelStorage[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_MenuOnLabelStorage": {
+    "definition": [
+     [
+      "code/game/src/DATA/FRONTEND/H/CONSTANTS/MENU_ON_LABEL_DATA.CPP",
+      4,
+      "unsigned int g_MenuOnLabelStorage[1] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/MENU_LABEL_SLOTS/MENU_LABEL_SLOTS.CPP",
+      49,
+      "extern char g_MenuOnLabelStorage[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_menuNoLabelWordEuX": {
+    "definition": [
+     [
+      "code/game/src/DATA/FRONTEND/H/CONSTANTS/MENU_NO_LABEL_WORD_EU_X_DATA.CPP",
+      4,
+      "unsigned int g_menuNoLabelWordEuX[1] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/MENU_LABEL_SLOTS/MENU_LABEL_SLOTS.CPP",
+      291,
+      "extern char g_menuNoLabelWordEuX[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_menuOkayLabelWordEuX": {
+    "definition": [
+     [
+      "code/game/src/DATA/FRONTEND/H/CONSTANTS/MENU_OKAY_LABEL_WORD_EU_X_DATA.CPP",
+      4,
+      "unsigned int g_menuOkayLabelWordEuX[1] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/MENU_LABEL_SLOTS/MENU_LABEL_SLOTS.CPP",
+      170,
+      "extern char g_menuOkayLabelWordEuX[];"
+     ]
+    ],
+    "all": 5
+   },
+   "g_osaisetfrequencyDataConstantWords": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/SEVEN/LINKTABLES/OSAISETFREQUENCY_DATA.CPP",
+      4,
+      "unsigned int g_osaisetfrequencyDataConstantWords[1] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/SEVEN/LINKTABLES/AUDIO_ABORTDISKTRANSFER_DATA.CPP",
+      25,
+      "extern char g_osaisetfrequencyDataConstantWords[];"
+     ]
+    ],
+    "all": 13
+   },
+   "g_viDataZeroWords": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVERLAYS/SEVEN/LINKTABLES/VI_DATA.CPP",
+      2,
+      "unsigned int g_viDataZeroWords[24] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/DATA/OVERLAYS/SEVEN/LINKTABLES/OSVIGETCURRENTFRAMEBUFFER_DATA.CPP",
+      5,
+      "extern char g_viDataZeroWords[];"
+     ],
+     [
+      "code/game/src/DATA/OVERLAYS/SEVEN/LINKTABLES/OSVIGETCURRENTFRAMEBUFFER_DATA.CPP",
+      11,
+      "extern char g_viDataZeroWords[];"
+     ],
+     [
+      "code/game/src/DATA/OVERLAYS/SEVEN/LINKTABLES/OSVIGETCURRENTFRAMEBUFFER_DATA.CPP",
+      17,
+      "extern char g_viDataZeroWords[];"
+     ]
+    ],
+    "all": 19
+   },
+   "g_effectCallbackFlags": {
+    "definition": [
+     [
+      "code/game/src/DATA/ENEMY/ENEMY/EVENTS_DELIVERCONTACTEFFECT_DATA.CPP",
+      71,
+      "unsigned int g_effectCallbackFlags[74] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/include/SYSTEM/CONTACT_EFFECT.H",
+      12,
+      "extern ContactEffectEntry g_effectCallbackFlags[];"
+     ],
+     [
+      "code/game/src/ENGINE/EVENTS/EVENTS_APPLYDAMAGEEVENT.CPP",
+      528,
+      "extern EventCallbackEntry g_effectCallbackFlags[];"
+     ]
+    ],
+    "all": 28
+   },
+   "g_emacText": {
+    "definition": [
+     [
+      "code/game/src/DATA/ENEMY/ENEMY/G_EMACTEXT.CPP",
+      12,
+      "unsigned int g_emacText[7] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/include/COMMON/RUNTIME_DECLARATIONS.H",
+      1287,
+      "extern ColorEntry g_emacText[];"
+     ]
+    ],
+    "all": 24
+   },
+   "g_loadoutWeaponItems": {
+    "definition": [
+     [
+      "code/game/src/DATA/OVL1_J/OVL1_J.CPP",
+      40,
+      "unsigned int g_loadoutWeaponItems[32] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/src/FRONTEND/EQUIP/EQUIP.CPP",
+      24,
+      "extern struct CacheResourceBlockView g_loadoutWeaponItems[];"
+     ],
+     [
+      "code/game/src/FRONTEND/EQUIP/EQUIP_ACTIVATEEQUIPMENTPANEL.CPP",
+      42,
+      "extern EquipEntry g_loadoutWeaponItems[];"
+     ],
+     [
+      "code/game/src/FRONTEND/RESULTS/RESULTS_SETTRIALWEAPONROW.CPP",
+      8,
+      "extern int g_loadoutWeaponItems[];"
+     ]
+    ],
+    "all": 21
+   },
+   "g_rewardItemTiers": {
+    "definition": [
+     [
+      "code/game/src/DATA/FRONTEND/I/CONSTANTS/G_REWARDITEMTIERS.CPP",
+      40,
+      "unsigned int g_rewardItemTiers[102] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/include/FRONTEND/JOIN_RANDOMIZEJOINREQUESTENTRIES.H",
+      6,
+      "extern struct IntPair g_rewardItemTiers[][17];"
+     ],
+     [
+      "code/game/src/FRONTEND/JOIN/FRONTEND_SELECTNEXTJOINMODEL.CPP",
+      51,
+      "extern struct TextEntry g_rewardItemTiers[][17];"
+     ],
+     [
+      "code/game/src/FRONTEND/JOIN/JOIN_CREATEUSJOINOPTIONSMENU.CPP",
+      60,
+      "extern struct TextEntry g_rewardItemTiers[][17];"
+     ]
+    ],
+    "all": 35
+   },
+   "g_rewardScoreBudgets": {
+    "definition": [
+     [
+      "code/game/src/DATA/FRONTEND/I/CONSTANTS/G_REWARDITEMTIERS.CPP",
+      28,
+      "unsigned int g_rewardScoreBudgets[25] = {"
+     ]
+    ],
+    "externs": [
+     [
+      "code/game/include/FRONTEND/JOIN_RANDOMIZEJOINREQUESTENTRIES.H",
+      5,
+      "extern s32 g_rewardScoreBudgets[];"
+     ],
+     [
+      "code/game/src/FRONTEND/JOIN/JOIN_GETJOINREQUESTRANK.CPP",
+      11,
+      "extern InstanceHdr g_rewardScoreBudgets[];"
+     ],
+     [
+      "code/game/src/FRONTEND/JOIN/JOIN_RANDOMIZEJOINREQUESTENTRIES.CPP",
+      90,
+      "extern s32 g_rewardScoreBudgets[];"
+     ]
+    ],
+    "all": 17
+   },
+   "g_libsnSupportedPageMasks": {
+    "definition": [],
+    "externs": [
+     [
+      "code/game/include/IO/DEBUG_MEMORY.H",
+      30,
+      "extern u32 g_libsnSupportedPageMasks[8];"
+     ]
+    ],
+    "all": 6
+   },
+   "g_materialIntensityMaskTexture": {
+    "definition": [],
+    "externs": [
+     [
+      "code/game/include/COMMON/RUNTIME_DECLARATIONS.H",
+      942,
+      "extern u32 g_materialIntensityMaskTexture[];"
+     ],
+     [
+      "code/game/src/FX/FX_DRAWBOUNDEDPARTICLEQUADS.CPP",
+      42,
+      "extern char g_materialIntensityMaskTexture;"
+     ]
+    ],
+    "all": 15
+   },
+   "g_GMenuboxcornersLevelTextWords1": {
+    "definition": [
+     [
+      "code/game/src/DATA/FRONTEND/J/CONSTANTS/G_MENUBOXCORNERS.CPP",
+      60,
+      "unsigned int g_GMenuboxcornersLevelTextWords1[45] = {"
+     ]
+    ],
+    "externs": [],
+    "all": 5
+   }
+  }
+ },
+ "f3e0e01c^": {
+  "rev": "f6167a71f334973238db3e76295caf2c73ac5333",
+  "names": {
+   "k_Ovldat9EncodedWords": {
+    "definition": [
+     [
+      "code/game/src/DATA/ARENA_CATALOGUE/ARENA_CATALOGUE.CPP",
+      119,
+      "unsigned int k_Ovldat9EncodedWords[40] = {"
+     ]
+    ],
+    "externs": [],
+    "all": 3
+   },
+   "g_scenarioResultRowWidgetIds": {
+    "definition": [],
+    "externs": [
+     [
+      "code/game/include/DATA/SCENARIO_SETUP/SCENARIOSETUPSCREEN.H",
+      4,
+      "extern ResourceBank g_scenarioResultRowWidgetIds[];"
+     ]
+    ],
+    "all": 30
+   }
+  }
+ },
+ "359dc614": {
+  "rev": "359dc6144b6c53167e1d6d5f36cd7dfe0972de24",
+  "names": {
+   "g_weaponActionRecords_StorageWords": {
+    "definition": [
+     [
+      "code/game/src/DATA/PLAYER_STATE_NORMAL/PLAYER_STATE_NORMAL.CPP",
+      13,
+      "unsigned short g_weaponActionRecords_StorageWords[2] = {"
+     ]
+    ],
+    "externs": []
+   }
+  }
+ }
+}
