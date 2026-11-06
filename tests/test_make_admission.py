@@ -24,12 +24,12 @@ def emit(cfg, monkeypatch):
     probe = root / "probe.py"
     probe.write_text(
         "import json, os\n"
-        "from pathlib import Path\n"
         "from abucache import slots\n"
-        "pool = Path(os.environ['XDG_RUNTIME_DIR']) / slots.POOL\n"
+        "pool = slots.wait_log().parent\n"  # abucache's accessor: the slot directory of the declared runtime cache
+        "locks = list(pool.glob('slot-*.lock'))\n"
         "print(json.dumps({'width': os.environ.get(slots.CORES_ENV), "
-        "'flags': os.environ.get('MAKEFLAGS'), 'level': os.environ.get('MAKELEVEL'), "
-        "'held': sum(slots._busy(p) for p in pool.glob('slot-*.lock'))}))\n"
+        "'flags': os.environ.get('MAKEFLAGS'), 'level': os.environ.get('MAKELEVEL'), 'pool': str(pool), "
+        "'files': len(locks), 'held': sum(slots._busy(p) for p in locks)}))\n"
     )
     text = (root / "Makefile").read_text()
     text = text.replace(
@@ -64,7 +64,9 @@ def test_generated_make_uses_grant_not_jobs_and_releases_on_exit(cfg, monkeypatc
     assert "-j2" in seen["flags"] and "-j99" not in seen["flags"]
     assert seen["held"] == 2
     assert seen["level"] == "1"  # the admission delegate must be transparent to make recursion
-    pool = Path(os.environ["XDG_RUNTIME_DIR"]) / slots.POOL
+    pool = Path(seen["pool"])  # the pool the probe read through abucache, not a place this test derives
+    assert seen["files"] >= 2 and pool.is_dir()  # the probe saw real slot files, so the assert below is not vacuous
+    assert pool.name == slots.POOL
     assert not any(slots._busy(p) for p in pool.glob("slot-*.lock"))
 
 

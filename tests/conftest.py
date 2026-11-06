@@ -105,7 +105,8 @@ def _process_state(_process_state_folders: Iterator[Path]) -> Path:
 @pytest.fixture(autouse=True)
 def _fresh_module_state(monkeypatch, _process_state):
     """Every test starts with empty process-wide caches, so xdist workers never share state between tests, and with
-    worker slots of its own: tests never touch the host's real slot and command locks."""
+    its own runtime file (ABU_RUNTIME below, whose cache_dir holds the slot pool): tests never touch the host's real
+    slot and command locks. XDG_RUNTIME_DIR is isolated only for the permute queue, which still lives there."""
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(_process_state / "run"))
     monkeypatch.delenv("UNBAKE_CORES", raising=False)  # a test runner's holder is not these tests' holder
     monkeypatch.delenv("WORKTREE_Projects_AbuN64_AbuCache64", raising=False)  # fixture installers own their sources
