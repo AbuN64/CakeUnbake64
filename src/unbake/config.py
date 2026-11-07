@@ -346,6 +346,8 @@ def _read(
         document = tomllib.loads(raw.decode("utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
         raise Refusal(Finding("config.schema", f"not valid TOML: {error}", path=f"{file}:<root>")) from error
+    if file == "host" and (retired := retired_refusal(document, path)):
+        raise retired
     validate(file, document, file)
     keys: dict[str, bool] = {}
     _flatten(document, "", keys)
@@ -365,6 +367,35 @@ def _cgroup_memory_max() -> str:
 def _usable_memory() -> int:
     limit = _cgroup_memory_max()
     return int(limit) if limit.isdigit() else psutil.virtual_memory().total
+
+
+RETIRED_TOOLS = {"n64link": "abumas"}  # a retired tool key and the tool that replaced it
+REWRITE_COMMAND = "unbake setup --rewrite-host"
+
+
+def retired_tools(document: Json) -> list[str]:
+    """The retired tool keys of a host document's tools table."""
+    tools = document.get("tools")
+    return sorted(k for k in tools if k in RETIRED_TOOLS) if isinstance(tools, dict) else []
+
+
+def retired_refusal(document: Json, path: Path) -> Refusal | None:
+    """The refusal of a host document carrying retired tool keys: it names the command that rewrites the file."""
+    found = retired_tools(document)
+    if not found:
+        return None
+    return Refusal(
+        *(
+            Finding(
+                "config.retired_tool",
+                f"tools.{key} is retired (now tools.{RETIRED_TOOLS[key]}); "
+                f"run `{REWRITE_COMMAND} --host {path}` to rewrite the table",
+                path=f"host:tools.{key}",
+                action=f"{REWRITE_COMMAND} --host {path}",
+            )
+            for key in found
+        )
+    )
 
 
 DEFAULT_HOST = Path("~/.config/unbake/unbake.toml")

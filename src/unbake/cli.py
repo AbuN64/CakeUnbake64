@@ -17,7 +17,7 @@ import click
 from abucache import pool, stages
 from click.core import ParameterSource
 
-from unbake import __version__, config, effort, front, human, store, treelock
+from unbake import __version__, config, effort, front, hostfile, human, store, treelock
 from unbake.contracts import Finding, Json, Refusal
 
 
@@ -139,10 +139,13 @@ def _run(name: str, params: dict[str, Any], argv: Sequence[str]) -> int:
                 host = host or config.default_host()
                 if host is None:
                     raise Refusal(Finding("config.missing", config.NO_HOST))
+                rewrote = hostfile.rewrite(host) if params.pop("rewrite_host", False) else None
                 cfg = config.load(root, host)
                 effort.bind(cfg)
                 with treelock.hold(root, who=name, wait=name not in _MEASURERS) if name in _READERS else nullcontext():
                     result = handler(cfg, params)
+                if rewrote and isinstance(result, dict):
+                    result = {**result, "host_file": rewrote}
                 if treelock.inflight and isinstance(result, dict):
                     note = [Finding("tree.inflight", line, blocking=False) for line in treelock.inflight]
                     result = {**result, "notes": [*result.get("notes", ()), *(asdict(f) for f in note)]}

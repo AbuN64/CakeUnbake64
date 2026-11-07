@@ -86,7 +86,11 @@ def _pins_bad(dest: Path, pins: Json) -> list[str]:
 
 
 def _fetch(config: Config, row: Json) -> Path:
-    cached = config.host.toolchain_root / ".downloads" / str(row["sha256"])
+    return _download(config.host.toolchain_root, row)
+
+
+def _download(root: Path, row: Json) -> Path:
+    cached = root / ".downloads" / str(row["sha256"])
     if cached.is_file() and sha256_file(cached) == row["sha256"]:
         return cached
     try:
@@ -149,6 +153,38 @@ def install_toolchain(config: Config, id: str) -> Path:
                 )
             )
         return dest
+
+
+def install_pinned(root: Path, name: str) -> Path:
+    """The host tool `name` (a pinned release in repo.toml make.tools) fetched, checked against its pins and unpacked into
+    `root`/`name`/: the path of its binary. The project build fetches the same release into its own tools/<name>/."""
+    for row in configuration.load_resource("repo.toml")["make"]["tools"].values():
+        if row.get("host") == name and "download" in row:
+            break
+    else:
+        raise Refusal(Finding("toolchain.pin", reason=f"host tool {name} is no pinned release in repo.toml"))
+    download, binary = row["download"], str(row.get("binary", name))
+    dest = root / name
+    if not _pins_bad(dest, {binary: row["pins"][binary]}):
+        return dest / binary
+    strip = int(download.get("strip", 0))
+    with tarfile.open(_download(root, download)) as archive:
+        members = {m.name: m for m in archive.getmembers()}
+        absent = [f for f in download["files"] if f not in members]
+        if absent:
+            raise Refusal(
+                Finding("toolchain.download", reason=f"{download['url']} lacks {absent}", path=download["url"])
+            )
+        dest.mkdir(parents=True, exist_ok=True)
+        for file in download["files"]:
+            member = members[file]
+            member.name = "/".join(file.split("/")[strip:])
+            archive.extract(member, dest, filter="data")
+    path = dest / binary
+    if sha256_file(path) != row["pins"][binary]:
+        raise Refusal(Finding("toolchain.pin", reason=f"{name}: {binary} does not match its pin", path=str(path)))
+    path.chmod(path.stat().st_mode | 0o111)
+    return path
 
 
 def _key(id: str) -> str:

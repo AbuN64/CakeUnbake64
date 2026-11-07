@@ -14,7 +14,13 @@ the parent/worker memory budgets, and make runs with `-j` set to `workers`.
 ```sh
 unbake init NAME
 unbake setup                      # installs toolchains, extracts and proves every ROM
+unbake setup --rewrite-host       # first rewrites the host file's tools table (see below)
 ```
+
+A host file whose `[tools]` table names a retired tool (`n64link`, now `abumas`) is refused by every command with
+`config.retired_tool`, which names the fix: `unbake setup --rewrite-host --host <file>` drops the retired key, installs
+the pinned abumas release into `toolchains.root` and writes its path, and loads the result before replacing the file.
+The host file is never edited by hand.
 
 ## Work
 

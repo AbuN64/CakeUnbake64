@@ -17,6 +17,21 @@ if [[ "$venv_command" != *" -m venv "* || "$venv_command" != *" $(pwd -P)/.venv"
     exit 1
 fi
 export PYTHONPATH=src
+# --changed: only the tests of what this branch changed against gitea/main (its test files, the test_<module>.py of each
+# changed module) plus the lint and cli suites, which read every module, contract and command table.
+if [[ "${1:-}" == --changed ]]; then
+    shift
+    base=$(git merge-base HEAD gitea/main 2>/dev/null || git rev-list --max-parents=0 HEAD | tail -1)
+    selected=(tests/test_lint.py tests/test_cli.py)
+    while IFS= read -r file; do
+        case "$file" in
+            tests/test_*.py) [[ -f "$file" ]] && selected+=("$file") ;;
+            src/unbake/*.py) test_file="tests/test_$(basename "${file%.py}").py"; [[ -f "$test_file" ]] && selected+=("$test_file") ;;
+        esac
+    done < <({ git diff --name-only "$base"; git ls-files --others --exclude-standard; } | sort -u)
+    mapfile -t selected < <(printf '%s\n' "${selected[@]}" | sort -u)
+    set -- "${selected[@]}" "$@"
+fi
 # Fixture trees belong on disk, separately for each run; the job's TMPDIR stays short for sockets.
 mkdir -p .tmp
 test_root=$(mktemp -d "$PWD/.tmp/tests.XXXXXX")

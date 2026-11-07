@@ -22,6 +22,7 @@ help = "Install toolchains, extract every version, write the generated files and
 handler = "repo.setup"
 params = [
   { name = "no-make", kind = "flag", type = "str", required = false, multiple = false, help = "prepare only (toolchains, extraction, generated files): the caller builds and runs unbake verify itself" },
+  { name = "rewrite-host", kind = "flag", type = "str", required = false, multiple = false, help = "first rewrite the host file's tools table: drop retired tool keys (n64link) and write the current tools, installing abumas into the toolchains root; the host file is never edited by hand" },
 ]
 
 [command.sync]

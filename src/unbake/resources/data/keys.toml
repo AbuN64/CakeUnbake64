@@ -73,6 +73,10 @@ sentence = "a required configuration file is missing"
 owner = "config"
 sentence = "a bundled resource is missing or unreadable"
 
+[key."config.retired_tool"]
+owner = "config"
+sentence = "the host file's tools table names a tool the build retired; the setup command rewrites it"
+
 [key."config.schema"]
 owner = "config"
 sentence = "a configuration or data file does not match its schema"
