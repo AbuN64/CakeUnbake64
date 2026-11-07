@@ -303,6 +303,13 @@ params = [
   { name = "cpu", kind = "option", type = "int", required = false, multiple = false, help = "census: CPU seconds one call may spend before it stops and resumes next call, default 240" },
   { name = "drafts", kind = "flag", type = "str", required = false, multiple = false, help = "census: also judge the NON_MATCHING bodies of units that have them" },
 ]
+[command.objects]
+help = "Compile the units of the named versions without linking and write a TSV of unit, version, object SHA-1 and cache hit or miss: two trees' TSVs prove per-unit byte identity even when the base does not link."
+handler = "objects.run"
+params = [
+  { name = "version", kind = "option", type = "str", required = false, multiple = true, help = "version to compile, once per version; default every version" },
+  { name = "tsv", kind = "option", type = "path", required = false, multiple = false, help = "where the TSV goes, default .unbake/objects.tsv" },
+]
 [command.layout]
 help = "Move a project's files to a target folder layout by rules: plan the map, apply it (files, config.toml rows, sync), carry uncommitted work across, verify the objects. Writes only .unbake/layout until apply."
 handler = "folders.run"

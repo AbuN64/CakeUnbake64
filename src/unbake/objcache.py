@@ -43,15 +43,19 @@ def _tally_path(store: Path) -> Path:
     return store / _TALLY
 
 
+_current = ""  # the object the lookup or store in flight is for: its tally line names it after a tab
+
+
 def _tally(store: Path) -> Callable[[str, bool], None]:
-    """abucache's count callback for the store at `store`: one `hit`, `miss` or `store` line per event, appended whole
-    (an O_APPEND write of one short line is atomic, so concurrent make jobs never interleave)."""
+    """abucache's count callback for the store at `store`: one `hit`, `miss` or `store` line per event, then a tab and
+    the object it is for, appended whole (an O_APPEND write of one short line is atomic, so concurrent make jobs never
+    interleave)."""
 
     def count(kind: str, hit: bool) -> None:
         if kind == _STORED:
-            _record(store, _STORED)
+            _record(store, f"{_STORED}\t{_current}")
         elif kind == _KIND:
-            _record(store, "hit" if hit else "miss")
+            _record(store, f"{'hit' if hit else 'miss'}\t{_current}")
 
     return count
 
@@ -74,13 +78,30 @@ def stats(store: Path, offset: int = 0) -> dict[str, int]:
     except FileNotFoundError:
         lines = []
     whole = [line for line in lines if line.endswith(b"\n")]  # a half-written last line is read by the next call
-    events = [line.strip().decode(errors="replace") for line in whole]
+    events = [line.strip().decode(errors="replace").partition("\t")[0] for line in whole]
     return {
         "stores": events.count(_STORED),
         "hits": events.count("hit"),
         "misses": events.count("miss"),
         "offset": offset + sum(len(line) for line in whole),
     }
+
+
+def units(store: Path, offset: int = 0) -> dict[str, str]:
+    """Each object looked up from byte `offset` of the tally, and whether the lookup was a `hit` or a `miss` (a unit
+    looked up twice is a miss when any lookup missed)."""
+    try:
+        with _tally_path(store).open("rb") as stream:
+            stream.seek(offset)
+            lines = stream.read().decode(errors="replace").splitlines()
+    except FileNotFoundError:
+        return {}
+    found: dict[str, str] = {}
+    for line in lines:
+        event, _, out = line.partition("\t")
+        if out and event in ("hit", "miss"):
+            found[out] = "miss" if found.get(out) == "miss" else event
+    return found
 
 
 _read: dict[str, str] | None = None  # the toolchain and the passes as read once, while a batch answers its gets
@@ -209,6 +230,8 @@ def get(
 ) -> int:
     """A hit puts the stored object (and the assembly it was made from) in place (0); else MISS. Only a torn entry is
     a miss: a key that cannot be computed or an object that cannot be put in place raises."""
+    global _current
+    _current = out
     blob = cache.get(_KIND, entry(out, compiler, flags, textsize, program, extracted))
     if blob is None:
         cache.count(_KIND, False)
@@ -229,6 +252,8 @@ def put(
 ) -> int:
     """Store the object the program made. An object that is not there, a unit that has no key or a store that refuses
     raises: the program made the object, so every miss ends in a stored entry or in this error."""
+    global _current
+    _current = out
     assembly = Path(out.removesuffix(".o") + ".s")
     blob = frame(Path(out).read_bytes(), assembly.read_bytes() if assembly.is_file() else None)
     cache.put(_KIND, entry(out, compiler, flags, textsize, program, extracted), blob)
@@ -249,6 +274,8 @@ def answer(
     """One recorded get, answered beside the object: the stored object in `<out>.oc` (and its assembly in
     `<out>.oc.s`), or a miss marker `<out>.oc.miss`. The object itself stays unmade, so the rule that runs again takes
     the answer (cc_cache.probe) and goes on with its trim and records."""
+    global _current
+    _current = out
     for name in (".oc", ".oc.s", ".oc.miss"):
         with contextlib.suppress(FileNotFoundError):
             os.unlink(out + name)

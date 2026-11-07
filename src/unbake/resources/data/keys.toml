@@ -672,6 +672,14 @@ sentence = "the host already runs its permitted number of permuter runs"
 owner = "compilers"
 sentence = "compilers has no built objects, no census or an unknown action to work from"
 
+[key."objects.input"]
+owner = "objects"
+sentence = "objects was asked for a version the project does not have, or a version whose object list is not made"
+
+[key."objects.compile"]
+owner = "objects"
+sentence = "objects compiled units that made no object; the TSV marks each failed"
+
 [key."compilers.dead_row"]
 owner = "compilers"
 sentence = "a [file] row gives a path what the row above it gives already"

@@ -63,6 +63,20 @@ feeds, rules tables) belong in `docs/`, which the rule does not guard.
 The commands are `init`, `setup`, `sync`, `check`, `audit`, `cheat`, `compare`, `score`, `submit`, `land`, `report`, `map`,
 `symbols` and `compilers`.
 
+## Objects without a link (`unbake objects`)
+
+```sh
+unbake objects                                   # every version's units, TSV at .unbake/objects.tsv
+unbake objects --version us-rev1 --tsv base.tsv  # named versions (repeat the flag), TSV elsewhere
+```
+
+Compiles the units `build/<version>/objs.mk` lists, with no link, so a base whose layout overlaps (and so does not
+link) still gives a proof. It needs a tree set up with `unbake setup --no-make`. The TSV has one row per unit:
+`unit`, `version`, `sha1` (of the object file) and `cache` (`hit` when the host content cache served the object, `miss`
+when the compiler ran, `none` for a unit the compiler never sees (an assembled `.s.o` or a binary `.bin.o`), `failed` with sha1 `-` when no object was made, which also
+refuses with `objects.compile`). Run it on a base tree and on a change's tree and compare the two TSVs: equal SHA-1s are
+per-unit byte identity. A second tree of the same revision on the same host is all `hit`.
+
 ## Linker alignment fill (`unbake layout fill`)
 
 The linker that built a ROM rounded each object up to the alignment of the next and filled the gap with whatever the

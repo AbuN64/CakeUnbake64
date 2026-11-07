@@ -268,6 +268,7 @@ def test_the_command_set_is_the_C9_set() -> None:
     assert set(COMMANDS) == {
         "blobs",
         "compilers",
+        "objects",
         "layout",
         "names",
         "init",

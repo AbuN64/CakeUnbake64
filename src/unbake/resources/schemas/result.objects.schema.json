@@ -1,0 +1,43 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "unbake:result.objects",
+ "type": "object",
+ "required": [
+  "versions",
+  "tsv",
+  "units",
+  "cache",
+  "exit"
+ ],
+ "properties": {
+  "versions": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   }
+  },
+  "tsv": {
+   "type": "string"
+  },
+  "units": {
+   "type": "integer"
+  },
+  "cache": {
+   "type": "object",
+   "properties": {
+    "hit": {
+     "type": "integer"
+    },
+    "miss": {
+     "type": "integer"
+    },
+    "none": {
+     "type": "integer"
+    }
+   }
+  },
+  "exit": {
+   "type": "integer"
+  }
+ }
+}
