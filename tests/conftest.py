@@ -109,6 +109,7 @@ def _fresh_module_state(monkeypatch, _process_state):
     slot and command locks. XDG_RUNTIME_DIR is isolated only for the permute queue, which still lives there."""
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(_process_state / "run"))
     monkeypatch.delenv("UNBAKE_CORES", raising=False)  # a test runner's holder is not these tests' holder
+    monkeypatch.setenv("JOBS", "64")  # admitted, wider than any fixture cores; a test needing another width sets it
     monkeypatch.delenv("WORKTREE_Projects_AbuN64_AbuCache64", raising=False)  # fixture installers own their sources
     forget()
     memo._clear()

@@ -25,6 +25,16 @@ sys.path.insert(0, str(ROOT / "src"))
 import rabbitizer  # noqa: E402
 
 from unbake import infer  # noqa: E402
+from unbake.config import admitted_jobs as _admitted  # noqa: E402
+
+
+def admitted_jobs() -> int:
+    """make's width: the admitted JOBS (Terminal admission sets it); none refuses."""
+    jobs = _admitted()
+    if jobs is None:
+        raise SystemExit("sdk-catalog: JOBS is not an admitted width; run under Terminal admission")
+    return jobs
+
 
 REPOSITORY = "https://github.com/decompals/ultralib"
 VERSIONS = ("I", "J", "K", "L")
@@ -140,7 +150,7 @@ def build_ultralib(work: Path, skipped: list[str]) -> Path:
 
 
 def objects(tree: Path, version: str, target: str) -> list[Path]:
-    done = run(["make", "-j12", "COMPARE=0", f"VERSION={version}", f"TARGET={target}"], cwd=tree)
+    done = run(["make", f"-j{admitted_jobs()}", "COMPARE=0", f"VERSION={version}", f"TARGET={target}"], cwd=tree)
     out = tree / "build" / version / target / "src"
     if not (tree / "build" / version / target / f"{target}.a").exists():
         raise RuntimeError(f"{target} {version} did not build: {done.stderr[-400:]}")

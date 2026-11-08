@@ -63,19 +63,46 @@ def _idle_host(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_host_auto_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(12)))
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(64)))  # the host's CPUs are never the width
+    monkeypatch.setenv("JOBS", "12")
     monkeypatch.setattr(configuration, "_cgroup_memory_max", lambda: "max")
     monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(total=64 << 30))
     loaded = configuration.load_host(fixture.host(tmp_path, **{"resources.cores": "auto", "resources.workers": "auto"}))
     assert (loaded.cores, loaded.workers) == (12, 12)
-    assert loaded.origins["resources.cores"].note == "auto: os.sched_getaffinity -> 12"
-    assert loaded.origins["resources.workers"].note == "auto: min(affinity 12, cores 12) -> 12"
+    assert loaded.origins["resources.cores"].note == "auto: JOBS -> 12"
+    assert loaded.origins["resources.workers"].note == "auto: min(JOBS 12, cores 12) -> 12"
+
+
+def test_host_widths_are_the_admitted_jobs_never_the_host_cpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(12)))
+    monkeypatch.setattr(configuration, "_cgroup_memory_max", lambda: "max")
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(total=64 << 30))
+    monkeypatch.setenv("JOBS", "4")
+    auto = configuration.load_host(fixture.host(tmp_path, **{"resources.cores": "auto", "resources.workers": "auto"}))
+    assert (auto.cores, auto.workers) == (4, 4)
+    wide = configuration.load_host(fixture.host(tmp_path, **{"resources.cores": 12, "resources.workers": 12}))
+    assert (wide.cores, wide.workers) == (4, 4)
+    assert wide.origins["resources.cores"].note == "min(12, JOBS 4) -> 4"
+
+
+@pytest.mark.parametrize("jobs", [None, "", "0", "-2", "auto"])
+def test_host_without_an_admitted_jobs_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, jobs: str | None
+) -> None:
+    if jobs is None:
+        monkeypatch.delenv("JOBS", raising=False)
+    else:
+        monkeypatch.setenv("JOBS", jobs)
+    with pytest.raises(Refusal) as refused:
+        configuration.load_host(fixture.host(tmp_path, **{"resources.cores": 4, "resources.workers": 4}))
+    assert any(f.path == "host:JOBS" for f in refused.value.findings)
 
 
 def _auto_host(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cpus: int, cgroup: str, total: int, **extra: Any
 ) -> Any:
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(cpus)))
+    monkeypatch.setenv("JOBS", str(cpus))  # the admitted width: what "auto" resolves to
     monkeypatch.setattr(configuration, "_cgroup_memory_max", lambda: cgroup)
     monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(total=total))
     overrides = {
@@ -92,13 +119,13 @@ def test_host_auto_workers_memory_bound(tmp_path: Path, monkeypatch: pytest.Monk
     loaded = _auto_host(tmp_path, monkeypatch, 16, str(12 << 30), 256 << 30)
     assert (loaded.cores, loaded.workers) == (16, 10)
     assert loaded.origins["resources.workers"].note == "auto: min(16 by capacity, 10 by memory) -> 10"
-    assert loaded.origins["resources.cores"].note == "auto: os.sched_getaffinity -> 16"
+    assert loaded.origins["resources.cores"].note == "auto: JOBS -> 16"
 
 
 def test_host_auto_workers_cpu_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     loaded = _auto_host(tmp_path, monkeypatch, 64, "max", 128 << 30)
     assert (loaded.cores, loaded.workers) == (64, 64)
-    assert loaded.origins["resources.workers"].note == "auto: min(affinity 64, cores 64) -> 64"
+    assert loaded.origins["resources.workers"].note == "auto: min(JOBS 64, cores 64) -> 64"
 
 
 def test_host_numeric_workers_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -355,6 +355,13 @@ def _read(
     return document, sha, origins
 
 
+def admitted_jobs(environ: Mapping[str, str] | None = None) -> int | None:
+    """The width Terminal admission gave this process (`JOBS`), or None when it is absent, empty or not a positive
+    integer (load_host refuses then)."""
+    value = (os.environ if environ is None else environ).get("JOBS", "")
+    return int(value) if value.isdigit() and int(value) >= 1 else None
+
+
 def _bad(file: str, key: str, reason: str, origins: dict[str, Origin]) -> Finding:
     return Finding("config.file", reason, path=f"{file}:{key}", origin=origins.get(key))
 
@@ -441,17 +448,29 @@ def load_host(path: Path) -> Host:
                 problems.append(_bad("host", "sdk.catalog", f"{catalog} is not a valid catalog: {reason}", origins))
     res, budgets, publish = document["resources"], document["budgets"], document["publish"]
     counts: dict[str, int] = {}
+    jobs = admitted_jobs()
+    if jobs is None:
+        problems.append(
+            _bad(
+                "host",
+                "JOBS",
+                f"{os.environ.get('JOBS', '')!r} is not an admitted width: every width "
+                "comes from the JOBS Terminal admission sets, never the host's CPUs",
+                origins,
+            )
+        )
+        raise Refusal(*problems)
     for name in ("cores", "workers"):
         key, value = f"resources.{name}", res[name]
         if value == "auto":
-            counts[name] = len(os.sched_getaffinity(0))
-            note = f"auto: os.sched_getaffinity -> {counts[name]}"
+            counts[name] = jobs
+            note = f"auto: JOBS -> {counts[name]}"
             if name == "workers":
                 # The shared pool divides capacity between commands. Subtracting system load here counts
                 # those commands twice and freezes a busy host at one worker for the entire invocation.
-                affinity = counts[name]
-                counts[name] = min(affinity, counts["cores"])
-                note = f"auto: min(affinity {affinity}, cores {counts['cores']}) -> {counts[name]}"
+                admitted = counts[name]
+                counts[name] = min(admitted, counts["cores"])
+                note = f"auto: min(JOBS {admitted}, cores {counts['cores']}) -> {counts[name]}"
                 if "cap" in res:  # a cap applies only when the host file sets one
                     capacity, cap = counts[name], res["cap"]
                     counts[name] = max(1, min(capacity, math.floor(counts["cores"] * cap)))
@@ -468,6 +487,12 @@ def load_host(path: Path) -> Host:
         problems.append(_bad("host", "resources.workers", "workers exceeds cores", origins))
     if problems:
         raise Refusal(*problems)
+    for name in ("cores", "workers"):  # an integer width is at most the admitted one
+        if res[name] != "auto" and counts[name] > jobs:
+            key = f"resources.{name}"
+            old = origins[key]
+            origins[key] = Origin(key, old.file, old.sha256, note=f"min({counts[name]}, JOBS {jobs}) -> {jobs}")
+            counts[name] = jobs
     return Host(
         cores=counts["cores"],
         workers=counts["workers"],

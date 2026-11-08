@@ -49,14 +49,15 @@ else
 fi
 # Each test process may use at most 4 GB: a runaway test fails with MemoryError instead of exhausting the host.
 ulimit -v 4194304
-workers=$(( (free_mb - 4096) / 4096 )); cores=$(nproc)
-(( workers > cores )) && workers=$cores; [[ -n "${UNBAKE_CORES:-}" ]] && (( workers > UNBAKE_CORES )) && workers=$UNBAKE_CORES; (( workers < 1 )) && workers=1
-[[ -n "${JOBS:-}" ]] && (( workers > JOBS )) && workers=$JOBS  # a Dos admission's width: the cores it was given
+# The width is the admitted JOBS (Terminal admission sets it), never the host's CPUs: no JOBS refuses.
+[[ "${JOBS:-}" =~ ^[1-9][0-9]*$ ]] || { echo "bin/test: JOBS='${JOBS:-}' is not an admitted width; run under Terminal admission" >&2; exit 2; }
+workers=$(( (free_mb - 4096) / 4096 ))
+(( workers > JOBS )) && workers=$JOBS; [[ -n "${UNBAKE_CORES:-}" ]] && (( workers > UNBAKE_CORES )) && workers=$UNBAKE_CORES; (( workers < 1 )) && workers=1
 # The workers come out of the one host core budget (the same slots unbake itself divides), at most the memory allows.
 # A host without an abucache runtime file has no slot budget (abucache.slots would run one worker): under a Dos
 # admission the job's own width is its budget.
 slots=(.venv/bin/python -m abucache.slots --work "$workers" --)
-if [[ -n "${JOBS:-}" ]] && ! .venv/bin/python -c 'from abucache import runtime; runtime.load()' 2>/dev/null; then
+if ! .venv/bin/python -c 'from abucache import runtime; runtime.load()' 2>/dev/null; then
     slots=(env)
     set -- "$workers" "$@"
 else

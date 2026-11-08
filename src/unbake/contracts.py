@@ -275,7 +275,7 @@ class Origin:
     key: str  # dotted config key, e.g. "resources.memory_worker_bytes"
     file: str  # absolute path of the file that set it
     sha256: str  # that file's content digest when it was read
-    note: str = ""  # how a value was resolved, e.g. "auto: os.sched_getaffinity -> 12"
+    note: str = ""  # how a value was resolved, e.g. "auto: JOBS -> 12"
 
 
 @dataclass(frozen=True)
@@ -312,7 +312,7 @@ class Refusal(Exception):
 # ---------------------------------------------------------------- configuration
 @dataclass(frozen=True)
 class Host:
-    cores: int  # host.toml integer, or "auto" resolved by config to len(os.sched_getaffinity(0)) (Origin.note says so)
+    cores: int  # host.toml integer at most JOBS, or "auto": the admitted JOBS (config resolves it; Origin.note says so)
     workers: int  # same rule; pool width and make -j both use this one value
     memory_parent_bytes: int
     memory_worker_bytes: int
